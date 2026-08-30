@@ -1,0 +1,20 @@
+# One line ending everywhere.
+#
+# Windows here, Linux in CI. Without this, git rewrites text files on checkout
+# and the two disagree about the bytes of, for instance, the recorded input log
+# the determinism test replays -- a difference that would look like a physics
+# divergence and would not be one.
+* text=auto eol=lf
+
+# Binary, and must not be touched.
+*.png binary
+*.webp binary
+*.jpg binary
+*.gif binary
+*.mp3 binary
+*.wav binary
+*.flv binary
+*.swf binary
+*.ttf binary
+*.woff2 binary
+*.sqlite binary

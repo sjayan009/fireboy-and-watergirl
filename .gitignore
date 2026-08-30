@@ -1,0 +1,25 @@
+# Secrets. The service key bypasses RLS and the database password is a
+# database password -- neither belongs in version control, ever.
+.env
+.env.local
+.env*.local
+
+node_modules/
+dist/
+snaps/
+
+# JPEXS intermediates: 126 MB of exports that the shipped assets are derived
+# from. Regenerate with tools/export_assets.py.
+extracted/assets/_raw/
+
+# Internet Archive artifacts: the metadata and screenshots that came with the
+# download. The SWF itself IS committed -- it is the only source every asset and
+# every line of ported code was derived from, so a checkout without it cannot be
+# rebuilt -- but none of this is.
+fireboy-watergirl-the-forest-temple_*
+screenshot_*.png
+*_thumb.jpg
+00_coverscreenshot*
+
+# A second copy of the SWF, for the Ruffle preview.
+preview/

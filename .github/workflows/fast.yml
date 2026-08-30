@@ -1,0 +1,45 @@
+# Every push. Minutes, not tens of minutes, and no credentials at all.
+#
+# Everything here runs against the code alone: the simulation, the netcode over
+# a simulated link, the typecheck, the build, and the checks that no secret
+# reached the bundle. Anything needing a browser or a database is in full.yml,
+# because a suite people stop waiting for is a suite that stops being run.
+name: fast
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The asset step converts the sprites to WebP; Pillow is the only thing
+      # it needs, and it is the same library the extraction tools use.
+      - run: pip install pillow
+
+      - run: npm ci
+
+      - name: the engine, on its own
+        run: npm --prefix engine test
+
+      - name: build
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: npm run build
+
+      - name: nothing secret in it, nothing missing from it
+        run: npm run check

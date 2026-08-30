@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>cross-engine determinism</title>
+<!--
+  A page with no rendering, no audio and no input: it replays a fixed input log
+  through the simulation and reports the state digest.
+
+  Kept separate from index.html because that page boots the whole harness, and
+  the point here is to run *only* the deterministic path -- anything else would
+  be noise in a check whose entire job is to prove two JS engines agree bit for
+  bit.
+
+  engine/test/crossengine.mjs loads this in Chromium, Firefox and WebKit, i.e.
+  V8, SpiderMonkey and JavaScriptCore, and compares what each one reports.
+-->
+<body style="font:14px ui-monospace,monospace;background:#12171c;color:#d7e0e8">
+<pre id="out">running…</pre>
+<script type="module">
+const out = document.getElementById("out");
+try {
+  const [{ level }, { Event, advanceTree }, { hashLevel, applyInput },
+         { hostLevel }] =
+    await Promise.all([
+      import("/dist/game/game.js"),
+      import("/dist/flash/flash.js"),
+      import("/dist/net/hash.js"),
+      import("/dist/game/headless.js"),
+    ]);
+
+  const txt = await (await fetch("/scriptlog.txt", { cache: "no-store" })).text();
+  const bits = txt.trim().split(",").map(Number);
+
+  const sim = new level("adventure", 1);
+  // Fireboy dies inside this log; deadFire's frame script reaches up for a
+  // Game, so give it a headless stand-in exactly as the Node harness does.
+  hostLevel(sim);
+  const checkpoints = {};
+  for (let i = 0; i < bits.length; i++) {
+    applyInput(sim, bits[i]);
+    advanceTree(sim);
+    sim.Update(new Event(Event.ENTER_FRAME));
+    if ((i + 1) % 100 === 0) checkpoints[i + 1] = hashLevel(sim);
+  }
+  const p1 = sim.pers1.GetPosition();
+  const p2 = sim.pers2.GetPosition();
+  window.__result = {
+    frames: bits.length,
+    hash: hashLevel(sim),
+    checkpoints,
+    // raw coordinates too: if the digests differ, these say *where* it drifted
+    fire: [p1.x, p1.y],
+    water: [p2.x, p2.y],
+  };
+  out.textContent = JSON.stringify(window.__result, null, 1);
+} catch (e) {
+  window.__result = { error: String(e && e.stack || e) };
+  out.textContent = window.__result.error;
+}
+</script>

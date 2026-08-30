@@ -1,0 +1,72 @@
+{
+ "spawns": {
+  "StartPosWater": {
+   "x": 36,
+   "y": 3
+  },
+  "StartPosFire": {
+   "x": 2,
+   "y": 3
+  }
+ },
+ "entities": [
+  {
+   "type": "CreateFinish",
+   "args": [
+    {
+     "x": 3,
+     "y": 26.5
+    },
+    {
+     "x": 35,
+     "y": 26.5
+    }
+   ]
+  },
+  {
+   "type": "CreateHangingPlatform",
+   "args": [
+    {
+     "x": 15,
+     "y": 17
+    },
+    {
+     "x": 1.5,
+     "y": 0.3
+    },
+    5,
+    "down"
+   ]
+  },
+  {
+   "type": "CreateHangingPlatform",
+   "args": [
+    {
+     "x": 19,
+     "y": 16
+    },
+    {
+     "x": 1.5,
+     "y": 0.3
+    },
+    4,
+    "down"
+   ]
+  },
+  {
+   "type": "CreateHangingPlatform",
+   "args": [
+    {
+     "x": 23,
+     "y": 17
+    },
+    {
+     "x": 1.5,
+     "y": 0.3
+    },
+    5,
+    "down"
+   ]
+  }
+ ]
+}

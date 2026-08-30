@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fireboy &amp; Watergirl — ported engine</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 20px;
+    background: #12171c; color: #d7e0e8;
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: #7d8b98; margin-bottom: 14px; }
+  canvas {
+    display: block; border: 1px solid #263038; border-radius: 4px;
+    background: #0f1418; image-rendering: pixelated;
+  }
+  .row { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+  .panel { min-width: 260px; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 14px; }
+  dt { color: #7d8b98; }
+  dd { margin: 0; }
+  button, select {
+    background: #1c242b; color: #d7e0e8; border: 1px solid #33404a;
+    border-radius: 4px; padding: 5px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: #4a5c69; }
+  .controls { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .keys { color: #7d8b98; }
+  .keys b { color: #d7e0e8; font-weight: 600; }
+  .ok { color: #6ee7a8; }
+  .bad { color: #ff8a80; }
+  #replayResult, #crossResult { margin-top: 6px; min-height: 1.5em; }
+</style>
+</head>
+<body>
+<h1>Fireboy &amp; Watergirl — ported engine</h1>
+<div class="sub">
+  Box2DFlash 2.0.2, the game and the shell, transliterated from the 2009 SWF.
+  Click the menus, or drive them from the keyboard: arrows move, Enter
+  selects, Esc goes back, M mutes. In a level, arrows are Fireboy, W/A/D is
+  Watergirl, P pauses.
+</div>
+
+<div class="row">
+  <canvas id="stage"></canvas>
+
+  <div class="panel">
+    <div class="controls">
+      <button id="pause">Pause host</button>
+      <button id="unlock">Unlock all levels</button>
+      <button id="netplay">Play together (2 tabs)</button>
+      <button id="replay">Replay check</button>
+      <button id="crosscheck">Cross-engine check</button>
+    </div>
+
+    <dl>
+      <dt>netplay</dt><dd id="netStatus">solo</dd>
+      <dt>screen</dt><dd id="screen">—</dd>
+      <dt>level</dt><dd id="levelName">—</dd>
+      <dt>frame</dt><dd id="frame">0</dd>
+      <dt>state hash</dt><dd id="hash">—</dd>
+      <dt>positions</dt><dd id="pos">—</dd>
+      <dt>diamonds</dt><dd id="diamonds">—</dd>
+      <dt>status</dt><dd id="state">—</dd>
+    </dl>
+
+    <div class="keys">
+      <b>Menus</b> click, or arrows / Enter / Esc<br>
+      <b>Fireboy</b> arrow keys &nbsp; <b>Watergirl</b> W A D<br>
+      <b>P</b> pause &nbsp; <b>M</b> mute &nbsp; <b>R</b> retry on game over<br>
+      <label style="display:block;margin-top:8px">
+        <input type="checkbox" id="art" checked> original sprite art
+      </label>
+      <label style="display:block">
+        <input type="checkbox" id="grid"> tile grid (physics view)
+      </label>
+      <label style="display:block">
+        <input type="checkbox" id="mute"> mute
+      </label>
+      <div style="margin-top:4px">art: <span id="art-status">—</span></div>
+      <div>audio: <span id="audio-status">—</span></div>
+    </div>
+
+    <div id="replayResult"></div>
+    <div id="crossResult"></div>
+  </div>
+</div>
+
+<script type="module" src="/dist/main.js"></script>
+</body>
+</html>

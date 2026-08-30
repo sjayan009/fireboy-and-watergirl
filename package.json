@@ -1,0 +1,28 @@
+{
+  "name": "fireboy-and-watergirl",
+  "version": "1.0.0",
+  "scripts": {
+    "db:migrate": "node supabase/migrate.mjs",
+    "db:test": "node supabase/rlstest.mjs && node supabase/hardtest.mjs && node supabase/realtimetest.mjs",
+    "engine:test": "npm --prefix engine test",
+    "serve": "node serve.mjs",
+    "dev": "npm --prefix app run dev",
+    "build": "npm --prefix engine run build && npm --prefix app run build",
+    "test": "npm --prefix engine test && npm run build && npm run check",
+    "invite": "node supabase/invite.mjs",
+    "app:test": "npm --prefix app test",
+    "check": "npm --prefix app run check",
+    "test:all": "npm --prefix engine run test:full && npm run build && npm run check && npm run db:test && npm --prefix app test",
+    "test:db": "npm run db:test"
+  },
+  "description": "Fireboy & Watergirl: The Forest Temple, recovered from the 2009 SWF and rebuilt for online co-op.",
+  "dependencies": {
+    "pg": "^8.23.0"
+  },
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "engine",
+    "app"
+  ]
+}

@@ -1,0 +1,181 @@
+{
+ "spawns": {
+  "StartPosFire": {
+   "x": 18,
+   "y": 12
+  },
+  "StartPosWater": {
+   "x": 20,
+   "y": 12
+  }
+ },
+ "entities": [
+  {
+   "type": "CreateFinish",
+   "args": [
+    {
+     "x": 35,
+     "y": 26.5
+    },
+    {
+     "x": 11.5,
+     "y": 26.5
+    }
+   ]
+  },
+  {
+   "type": "CreateSlidePlatform",
+   "args": [
+    {
+     "x": 7,
+     "y": 24
+    },
+    0.5,
+    1.5,
+    {
+     "x": 0,
+     "y": -1
+    },
+    -4,
+    0,
+    0,
+    "pusher",
+    5
+   ]
+  },
+  {
+   "type": "CreatePusher",
+   "args": [
+    {
+     "x": 27.5,
+     "y": 21
+    },
+    2,
+    5,
+    true
+   ]
+  },
+  {
+   "type": "CreateRotPlatform",
+   "args": [
+    {
+     "x": 14,
+     "y": 20
+    },
+    0.5,
+    2,
+    0,
+    0.5,
+    0,
+    0,
+    "lever",
+    3
+   ]
+  },
+  {
+   "type": "CreateLever",
+   "args": [
+    {
+     "x": 11,
+     "y": 21
+    },
+    3,
+    "l",
+    "l",
+    true
+   ]
+  },
+  {
+   "type": "CreateRotPlatform",
+   "args": [
+    {
+     "x": 22,
+     "y": 20
+    },
+    0.5,
+    2,
+    0,
+    0.5,
+    0,
+    0,
+    "lever",
+    3
+   ]
+  },
+  {
+   "type": "CreateLever",
+   "args": [
+    {
+     "x": 11,
+     "y": 21
+    },
+    3,
+    "l",
+    "l",
+    false
+   ]
+  },
+  {
+   "type": "CreateRotPlatform",
+   "args": [
+    {
+     "x": 28,
+     "y": 12
+    },
+    0.5,
+    2,
+    0,
+    0.5,
+    0,
+    0,
+    "lever",
+    2
+   ]
+  },
+  {
+   "type": "CreateLever",
+   "args": [
+    {
+     "x": 14,
+     "y": 6
+    },
+    2,
+    "r",
+    "r",
+    true
+   ]
+  },
+  {
+   "type": "CreateSlidePlatform",
+   "args": [
+    {
+     "x": 18,
+     "y": 1
+    },
+    0.5,
+    1.5,
+    {
+     "x": 0,
+     "y": 1
+    },
+    -2.5,
+    0,
+    0,
+    "pusher",
+    3
+   ]
+  },
+  {
+   "type": "CreatePusher",
+   "args": [
+    {
+     "x": 2.5,
+     "y": 2
+    },
+    2,
+    3,
+    true
+   ]
+  }
+ ]
+}
