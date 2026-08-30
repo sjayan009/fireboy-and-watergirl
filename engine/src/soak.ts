@@ -6,11 +6,11 @@
  * become visible -- and ten minutes is a perfectly ordinary length for two
  * people to spend on one level of this game.
  *
- * So: every level, 10,000 frames -- about six and a half minutes each, thirty
- * five hours of play in total -- run twice from scratch and compared at every
- * thousandth frame. Comparing at checkpoints rather than only at the end means
- * a divergence reports WHEN it started, which is most of the work of finding
- * it.
+ * So: every level, 10,000 frames -- about six and a half minutes each, and a
+ * little under seven hours of play across the set -- run twice from scratch and
+ * compared at every thousandth frame. Comparing at checkpoints rather than only
+ * at the end means a divergence reports WHEN it started, which is most of the
+ * work of finding it.
  *
  * `verify(true)` is on throughout, so the snapshot's assumption that an
  * object's field names stop changing is checked against every object of every

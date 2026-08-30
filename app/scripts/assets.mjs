@@ -17,6 +17,7 @@
 import { spawnSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EOL } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "../..");
@@ -33,7 +34,13 @@ for (const exe of ["python", "python3"]) {
 }
 
 if (!ran) {
-  console.error("no python on PATH -- cannot build the assets");
+  console.error([
+    "No python on PATH, so the assets cannot be built.",
+    "  Install Python 3 and `pip install pillow`.",
+    "This deliberately fails rather than copying the PNGs across: that",
+    "would produce a working build with three times the download, and",
+    "nothing downstream would notice.",
+  ].join(EOL));
   process.exit(1);
 }
 if (ran.status !== 0) process.exit(ran.status);
