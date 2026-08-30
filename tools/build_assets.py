@@ -37,7 +37,15 @@ import shutil
 import sys
 from concurrent.futures import ProcessPoolExecutor
 
-from PIL import Image
+try:
+    from PIL import Image
+except ImportError:                             # pragma: no cover
+    raise SystemExit(
+        "Pillow is required to build the assets: pip install pillow. "
+        "It converts the 1,865 sprite frames to WebP, which is two thirds "
+        "of the download. Shipping the PNGs instead would work, and would "
+        "be a silent three-fold regression, so this stops rather than "
+        "guessing.")
 
 # Quality 80 at method 6, chosen by sweeping both against this art rather than
 # by reaching for a default: it takes 72-80% off, against 66-75% at the more

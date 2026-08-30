@@ -9,10 +9,16 @@ because it is the only thing the rest was derived from.
 
 ```bash
 npm install
-npm run dev        # http://localhost:5174
-npm test           # the fast tier: engine, build, secret scan
-npm run test:all   # everything, including the soak and three browsers
+pip install pillow   # the build converts 1,865 sprite frames to WebP
+npm run dev          # http://localhost:5174
+npm test             # the fast tier: engine, build, secret scan
+npm run test:all     # everything, including the soak and three browsers
 ```
+
+Python and Pillow are a **build** dependency, not a runtime one: the asset step
+lives beside the extraction tools that produced those frames in the first place,
+and it is what takes the download from 42 MB to 13 MB. The build fails loudly
+without it rather than quietly shipping the originals.
 
 ## What it is
 
@@ -67,7 +73,7 @@ npm run app:test   # accounts and two-account play, in real browsers
 
 | | |
 |---|---|
-| simulation | all 32 levels pinned by digest, snapshot round-trips, a soak of 35 hours of play |
+| simulation | all 32 levels pinned by digest, snapshot round-trips on every one, a soak of 640,000 frames -- about seven hours of play, run twice and compared |
 | netcode | 192 combinations of latency, jitter, loss, mode and input pattern; damaged, duplicated and stale packets |
 | rendering | a perceptual signature per level, so a mask that stops clipping is caught |
 | database | row level security from a third account, races run in parallel, ordering fuzz |

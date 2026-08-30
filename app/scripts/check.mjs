@@ -28,7 +28,10 @@ const ASSETS = join(DIST, "extracted/assets");
 let failures = 0;
 function check(what, ok, detail = "") {
   if (!ok) failures++;
-  console.log(`  ${ok ? "ok  " : "FAIL"} ${what}${detail ? ": " + detail : ""}`);
+  // The detail is always a reason something failed, so it only belongs in the
+  // output when something did.
+  console.log(`  ${ok ? "ok  " : "FAIL"} ${what}` +
+              (!ok && detail ? ": " + detail : ""));
 }
 
 if (!existsSync(DIST)) {
@@ -120,6 +123,10 @@ console.log("\nevery asset the manifests name is there");
   }
   check(`${checked} sprite frames, format "${raster}"`, missing.length === 0,
         missing.slice(0, 5).join(", "));
+  // A build that shipped the PNGs would work perfectly and be three times the
+  // download, with nothing else in the project noticing.
+  check("the sprites were converted, not copied", raster === "webp",
+        `shipped as ${raster}`);
 
   const sounds = read("sounds.json");
   const lost = Object.entries(sounds).filter(([, where]) =>

@@ -141,16 +141,32 @@ try {
         () => window.__fbwg && window.__fbwg.view.sprites &&
               !window.__fbwg.view.sprites.loading,
         null, { timeout: 60000 });
-      const painted = await page.evaluate(() => {
+      // Polled, not sampled once. `sprites.loading === 0` means every request
+      // has come back; it does not mean a frame has been drawn with them yet,
+      // and under load -- three browsers and a test suite sharing a machine --
+      // the gap between the two is wide enough to catch a canvas that is still
+      // black. Measuring once made Firefox and WebKit look broken when they
+      // were merely busy.
+      const sample = () => page.evaluate(() => {
         const px = document.getElementById("stage").getContext("2d")
           .getImageData(0, 0, 640, 480).data;
         let lit = 0;
         for (let i = 0; i < px.length; i += 4) {
           if (px[i] + px[i + 1] + px[i + 2] > 60) lit++;
         }
-        return lit / (px.length / 4);
+        const s = window.__fbwg.view.sprites;
+        return { painted: lit / (px.length / 4), missing: s.missing,
+                 loading: s.loading };
       });
-      check("the menu is drawn, not a black canvas", painted > 0.3, true);
+      let drawn = await sample();
+      for (let i = 0; i < 60 && drawn.painted <= 0.3; i++) {
+        await page.waitForTimeout(500);
+        drawn = await sample();
+      }
+      console.log(`  ${(drawn.painted * 100).toFixed(0)}% of the canvas lit, ` +
+                  `${drawn.missing} images failed, ${drawn.loading} pending`);
+      check("no art failed to load", drawn.missing, 0);
+      check("the menu is drawn, not a black canvas", drawn.painted > 0.3, true);
 
       /**
        * Click PLAY through the CSS scale, at two very different widths.
@@ -176,9 +192,11 @@ try {
         await page.waitForTimeout(250);
         const overNothing = await cursor();
 
-        // PLAY sits at roughly (320, 300) on the 640x480 stage.
+        // PLAY sits at roughly (320, 246) on the 640x480 stage -- measured off
+        // a screenshot rather than guessed, because a guess that misses looks
+        // exactly like the hit test being broken.
         await page.mouse.move(box.x + box.width * 320 / 640,
-                              box.y + box.height * 300 / 480);
+                              box.y + box.height * 246 / 480);
         await page.waitForTimeout(250);
         check(`at ${width}px the pointer finds PLAY`,
               [overNothing, await cursor()], ["default", "pointer"]);
