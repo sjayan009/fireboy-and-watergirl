@@ -1,0 +1,112 @@
+{
+ "spawns": {
+  "StartPosWater": {
+   "x": 18,
+   "y": 3
+  },
+  "StartPosFire": {
+   "x": 20,
+   "y": 3
+  }
+ },
+ "entities": [
+  {
+   "type": "CreateFinish",
+   "args": [
+    {
+     "x": 9.5,
+     "y": 7.5
+    },
+    {
+     "x": 28.5,
+     "y": 7.5
+    }
+   ]
+  },
+  {
+   "type": "CreateWind",
+   "args": [
+    {
+     "x": 18,
+     "y": 6
+    },
+    {
+     "x": 20,
+     "y": 15
+    },
+    1,
+    1,
+    "normal",
+    true
+   ]
+  },
+  {
+   "type": "CreateWind",
+   "args": [
+    {
+     "x": 22,
+     "y": 18
+    },
+    {
+     "x": 30,
+     "y": 20
+    },
+    2,
+    1,
+    "normal",
+    false
+   ]
+  },
+  {
+   "type": "CreateWind",
+   "args": [
+    {
+     "x": 8,
+     "y": 18
+    },
+    {
+     "x": 16,
+     "y": 20
+    },
+    4,
+    1,
+    "normal",
+    false
+   ]
+  },
+  {
+   "type": "CreateWind",
+   "args": [
+    {
+     "x": 16,
+     "y": 22
+    },
+    {
+     "x": 18,
+     "y": 27
+    },
+    1,
+    1,
+    "normal",
+    false
+   ]
+  },
+  {
+   "type": "CreateWind",
+   "args": [
+    {
+     "x": 20,
+     "y": 22
+    },
+    {
+     "x": 22,
+     "y": 27
+    },
+    1,
+    1,
+    "normal",
+    false
+   ]
+  }
+ ]
+}

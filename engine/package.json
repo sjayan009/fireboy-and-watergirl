@@ -1,0 +1,24 @@
+{
+  "name": "fbwg-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node dist/trigcheck.js && node dist/smoke.js && node dist/coverage.js && node dist/leveltest.js && node dist/alllevels.js && node dist/diamonds.js && node dist/shelltest.js && node dist/determinism.js && node dist/leveldigests.js && node dist/snapbench.js && node dist/nettest.js && node dist/rollbacktest.js && node dist/netmatrix.js --quick",
+    "test:cross": "node test/crossengine.mjs",
+    "test:mouse": "node test/mousetest.mjs",
+    "test:render": "node test/rendertest.mjs && node test/goldenrender.mjs",
+    "test:net": "node dist/nettest.js && node dist/rollbacktest.js && node dist/netmatrix.js && node dist/nethostile.js",
+    "test:twotabs": "node test/twotabs.mjs",
+    "test:webrtc": "node test/webrtc.mjs",
+    "test:full": "npm run build && node dist/trigcheck.js && node dist/smoke.js && node dist/coverage.js && node dist/leveltest.js && node dist/alllevels.js && node dist/diamonds.js && node dist/shelltest.js && node dist/determinism.js && node dist/leveldigests.js && node dist/snapbench.js && node dist/nettest.js && node dist/rollbacktest.js && node dist/netmatrix.js && node dist/nethostile.js && node dist/soak.js && node test/twotabs.mjs && node test/webrtc.mjs && node test/rendertest.mjs && node test/goldenrender.mjs && node test/mousetest.mjs && node test/crossengine.mjs",
+    "test:soak": "node dist/soak.js"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "playwright": "^1.62.1",
+    "typescript": "^5.6.0"
+  }
+}

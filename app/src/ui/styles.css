@@ -1,0 +1,256 @@
+/*
+ * The forest temple's own palette, taken from the game's art: warm stone,
+ * lantern orange for Fireboy, pool blue for Watergirl.
+ */
+:root {
+  --ink: #f2e9dd;
+  --dim: #a1937f;
+  --bg: #14110e;
+  --panel: #1e1a15;
+  --edge: #33291f;
+  --fire: #e8642a;
+  --water: #35a7d8;
+  --bad: #e2564a;
+  --radius: 10px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  /* A faint warm glow from the top, so the page is not a flat black field. */
+  background-image: radial-gradient(120% 60% at 50% 0%, #241d16 0%, var(--bg) 70%);
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+}
+
+/* ---- cards --------------------------------------------------------------- */
+
+.card {
+  width: 100%;
+  max-width: 380px;
+  padding: 28px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+}
+
+.card h1 {
+  margin: 0 0 6px;
+  font-size: 21px;
+  letter-spacing: -0.01em;
+}
+
+.card h2 {
+  margin: 28px 0 4px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.note { margin: 8px 0 0; color: var(--dim); font-size: 13px; }
+.note a { color: var(--water); }
+.note code {
+  font-size: 12px;
+  color: var(--ink);
+  background: #0f0d0b;
+  padding: 2px 5px;
+  border-radius: 4px;
+  user-select: all;
+}
+
+/* ---- forms --------------------------------------------------------------- */
+
+form { margin-top: 18px; display: grid; gap: 12px; }
+
+.field { display: grid; gap: 5px; }
+.field span { font-size: 13px; color: var(--dim); }
+
+.field input {
+  width: 100%;
+  padding: 9px 11px;
+  font: inherit;
+  color: var(--ink);
+  background: #100e0b;
+  border: 1px solid var(--edge);
+  border-radius: 7px;
+}
+
+.field input:focus-visible {
+  outline: none;
+  border-color: var(--fire);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 7px;
+  border: 1px solid transparent;
+}
+
+button:disabled { cursor: default; opacity: 0.6; }
+
+.primary {
+  padding: 10px 14px;
+  font-weight: 600;
+  color: #1a0f07;
+  background: var(--fire);
+}
+
+.primary:hover:not(:disabled) { background: #f4783f; }
+
+.ghost {
+  padding: 6px 11px;
+  font-size: 13px;
+  color: var(--ink);
+  background: transparent;
+  border-color: var(--edge);
+  text-decoration: none;
+}
+
+.ghost:hover { border-color: var(--dim); }
+
+.error {
+  margin: 0;
+  padding: 9px 11px;
+  font-size: 13px;
+  color: #ffd9d4;
+  background: #3a1a17;
+  border: 1px solid #5c2721;
+  border-radius: 7px;
+}
+
+.qr {
+  margin-top: 10px;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+}
+
+/* ---- the game ------------------------------------------------------------ */
+
+.play {
+  width: 100%;
+  max-width: 900px;
+  display: grid;
+  gap: 12px;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.bar .spacer { flex: 1; }
+.bar .who { font-weight: 600; }
+.bar .status { color: var(--dim); }
+
+/*
+ * The stage is a fixed 640x480 that CSS scales. `image-rendering: auto` is
+ * deliberate: the art is smooth 2009 vector-derived bitmaps, and nearest
+ * neighbour would make a pixel-art look the game never had.
+ */
+.screen {
+  background: #000;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  overflow: hidden;
+  aspect-ratio: 640 / 480;
+}
+
+#stage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  touch-action: none;
+}
+
+.keys { margin: 0; color: var(--dim); font-size: 13px; text-align: center; }
+
+/* ---- friends, presence and invitations ----------------------------------- */
+
+.panel {
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+}
+
+.panel h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.list { display: grid; gap: 2px; }
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid #241e18;
+}
+
+.row:last-child { border-bottom: none; }
+.row .name { font-weight: 600; }
+.row .dim, .banner .dim { color: var(--dim); font-size: 13px; }
+.row button { margin-left: auto; }
+.row button + button { margin-left: 8px; }
+
+/* A friend's presence. Grey is not "away", it is "not there at all". */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4a3f33;
+  flex: none;
+}
+
+.dot.online { background: var(--water); }
+.dot.in_lobby { background: var(--water); }
+.dot.in_game { background: var(--fire); }
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 11px 14px;
+  font-size: 14px;
+  background: #23303a;
+  border: 1px solid #2f4553;
+  border-radius: var(--radius);
+}
+
+.pick {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 7px;
+  color: var(--ink);
+  background: #100e0b;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+}
+
+.small { padding: 6px 12px; font-size: 13px; }

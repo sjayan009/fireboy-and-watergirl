@@ -1,0 +1,19 @@
+{
+ "Adv_Sound": "898_Adv_Sound.wav",
+ "Chain_Sound": "897_Chain_Sound.wav",
+ "Diamond_Sound": "911_Diamond_Sound.wav",
+ "Door_Sound": "906_Door_Sound.wav",
+ "Finish1": "899_Finish1.wav",
+ "Finish2": "900_Finish2.wav",
+ "Jump1_Sound": "904_Jump1_Sound.wav",
+ "Jump2_Sound": "901_Jump2_Sound.wav",
+ "Lever_Sound": "908_Lever_Sound.wav",
+ "Menu_Sound": "902_Menu_Sound.wav",
+ "Navis_Sound": "903_Navis_Sound.wav",
+ "Over_Sound": "909_Over_Sound.wav",
+ "Platform_Sound": "907_Platform_Sound.wav",
+ "Pusher_Sound": "137_Pusher_Sound.wav",
+ "Smash": "1_Smash.wav",
+ "Speed_Sound": "905_Speed_Sound.wav",
+ "Wind_Sound": "910_Wind_Sound.wav"
+}

@@ -1,0 +1,60 @@
+# Everything, nightly and on demand.
+#
+# The slow half: all 32 levels rendered and compared, the determinism soak, the
+# full netcode matrix, three browser engines, the database under load, and the
+# two-account end-to-end tests. Half an hour rather than five minutes, which is
+# why it is not on every push.
+#
+# This one holds credentials. They are repo secrets, masked in logs, and
+# unavailable to pull requests from forks -- and the key stored here should be
+# one minted for CI, not one that has ever been anywhere else.
+name: full
+
+on:
+  schedule:
+    - cron: "20 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  everything:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pillow
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: write the environment the test scripts read
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          umask 077
+          {
+            echo "SUPABASE_URL=$SUPABASE_URL"
+            echo "SUPABASE_PUBLISHABLE_KEY=$SUPABASE_PUBLISHABLE_KEY"
+            echo "SUPABASE_SECRET_KEY=$SUPABASE_SECRET_KEY"
+            echo "SUPABASE_DB_PASSWORD=$SUPABASE_DB_PASSWORD"
+            echo "SUPABASE_PROJECT_REF=$SUPABASE_PROJECT_REF"
+          } > .env.local
+
+      - name: everything
+        run: npm run test:all
+
+      - name: and never leave the credentials lying about
+        if: always()
+        run: rm -f .env.local

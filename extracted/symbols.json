@@ -1,0 +1,1760 @@
+{
+ "AG_Teaser": {
+  "children": [
+   {
+    "id": 23,
+    "name": "AGclick_btn",
+    "symbol": null
+   },
+   {
+    "id": 29,
+    "name": "AGskip_btn",
+    "symbol": null
+   },
+   {
+    "id": 31,
+    "name": "AGpresented_mc",
+    "symbol": null
+   },
+   {
+    "id": 47,
+    "name": "AGlogo_mc",
+    "symbol": "FireBoyAndWaterGirl_fla.AGlogo_mc_296"
+   }
+  ],
+  "frames": 1,
+  "id": 48
+ },
+ "Adv_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 898
+ },
+ "Ball": {
+  "children": [],
+  "frames": 1,
+  "id": 82
+ },
+ "BlackBox": {
+  "children": [],
+  "frames": 15,
+  "id": 89
+ },
+ "BlackBoxTri": {
+  "children": [],
+  "frames": 15,
+  "id": 97
+ },
+ "BlueDiamond": {
+  "children": [],
+  "frames": 40,
+  "id": 100
+ },
+ "ButtonBox": {
+  "children": [],
+  "frames": 1,
+  "id": 107
+ },
+ "ButtonMask": {
+  "children": [],
+  "frames": 1,
+  "id": 109
+ },
+ "ButtonPlants": {
+  "children": [],
+  "frames": 1,
+  "id": 111
+ },
+ "Chain_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 897
+ },
+ "Connector": {
+  "children": [
+   {
+    "id": 112,
+    "name": "ropeMask",
+    "symbol": null
+   },
+   {
+    "id": 115,
+    "name": "chain",
+    "symbol": null
+   }
+  ],
+  "clipMask": "ropeMask",
+  "frames": 1,
+  "id": 116
+ },
+ "Credits": {
+  "children": [
+   {
+    "id": 138,
+    "name": "OKO",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 139
+ },
+ "Diamond_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 911
+ },
+ "Door_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 906
+ },
+ "Finish1": {
+  "children": [],
+  "frames": 1,
+  "id": 899
+ },
+ "Finish2": {
+  "children": [],
+  "frames": 1,
+  "id": 900
+ },
+ "FinishBoy": {
+  "children": [],
+  "frames": 22,
+  "id": 159
+ },
+ "FinishGirl": {
+  "children": [],
+  "frames": 22,
+  "id": 166
+ },
+ "FireBox": {
+  "children": [],
+  "frames": 15,
+  "id": 173
+ },
+ "FireBoxTri": {
+  "children": [],
+  "frames": 15,
+  "id": 180
+ },
+ "FireBoy": {
+  "children": [
+   {
+    "id": 195,
+    "name": "mc_1",
+    "symbol": null
+   },
+   {
+    "id": 204,
+    "name": "mc_2",
+    "symbol": null
+   },
+   {
+    "id": 218,
+    "name": "mc_3",
+    "symbol": null
+   },
+   {
+    "id": 233,
+    "name": "mc_4",
+    "symbol": "FireBoyAndWaterGirl_fla.fire_jumping_side_up_38"
+   },
+   {
+    "id": 242,
+    "name": "mc_5",
+    "symbol": "FireBoyAndWaterGirl_fla.fire_running_40"
+   }
+  ],
+  "frames": 1,
+  "id": 243
+ },
+ "FireBoyAndWaterGirl_fla.AGlogo_mc_296": {
+  "children": [
+   {
+    "id": 46,
+    "name": "agButton_btn",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 47
+ },
+ "FireBoyAndWaterGirl_fla.BDCounter_252": {
+  "children": [
+   {
+    "id": 710,
+    "name": "bd",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 711
+ },
+ "FireBoyAndWaterGirl_fla.Diamond1copy5_210": {
+  "children": [
+   {
+    "id": 600,
+    "name": "Glower",
+    "symbol": null
+   },
+   {
+    "id": 601,
+    "name": "Time",
+    "symbol": null
+   },
+   {
+    "id": 581,
+    "name": "Now",
+    "symbol": null
+   }
+  ],
+  "frames": 4,
+  "id": 607
+ },
+ "FireBoyAndWaterGirl_fla.Diamond2_213": {
+  "children": [
+   {
+    "id": 612,
+    "name": "Glower",
+    "symbol": null
+   },
+   {
+    "id": 613,
+    "name": "Time",
+    "symbol": null
+   },
+   {
+    "id": 581,
+    "name": "Now",
+    "symbol": null
+   }
+  ],
+  "frames": 4,
+  "id": 619
+ },
+ "FireBoyAndWaterGirl_fla.Diamond3copy_202": {
+  "children": [
+   {
+    "id": 578,
+    "name": "Glower",
+    "symbol": null
+   },
+   {
+    "id": 579,
+    "name": "Time",
+    "symbol": null
+   },
+   {
+    "id": 581,
+    "name": "Now",
+    "symbol": null
+   }
+  ],
+  "frames": 4,
+  "id": 587
+ },
+ "FireBoyAndWaterGirl_fla.GDcounter_253": {
+  "children": [
+   {
+    "id": 713,
+    "name": "gd",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 716
+ },
+ "FireBoyAndWaterGirl_fla.GOboard_45": {
+  "children": [
+   {
+    "id": 273,
+    "name": "ToMenuBtn",
+    "symbol": null
+   },
+   {
+    "id": 279,
+    "name": "RetryBtn",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 284
+ },
+ "FireBoyAndWaterGirl_fla.HSallowed_65": {
+  "children": [
+   {
+    "id": 316,
+    "name": "name_txt",
+    "symbol": null
+   },
+   {
+    "id": 317,
+    "name": "name_txt_2",
+    "symbol": null
+   },
+   {
+    "id": 319,
+    "name": "SubmitBTN",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 322
+ },
+ "FireBoyAndWaterGirl_fla.RBoard_243": {
+  "children": [
+   {
+    "id": 684,
+    "name": "time",
+    "symbol": null
+   },
+   {
+    "id": 690,
+    "name": "ToMenuBtn",
+    "symbol": null
+   },
+   {
+    "id": 705,
+    "name": "Result",
+    "symbol": "FireBoyAndWaterGirl_fla.Result_246"
+   },
+   {
+    "id": 708,
+    "name": "RDcounter",
+    "symbol": "FireBoyAndWaterGirl_fla.RDCounter_251"
+   },
+   {
+    "id": 711,
+    "name": "BDcounter",
+    "symbol": "FireBoyAndWaterGirl_fla.BDCounter_252"
+   },
+   {
+    "id": 716,
+    "name": "GDcounter",
+    "symbol": "FireBoyAndWaterGirl_fla.GDcounter_253"
+   }
+  ],
+  "frames": 1,
+  "id": 717
+ },
+ "FireBoyAndWaterGirl_fla.RDCounter_251": {
+  "children": [
+   {
+    "id": 707,
+    "name": "rd",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 708
+ },
+ "FireBoyAndWaterGirl_fla.RESETERER_69": {
+  "children": [
+   {
+    "id": 330,
+    "name": "ResetBtn",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 331
+ },
+ "FireBoyAndWaterGirl_fla.Result_246": {
+  "children": [
+   {
+    "id": 695,
+    "name": "F",
+    "symbol": null
+   },
+   {
+    "id": 698,
+    "name": "C",
+    "symbol": null
+   },
+   {
+    "id": 701,
+    "name": "B",
+    "symbol": null
+   },
+   {
+    "id": 704,
+    "name": "A",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 705
+ },
+ "FireBoyAndWaterGirl_fla.SurcoGold_166": {
+  "children": [
+   {
+    "id": 504,
+    "name": "Gold_1",
+    "symbol": null
+   },
+   {
+    "id": 506,
+    "name": "Gold_2",
+    "symbol": null
+   },
+   {
+    "id": 508,
+    "name": "Gold_3",
+    "symbol": null
+   },
+   {
+    "id": 510,
+    "name": "Gold_4",
+    "symbol": null
+   },
+   {
+    "id": 512,
+    "name": "Gold_5",
+    "symbol": null
+   },
+   {
+    "id": 514,
+    "name": "Gold_6",
+    "symbol": null
+   },
+   {
+    "id": 516,
+    "name": "Gold_7",
+    "symbol": null
+   },
+   {
+    "id": 518,
+    "name": "Gold_8",
+    "symbol": null
+   },
+   {
+    "id": 520,
+    "name": "Gold_9",
+    "symbol": null
+   },
+   {
+    "id": 522,
+    "name": "Gold_10",
+    "symbol": null
+   },
+   {
+    "id": 524,
+    "name": "Gold_11",
+    "symbol": null
+   },
+   {
+    "id": 526,
+    "name": "Gold_12",
+    "symbol": null
+   },
+   {
+    "id": 528,
+    "name": "Gold_13",
+    "symbol": null
+   },
+   {
+    "id": 530,
+    "name": "Gold_14",
+    "symbol": null
+   },
+   {
+    "id": 532,
+    "name": "Gold_15",
+    "symbol": null
+   },
+   {
+    "id": 534,
+    "name": "Gold_16",
+    "symbol": null
+   },
+   {
+    "id": 536,
+    "name": "Gold_17",
+    "symbol": null
+   },
+   {
+    "id": 538,
+    "name": "Gold_18",
+    "symbol": null
+   },
+   {
+    "id": 540,
+    "name": "Gold_19",
+    "symbol": null
+   },
+   {
+    "id": 542,
+    "name": "Gold_20",
+    "symbol": null
+   },
+   {
+    "id": 544,
+    "name": "Gold_21",
+    "symbol": null
+   },
+   {
+    "id": 546,
+    "name": "Gold_22",
+    "symbol": null
+   },
+   {
+    "id": 548,
+    "name": "Gold_23",
+    "symbol": null
+   },
+   {
+    "id": 550,
+    "name": "Gold_24",
+    "symbol": null
+   },
+   {
+    "id": 552,
+    "name": "Gold_25",
+    "symbol": null
+   },
+   {
+    "id": 554,
+    "name": "Gold_26",
+    "symbol": null
+   },
+   {
+    "id": 556,
+    "name": "Gold_27",
+    "symbol": null
+   },
+   {
+    "id": 558,
+    "name": "Gold_28",
+    "symbol": null
+   },
+   {
+    "id": 560,
+    "name": "Gold_29",
+    "symbol": null
+   },
+   {
+    "id": 562,
+    "name": "Gold_30",
+    "symbol": null
+   },
+   {
+    "id": 564,
+    "name": "Gold_31",
+    "symbol": null
+   },
+   {
+    "id": 566,
+    "name": "Gold_32",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 567
+ },
+ "FireBoyAndWaterGirl_fla.TITLEs_84": {
+  "children": [
+   {
+    "id": 371,
+    "name": "Starter",
+    "symbol": null
+   },
+   {
+    "id": 375,
+    "name": "Instructer",
+    "symbol": null
+   },
+   {
+    "id": 378,
+    "name": "Morer",
+    "symbol": null
+   },
+   {
+    "id": 381,
+    "name": "Crediter",
+    "symbol": null
+   },
+   {
+    "id": 383,
+    "name": "Submiter",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 384
+ },
+ "FireBoyAndWaterGirl_fla.fire_jumping_side_up_38": {
+  "children": [
+   {
+    "id": 232,
+    "name": "head",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 233
+ },
+ "FireBoyAndWaterGirl_fla.fire_running_40": {
+  "children": [
+   {
+    "id": 232,
+    "name": "head",
+    "symbol": null
+   }
+  ],
+  "frames": 8,
+  "id": 242
+ },
+ "FireBoyAndWaterGirl_fla.water_jumping_side_up_280": {
+  "children": [
+   {
+    "id": 829,
+    "name": "head",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 830
+ },
+ "FireBoyAndWaterGirl_fla.water_running_283": {
+  "children": [
+   {
+    "id": 829,
+    "name": "head",
+    "symbol": null
+   }
+  ],
+  "frames": 8,
+  "id": 839
+ },
+ "FireBoystairs": {
+  "children": [
+   {
+    "id": 195,
+    "name": "mc_1",
+    "symbol": null
+   },
+   {
+    "id": 242,
+    "name": "mc_5",
+    "symbol": "FireBoyAndWaterGirl_fla.fire_running_40"
+   }
+  ],
+  "frames": 25,
+  "id": 250
+ },
+ "Game": {
+  "children": [],
+  "frames": 1,
+  "id": 0
+ },
+ "GameOvero": {
+  "children": [
+   {
+    "id": 252,
+    "name": "Tapper",
+    "symbol": null
+   },
+   {
+    "id": 284,
+    "name": "GOboard",
+    "symbol": "FireBoyAndWaterGirl_fla.GOboard_45"
+   }
+  ],
+  "frames": 1,
+  "id": 285
+ },
+ "GroundBox1": {
+  "children": [],
+  "frames": 1,
+  "id": 288
+ },
+ "GroundBox2": {
+  "children": [],
+  "frames": 1,
+  "id": 291
+ },
+ "GroundBox3": {
+  "children": [],
+  "frames": 1,
+  "id": 294
+ },
+ "GroundBox4": {
+  "children": [],
+  "frames": 1,
+  "id": 297
+ },
+ "GroundBox5": {
+  "children": [],
+  "frames": 1,
+  "id": 300
+ },
+ "GroundBoxHalf": {
+  "children": [],
+  "frames": 1,
+  "id": 303
+ },
+ "GroundTri_1": {
+  "children": [],
+  "frames": 1,
+  "id": 306
+ },
+ "Hiscore": {
+  "children": [
+   {
+    "id": 310,
+    "name": "points_txt",
+    "symbol": null
+   },
+   {
+    "id": 313,
+    "name": "BackBTN",
+    "symbol": null
+   },
+   {
+    "id": 322,
+    "name": "HS",
+    "symbol": "FireBoyAndWaterGirl_fla.HSallowed_65"
+   },
+   {
+    "id": 325,
+    "name": "ViewHS",
+    "symbol": null
+   },
+   {
+    "id": 327,
+    "name": "NoHS",
+    "symbol": null
+   },
+   {
+    "id": 331,
+    "name": "Reset",
+    "symbol": "FireBoyAndWaterGirl_fla.RESETERER_69"
+   }
+  ],
+  "frames": 1,
+  "id": 332
+ },
+ "Instructions": {
+  "children": [
+   {
+    "id": 138,
+    "name": "OKO",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 344
+ },
+ "IntroMenu": {
+  "children": [
+   {
+    "id": 384,
+    "name": "Buttons",
+    "symbol": "FireBoyAndWaterGirl_fla.TITLEs_84"
+   },
+   {
+    "id": 388,
+    "name": "ArmorLogo",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 389
+ },
+ "Jump1_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 904
+ },
+ "Jump2_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 901
+ },
+ "JumperBox": {
+  "children": [],
+  "frames": 1,
+  "id": 391
+ },
+ "LeverBase": {
+  "children": [],
+  "frames": 1,
+  "id": 442
+ },
+ "LeverMc": {
+  "children": [],
+  "frames": 1,
+  "id": 444
+ },
+ "Lever_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 908
+ },
+ "LightMask": {
+  "children": [],
+  "frames": 434,
+  "id": 478
+ },
+ "LoaderHolder": {
+  "children": [
+   {
+    "id": 62,
+    "name": "adBox",
+    "symbol": null
+   },
+   {
+    "id": 75,
+    "name": "title",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 79
+ },
+ "LoaderMC": {
+  "children": [
+   {
+    "id": 54,
+    "name": "LoaderBar",
+    "symbol": null
+   }
+  ],
+  "clipMask": "LoaderBar",
+  "frames": 1,
+  "id": 60
+ },
+ "MainMenu": {
+  "children": [
+   {
+    "id": 498,
+    "name": "StartBtn",
+    "symbol": null
+   },
+   {
+    "id": 567,
+    "name": "Golden_road",
+    "symbol": "FireBoyAndWaterGirl_fla.SurcoGold_166"
+   },
+   {
+    "id": 569,
+    "name": "node_1",
+    "symbol": null
+   },
+   {
+    "id": 571,
+    "name": "node_1",
+    "symbol": null
+   },
+   {
+    "id": 573,
+    "name": "node_1",
+    "symbol": null
+   },
+   {
+    "id": 587,
+    "name": "node_13",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond3copy_202"
+   },
+   {
+    "id": 587,
+    "name": "node_17",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond3copy_202"
+   },
+   {
+    "id": 587,
+    "name": "node_20",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond3copy_202"
+   },
+   {
+    "id": 587,
+    "name": "node_23",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond3copy_202"
+   },
+   {
+    "id": 587,
+    "name": "node_27",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond3copy_202"
+   },
+   {
+    "id": 587,
+    "name": "node_29",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond3copy_202"
+   },
+   {
+    "id": 587,
+    "name": "node_32",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond3copy_202"
+   },
+   {
+    "id": 589,
+    "name": "node_1",
+    "symbol": null
+   },
+   {
+    "id": 591,
+    "name": "node_1",
+    "symbol": null
+   },
+   {
+    "id": 593,
+    "name": "node_0",
+    "symbol": null
+   },
+   {
+    "id": 607,
+    "name": "node_24",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_25",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_8",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_21",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_18",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_15",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_19",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_22",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_28",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_10",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 619,
+    "name": "node_26",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond2_213"
+   },
+   {
+    "id": 591,
+    "name": "node_1",
+    "symbol": null
+   },
+   {
+    "id": 619,
+    "name": "node_16",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond2_213"
+   },
+   {
+    "id": 607,
+    "name": "node_31",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 591,
+    "name": "node_1",
+    "symbol": null
+   },
+   {
+    "id": 587,
+    "name": "node_11",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond3copy_202"
+   },
+   {
+    "id": 619,
+    "name": "node_12",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond2_213"
+   },
+   {
+    "id": 607,
+    "name": "node_9",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_4",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_30",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_2",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_1",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 607,
+    "name": "node_5",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond1copy5_210"
+   },
+   {
+    "id": 619,
+    "name": "node_14",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond2_213"
+   },
+   {
+    "id": 619,
+    "name": "node_3",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond2_213"
+   },
+   {
+    "id": 619,
+    "name": "node_6",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond2_213"
+   },
+   {
+    "id": 587,
+    "name": "node_7",
+    "symbol": "FireBoyAndWaterGirl_fla.Diamond3copy_202"
+   },
+   {
+    "id": 622,
+    "name": "flies",
+    "symbol": null
+   },
+   {
+    "id": 624,
+    "name": "b_2_2",
+    "symbol": null
+   },
+   {
+    "id": 624,
+    "name": "b_2_1",
+    "symbol": null
+   },
+   {
+    "id": 624,
+    "name": "b_2_3",
+    "symbol": null
+   },
+   {
+    "id": 624,
+    "name": "b_2_4",
+    "symbol": null
+   },
+   {
+    "id": 624,
+    "name": "b_2_5",
+    "symbol": null
+   },
+   {
+    "id": 624,
+    "name": "b_2_6",
+    "symbol": null
+   },
+   {
+    "id": 624,
+    "name": "b_2_7",
+    "symbol": null
+   },
+   {
+    "id": 624,
+    "name": "b_2_8",
+    "symbol": null
+   },
+   {
+    "id": 624,
+    "name": "b_2_9",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_1",
+    "symbol": null
+   },
+   {
+    "id": 628,
+    "name": "b_3_1",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_2",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_3",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_8",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_4",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_9",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_5",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_10",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_11",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_12",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_15",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_14",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_13",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_6",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_7",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_16",
+    "symbol": null
+   },
+   {
+    "id": 626,
+    "name": "b_1_17",
+    "symbol": null
+   },
+   {
+    "id": 628,
+    "name": "b_3_3",
+    "symbol": null
+   },
+   {
+    "id": 628,
+    "name": "b_3_5",
+    "symbol": null
+   },
+   {
+    "id": 628,
+    "name": "b_3_6",
+    "symbol": null
+   },
+   {
+    "id": 628,
+    "name": "b_3_4",
+    "symbol": null
+   },
+   {
+    "id": 628,
+    "name": "b_3_2",
+    "symbol": null
+   },
+   {
+    "id": 635,
+    "name": "BackToIntro",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 638
+ },
+ "MaskBox": {
+  "children": [],
+  "frames": 1,
+  "id": 640
+ },
+ "MaskBoxHalf": {
+  "children": [],
+  "frames": 1,
+  "id": 642
+ },
+ "MaskBoxMaskTri": {
+  "children": [],
+  "frames": 1,
+  "id": 644
+ },
+ "Menu_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 902
+ },
+ "MovingBox": {
+  "children": [],
+  "frames": 1,
+  "id": 646
+ },
+ "Muter": {
+  "children": [
+   {
+    "id": 649,
+    "name": "muteLines",
+    "symbol": null
+   },
+   {
+    "id": 651,
+    "name": "muteBtn",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 652
+ },
+ "Navis_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 903
+ },
+ "Over_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 909
+ },
+ "PauseMenu": {
+  "children": [
+   {
+    "id": 654,
+    "name": "Tapper",
+    "symbol": null
+   },
+   {
+    "id": 279,
+    "name": "retryBtn",
+    "symbol": null
+   },
+   {
+    "id": 635,
+    "name": "endGameBtn",
+    "symbol": null
+   },
+   {
+    "id": 659,
+    "name": "BlueCount",
+    "symbol": null
+   },
+   {
+    "id": 660,
+    "name": "RedCount",
+    "symbol": null
+   },
+   {
+    "id": 665,
+    "name": "btn",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 666
+ },
+ "PhysCircle": {
+  "children": [],
+  "frames": 1,
+  "id": 668
+ },
+ "Platform1": {
+  "children": [
+   {
+    "id": 670,
+    "name": "bar",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 671
+ },
+ "PlatformBox": {
+  "children": [],
+  "frames": 1,
+  "id": 674
+ },
+ "PlatformPulleyBox": {
+  "children": [
+   {
+    "id": 674,
+    "name": "platform",
+    "symbol": "PlatformBox"
+   }
+  ],
+  "frames": 1,
+  "id": 676
+ },
+ "Platform_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 907
+ },
+ "PulleyAnchor": {
+  "children": [],
+  "frames": 1,
+  "id": 678
+ },
+ "PulleyAnchor2": {
+  "children": [],
+  "frames": 1,
+  "id": 680
+ },
+ "Pusher_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 137
+ },
+ "Recuento": {
+  "children": [
+   {
+    "id": 252,
+    "name": "Tapper",
+    "symbol": null
+   },
+   {
+    "id": 717,
+    "name": "Rboard",
+    "symbol": "FireBoyAndWaterGirl_fla.RBoard_243"
+   }
+  ],
+  "frames": 1,
+  "id": 718
+ },
+ "RedDiamond": {
+  "children": [],
+  "frames": 40,
+  "id": 719
+ },
+ "Roman": {
+  "children": [
+   {
+    "id": 721,
+    "name": "stick",
+    "symbol": null
+   },
+   {
+    "id": 723,
+    "name": "tri2",
+    "symbol": null
+   },
+   {
+    "id": 723,
+    "name": "tri1",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 725
+ },
+ "RomanBase": {
+  "children": [],
+  "frames": 1,
+  "id": 727
+ },
+ "Rope": {
+  "children": [
+   {
+    "id": 112,
+    "name": "ropeMask",
+    "symbol": null
+   }
+  ],
+  "clipMask": "ropeMask",
+  "frames": 1,
+  "id": 730
+ },
+ "RopePulley": {
+  "children": [
+   {
+    "id": 112,
+    "name": "ropeMask",
+    "symbol": null
+   },
+   {
+    "id": 115,
+    "name": "chain",
+    "symbol": null
+   }
+  ],
+  "clipMask": "ropeMask",
+  "frames": 1,
+  "id": 731
+ },
+ "RopeTriangle": {
+  "children": [],
+  "frames": 1,
+  "id": 733
+ },
+ "SilverDiamond": {
+  "children": [],
+  "frames": 40,
+  "id": 734
+ },
+ "Smash": {
+  "children": [],
+  "frames": 1,
+  "id": 1
+ },
+ "Speed_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 905
+ },
+ "StartBtn": {
+  "children": [],
+  "frames": 1,
+  "id": 52
+ },
+ "Trans": {
+  "children": [],
+  "frames": 1,
+  "id": 738
+ },
+ "TutLayer": {
+  "children": [],
+  "frames": 7,
+  "id": 765
+ },
+ "Watch": {
+  "children": [
+   {
+    "id": 768,
+    "name": "mins",
+    "symbol": null
+   },
+   {
+    "id": 769,
+    "name": "secs",
+    "symbol": null
+   },
+   {
+    "id": 771,
+    "name": "cents",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 775
+ },
+ "WaterBox": {
+  "children": [],
+  "frames": 10,
+  "id": 782
+ },
+ "WaterBoxTri": {
+  "children": [],
+  "frames": 15,
+  "id": 789
+ },
+ "WaterGirl": {
+  "children": [
+   {
+    "id": 364,
+    "name": "mc_1",
+    "symbol": null
+   },
+   {
+    "id": 806,
+    "name": "mc_2",
+    "symbol": null
+   },
+   {
+    "id": 817,
+    "name": "mc_3",
+    "symbol": null
+   },
+   {
+    "id": 830,
+    "name": "mc_4",
+    "symbol": "FireBoyAndWaterGirl_fla.water_jumping_side_up_280"
+   },
+   {
+    "id": 839,
+    "name": "mc_5",
+    "symbol": "FireBoyAndWaterGirl_fla.water_running_283"
+   }
+  ],
+  "frames": 1,
+  "id": 840
+ },
+ "WaterGirlStairs": {
+  "children": [
+   {
+    "id": 829,
+    "name": "head",
+    "symbol": null
+   }
+  ],
+  "frames": 35,
+  "id": 876
+ },
+ "Wind": {
+  "children": [
+   {
+    "id": 889,
+    "name": "insideWind",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 890
+ },
+ "WindMaker": {
+  "children": [
+   {
+    "id": 894,
+    "name": "blades",
+    "symbol": null
+   }
+  ],
+  "frames": 1,
+  "id": 896
+ },
+ "Wind_Sound": {
+  "children": [],
+  "frames": 1,
+  "id": 910
+ },
+ "ag_intro_mc": {
+  "children": [
+   {
+    "id": 3,
+    "name": "LinkBtn",
+    "symbol": null
+   }
+  ],
+  "frames": 218,
+  "id": 17
+ },
+ "bug": {
+  "children": [],
+  "frames": 169,
+  "id": 105
+ },
+ "deadFire": {
+  "children": [],
+  "frames": 49,
+  "id": 151
+ },
+ "lev_btn_1": {
+  "children": [],
+  "frames": 1,
+  "id": 393
+ },
+ "lev_btn_2": {
+  "children": [],
+  "frames": 1,
+  "id": 395
+ },
+ "lev_btn_3": {
+  "children": [],
+  "frames": 1,
+  "id": 397
+ },
+ "level": {
+  "children": [],
+  "frames": 1,
+  "id": 398
+ },
+ "lever_base_light_1": {
+  "children": [],
+  "frames": 1,
+  "id": 401
+ },
+ "lever_base_light_2": {
+  "children": [],
+  "frames": 1,
+  "id": 404
+ },
+ "lever_base_light_3": {
+  "children": [],
+  "frames": 1,
+  "id": 407
+ },
+ "lever_base_light_4": {
+  "children": [],
+  "frames": 1,
+  "id": 410
+ },
+ "lever_base_light_5": {
+  "children": [],
+  "frames": 1,
+  "id": 413
+ },
+ "lever_base_light_6": {
+  "children": [],
+  "frames": 1,
+  "id": 416
+ },
+ "lever_light_1": {
+  "children": [],
+  "frames": 2,
+  "id": 420
+ },
+ "lever_light_2": {
+  "children": [],
+  "frames": 2,
+  "id": 424
+ },
+ "lever_light_3": {
+  "children": [],
+  "frames": 2,
+  "id": 428
+ },
+ "lever_light_4": {
+  "children": [],
+  "frames": 2,
+  "id": 432
+ },
+ "lever_light_5": {
+  "children": [],
+  "frames": 2,
+  "id": 436
+ },
+ "lever_light_6": {
+  "children": [],
+  "frames": 2,
+  "id": 440
+ },
+ "light_off_1": {
+  "children": [],
+  "frames": 1,
+  "id": 446
+ },
+ "light_off_2": {
+  "children": [],
+  "frames": 1,
+  "id": 448
+ },
+ "light_off_3": {
+  "children": [],
+  "frames": 1,
+  "id": 450
+ },
+ "light_off_4": {
+  "children": [],
+  "frames": 1,
+  "id": 452
+ },
+ "light_off_5": {
+  "children": [],
+  "frames": 1,
+  "id": 454
+ },
+ "light_off_6": {
+  "children": [],
+  "frames": 1,
+  "id": 456
+ },
+ "light_on_1": {
+  "children": [],
+  "frames": 1,
+  "id": 459
+ },
+ "light_on_2": {
+  "children": [],
+  "frames": 1,
+  "id": 462
+ },
+ "light_on_3": {
+  "children": [],
+  "frames": 1,
+  "id": 465
+ },
+ "light_on_4": {
+  "children": [],
+  "frames": 1,
+  "id": 468
+ },
+ "light_on_5": {
+  "children": [],
+  "frames": 1,
+  "id": 471
+ },
+ "light_on_6": {
+  "children": [],
+  "frames": 1,
+  "id": 474
+ },
+ "lightpoint_1": {
+  "children": [],
+  "frames": 1,
+  "id": 481
+ },
+ "lightpoint_2": {
+  "children": [],
+  "frames": 1,
+  "id": 484
+ },
+ "lightpoint_3": {
+  "children": [],
+  "frames": 1,
+  "id": 487
+ },
+ "lightpoint_4": {
+  "children": [],
+  "frames": 1,
+  "id": 490
+ },
+ "lightpoint_5": {
+  "children": [],
+  "frames": 1,
+  "id": 493
+ },
+ "lightpoint_6": {
+  "children": [],
+  "frames": 1,
+  "id": 496
+ },
+ "texture1": {
+  "children": [],
+  "frames": 1,
+  "id": 737
+ }
+}

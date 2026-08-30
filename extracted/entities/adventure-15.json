@@ -1,0 +1,159 @@
+{
+ "spawns": {
+  "StartPosFire": {
+   "x": 37,
+   "y": 3
+  },
+  "StartPosWater": {
+   "x": 2,
+   "y": 10
+  }
+ },
+ "entities": [
+  {
+   "type": "CreateFinish",
+   "args": [
+    {
+     "x": 16,
+     "y": 4.5
+    },
+    {
+     "x": 4,
+     "y": 26.5
+    }
+   ]
+  },
+  {
+   "type": "CreateWind",
+   "args": [
+    {
+     "x": 34.5,
+     "y": 9
+    },
+    {
+     "x": 37.5,
+     "y": 18
+    },
+    1,
+    6,
+    "lever",
+    true
+   ]
+  },
+  {
+   "type": "CreateLever",
+   "args": [
+    {
+     "x": 11,
+     "y": 20
+    },
+    6,
+    "r",
+    "r",
+    true
+   ]
+  },
+  {
+   "type": "CreateWind",
+   "args": [
+    {
+     "x": 4.5,
+     "y": 6
+    },
+    {
+     "x": 7.5,
+     "y": 15
+    },
+    1,
+    4,
+    "lever",
+    true
+   ]
+  },
+  {
+   "type": "CreateLever",
+   "args": [
+    {
+     "x": 29,
+     "y": 27
+    },
+    4,
+    "l",
+    "r",
+    true
+   ]
+  },
+  {
+   "type": "CreateWind",
+   "args": [
+    {
+     "x": 22,
+     "y": 7.5
+    },
+    {
+     "x": 29,
+     "y": 10.5
+    },
+    4,
+    5,
+    "lever",
+    true
+   ]
+  },
+  {
+   "type": "CreateLever",
+   "args": [
+    {
+     "x": 11,
+     "y": 27
+    },
+    5,
+    "r",
+    "r",
+    true
+   ]
+  },
+  {
+   "type": "CreatePulley",
+   "args": [
+    {
+     "x": 18,
+     "y": 8
+    },
+    {
+     "x": 25,
+     "y": 8
+    },
+    {
+     "x": 0.3,
+     "y": 1.5
+    },
+    {
+     "x": 0.3,
+     "y": 1.5
+    },
+    {
+     "x": 18,
+     "y": 12
+    },
+    {
+     "x": 25,
+     "y": 27
+    }
+   ]
+  },
+  {
+   "type": "CreateMovingBox",
+   "args": [
+    {
+     "x": 15,
+     "y": 9
+    },
+    {
+     "x": 0.95,
+     "y": 0.95
+    }
+   ]
+  }
+ ]
+}

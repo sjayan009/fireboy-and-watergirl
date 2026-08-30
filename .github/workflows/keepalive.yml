@@ -1,0 +1,31 @@
+# One query a day, so the project does not go to sleep.
+#
+# A free Supabase project pauses after about a week with no activity, and a
+# paused project is a game that has quietly stopped working for everybody. This
+# is the cheapest possible insurance: one row read, once a day.
+#
+# It lives in Actions rather than as a Vercel cron so the deployment can stay
+# purely static -- no serverless function in the request path, which is the
+# whole reason page loads are one edge round trip.
+name: keepalive
+
+on:
+  schedule:
+    - cron: "40 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: touch the database
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "apikey: $SUPABASE_SECRET_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SECRET_KEY" \
+            "$SUPABASE_URL/rest/v1/profiles?select=id&limit=1")
+          echo "profiles responded $code"
+          test "$code" = "200"
