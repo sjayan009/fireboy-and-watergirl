@@ -58,6 +58,20 @@ npm run invite -- --uses 5 --days 30 --note "for the group chat"
 npm run invite -- --list
 ```
 
+Two-factor has no recovery codes, deliberately: ten single-use secrets to mint,
+hash, show once and redeem is a new security-sensitive surface in an app whose
+auth story is otherwise "Supabase does it", and everyone here can reach whoever
+holds the secret key. That person runs:
+
+```bash
+npm run unenrol -- --user someone
+```
+
+An account can delete itself from Settings. `delete_me()` is a security-definer
+function rather than an admin call, because the admin API needs the secret key
+and this deployment is static with nowhere to keep one; everything else -- the
+profile, the friendships, the progress each pair earned -- is already a cascade.
+
 ## Testing
 
 Two tiers, because a suite people stop waiting for stops being run.
@@ -80,9 +94,16 @@ npm run app:test   # accounts and two-account play, in real browsers
 What is **not** tested here: that email actually arrives, and real NAT traversal
 between two physical networks. Both need something this machine does not have.
 
+`npm run test:deployed` is the other tier, and it runs itself: the build stamps
+`dist/version.txt` with the commit, and the `deployed` workflow waits for that
+commit to be the one answering on the live origin before asserting against it.
+Waiting for anything softer means passing against the previous release when a
+build fails, which is a green check for a deployment that never happened.
+
 ## Deploying
 
-Static, on Vercel: `npm run build`, output `app/dist`, no server in the request
+Static, on Vercel: `npm run build`, output `dist/` at the repository root (the
+default the deploy already looks in), no server in the request
 path. Only `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` reach the browser — the
 secret key and the database password stay in `.env.local`, which is gitignored
 and must remain so.
@@ -90,7 +111,14 @@ and must remain so.
 Two things live in the Supabase dashboard and cannot be set from here: the
 **redirect allow-list** must include the deployed origin, and **custom SMTP**
 must be configured, because the built-in sender is a few messages an hour and is
-documented as being for testing.
+documented as being for testing. The allow-list is right -- `test:deployed`
+signs a real account in against the live origin every release, which would fail
+without it. Whether SMTP has been switched over is not something any test here
+can see, and it is worth checking before inviting anybody new.
+
+`ICE_SERVERS` is optional: a JSON array of `RTCIceServer`, for adding TURN
+without a release. Unset, a pair gets two public STUN servers and the ones whose
+NAT refuses to be discovered relay over their own Realtime channel instead.
 
 ## A note on the art
 

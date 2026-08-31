@@ -73,6 +73,20 @@ LINE_REWRITES = {
         # with a cast so TypeScript stops flagging what the game intends.
         ("nextpos != [param1.target.x,param1.target.y]",
          "nextpos != ([param1.target.x,param1.target.y] as any)"),
+        # A deliberate divergence, and the only one here that changes behaviour
+        # rather than plumbing. StartGame creates a Muter every time; EndGame
+        # removes one and RetryGame does not, so every retry left another mute
+        # button stacked exactly on top of the last, each with its own frame
+        # listener. Invisible -- they are identical and at the same coordinates
+        # -- and a leak all the same.
+        #
+        # Both call sites, not just the one that leaks. removeChild is a no-op
+        # for something that is not a child, so "clear the old one before
+        # StartGame makes another" is simply true everywhere, and a rule with no
+        # exception is worth more than one that has to be pointed at the right
+        # line.
+        ("StartGame(cur_type,cur_lev);",
+         "removeChild(m_muter); StartGame(cur_type,cur_lev);"),
     ],
 }
 

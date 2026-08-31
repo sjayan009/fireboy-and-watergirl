@@ -42,6 +42,16 @@ export async function connect(
   }
   try {
     const transport = await connectWebRTC(rendezvous, caller, opts);
+    // The rendezvous was only ever the introduction here: the game rides the
+    // data channel from now on. Let go of it, or every connection a pair makes
+    // leaves another subscriber on their channel reading signalling for a peer
+    // connection that no longer exists -- which matters the moment reconnecting
+    // exists, because that is when a pair makes more than one.
+    //
+    // After a pause, not at once. ICE trickles: the far side may still be
+    // sending candidates for a second or two after the channel opens, and
+    // hanging up on the introduction mid-sentence would drop them.
+    setTimeout(() => rendezvous.close(), 5000);
     return { transport, kind: "webrtc" };
   } catch (e) {
     // Everything else here is a reason to fall back to the relay. Being

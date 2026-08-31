@@ -42,6 +42,14 @@ const MODES: [string, string, number][] = [
 ];
 
 /**
+ * What the game's own `stats` mean, in the order `CreateMainMenu` draws them.
+ *
+ * -1 is a node you have not reached, 0 is one you have reached and not
+ * finished, and 1 to 3 are the grades `Recuent` awards against `TimeTable`.
+ */
+const GRADES: Record<number, string> = { 3: "A", 2: "B", 1: "C", 0: "—" };
+
+/**
  * How long the other peer may be silent before it is worth saying so.
  *
  * Two seconds at 26 frames a second. Shorter and every jittery moment would
@@ -68,9 +76,12 @@ export function playScreen(host: HTMLElement): () => void {
   const mute = el("button", { class: "ghost" }, muted ? "Unmute" : "Mute");
   const leave = el("button", { class: "ghost" }, "Leave game");
   leave.hidden = true;
+  const hand = el("button", { class: "ghost" }, "Let them pick");
+  hand.hidden = true;
   const banner = el("div", { class: "banner" });
   banner.hidden = true;
   const panel = el("div", { class: "panel" });
+  const times = el("div", { class: "panel" });
   const name = auth().profile?.username ?? "";
 
   let linkKind = "";
@@ -116,6 +127,7 @@ export function playScreen(host: HTMLElement): () => void {
       // session it now drives this same local mute -- so neither button can own
       // the label and it is read back from the one thing both of them set.
       if (view.isMuted !== muted) syncMute();
+      showHand();
       watchStall();
     },
     onRefused: (why) => {
@@ -158,12 +170,52 @@ export function playScreen(host: HTMLElement): () => void {
 
   leave.addEventListener("click", () => endSession("You left the game."));
 
+  /**
+   * Hand the level pick to the other player.
+   *
+   * Over the pair's channel rather than through the netcode, because it is not
+   * simulation state: the two of you are between levels, nothing is being
+   * stepped, and each of you is looking at your own copy of the map. It needs
+   * both of you to agree, which a broadcast does; it does not need to happen on
+   * an agreed frame, which is the only thing a command would buy.
+   */
+  hand.addEventListener("click", () => {
+    if (!match || !lobby) return;
+    const chooser = match.friend.id;
+    lobby.handover(match.friend.id, { session: match.invite.session, chooser });
+    setChooser(chooser);
+  });
+
+  /** Put the pick where the pair has just agreed it goes. */
+  function setChooser(chooser: string): void {
+    const mine = chooser === auth().user?.id;
+    view.canChooseLevel = mine;
+    showHand();
+    // Both of them, because both need to know. Telling only the person who
+    // lost it leaves the other wondering why the map suddenly answers.
+    notice(mine
+      ? "You pick the next level."
+      : `${partner?.username ?? "They"} picks the next level.`);
+  }
+
+  /**
+   * The button exists only where it can be used: in a match, on the map, and
+   * only for whoever currently holds the pick. Offering it mid-level would be
+   * offering to give away something nobody is using.
+   */
+  function showHand(): void {
+    const between = match !== null && !(view.session?.running ?? true);
+    hand.hidden = !between || !view.canChooseLevel;
+    hand.textContent = `Let ${partner?.username ?? "them"} pick`;
+  }
+
   host.append(el("div", { class: "play" },
     el("header", { class: "bar" },
       el("span", { class: "who" }, name),
       status,
       el("span", { class: "spacer" }),
       mute,
+      hand,
       leave,
       el("a", { class: "ghost", href: "#/friends" }, "Friends"),
       el("a", { class: "ghost", href: "#/settings" }, "Settings"),
@@ -175,7 +227,7 @@ export function playScreen(host: HTMLElement): () => void {
     el("div", { class: "screen" }, canvas),
     el("p", { class: "keys" },
       "Fireboy: arrow keys. Watergirl: W, A, D. P pauses, R retries."),
-    panel));
+    panel, times));
 
   canvas.focus();
 
@@ -231,9 +283,63 @@ export function playScreen(host: HTMLElement): () => void {
     else if (noticeText.startsWith("Waiting for")) clearNotice();
   }
 
+  // ---- what you have finished --------------------------------------------
+
+  /**
+   * The 32 results, from the same three arrays the game itself reads.
+   *
+   * No query and no schema: `pairsave` swaps `The_cookie.data` for the pair's
+   * map when a match starts and hands the solo one back afterwards, so this
+   * shows the pair's best times during a game and this browser's when you are
+   * alone, without knowing which it is looking at. That is the whole reason
+   * the store was built with a swappable bag of arrays.
+   *
+   * It replaces the hiscore screen the original had, whose server stopped
+   * answering some time around 2010.
+   */
+  let showTimes = false;
+
+  function drawTimes(): void {
+    clear(times);
+    const toggle = el("button", {
+      class: "ghost small",
+      onclick: () => { showTimes = !showTimes; drawTimes(); },
+    }, showTimes ? "Hide" : "Show");
+    times.append(el("h2", {}, "Best times", toggle));
+    if (!showTimes) return;
+
+    const data = view.game.The_cookie?.data;
+    const table = view.game.Translation as string[] | undefined;
+    if (!data || !table) {
+      times.append(el("p", { class: "note" }, "Nothing recorded yet."));
+      return;
+    }
+
+    const rows: HTMLElement[] = [];
+    let done = 0;
+    for (let i = 0; i < 32; i++) {
+      const medal = data.stats?.[i] ?? -1;
+      if (medal < 0) continue;                       // never reached
+      const [type, num] = String(table[i] ?? "").split("_");
+      const label = MODES[Number(type) - 1]?.[1] ?? "?";
+      const time = data.timesString?.[i] || "";
+      if (medal > 0) done++;
+      rows.push(el("div", { class: "row" },
+        el("span", { class: "name" }, `${label} ${num}`),
+        el("span", { class: "dim" }, time || "not finished"),
+        el("span", { class: "grade" }, GRADES[medal] ?? "—")));
+    }
+
+    times.append(el("p", { class: "note" },
+      `${done} of 32 finished` +
+      (progress.shared ? ", together" : ", on this browser")));
+    times.append(...rows);
+  }
+
   // ---- the lobby ---------------------------------------------------------
 
   panel.append(el("p", { class: "note" }, "Connecting to your friends…"));
+  drawTimes();
 
   // Handlers registered here are unregistered on the way out; the lobby itself
   // outlives this screen, so an invitation still arrives while you are looking
@@ -248,6 +354,9 @@ export function playScreen(host: HTMLElement): () => void {
     unsubscribe.push(l.onChange((friends) => drawPanel(friends)));
     unsubscribe.push(l.onInvite((invite, from) => showInvite(invite, from)));
     unsubscribe.push(l.onResume((invite) => void showResume(invite)));
+    unsubscribe.push(l.onHandover((h) => {
+      if (match && match.invite.session === h.session) setChooser(h.chooser);
+    }));
     // Their invitation is gone: take the banner down whether or not this side
     // had got as far as pressing anything.
     unsubscribe.push(l.onCancel((session, from) => {
@@ -492,8 +601,18 @@ export function playScreen(host: HTMLElement): () => void {
     const them = match.friend.username;
 
     if (!match.iInvited) {
-      // Nothing to do but be ready to answer. `showResume` takes it from here.
-      notice(`Lost the connection to ${them}. Waiting for them to reconnect…`);
+      // Not ours to offer -- but very much ours to ask for. A peer connection
+      // can fail at one end and be perfectly healthy at the other, so the side
+      // that noticed has to be able to start something, or a one-sided failure
+      // is a pair sitting and waiting for each other forever.
+      notice(`Lost the connection to ${them}. Reconnecting…`);
+      for (const wait of [0, 1000, 2000, 4000, 8000, 16000]) {
+        if (abort.signal.aborted || !match) return;
+        await new Promise((r) => setTimeout(r, wait));
+        if (abort.signal.aborted || !match) return;
+        if (view.session) return;              // they got through to us
+        lobby?.askResume(match.friend.id, match.invite);
+      }
       return;
     }
 
@@ -528,11 +647,9 @@ export function playScreen(host: HTMLElement): () => void {
   async function showResume(invite: Invite): Promise<void> {
     if (!match || match.invite.session !== invite.session) return;
     // The inviter offers and the other side answers, the same way round as the
-    // first time. Realtime does not echo a broadcast back to its sender, so
-    // this should be unreachable -- but a peer answering its own offer would
-    // deadlock the handshake, which is too quiet a failure to leave to a
-    // library's default.
-    if (match.iInvited) return;
+    // first time -- so a resume arriving HERE, at the inviter, is not an offer.
+    // It is the other side saying their link is gone and asking for one.
+    if (match.iInvited) { void reconnect(); return; }
     if (rebuilding && rebuilding.signal.aborted) return;
     const abort = rebuilding ?? new AbortController();
     rebuilding = abort;
@@ -561,6 +678,7 @@ export function playScreen(host: HTMLElement): () => void {
    */
   function quit(bySlot: number, forGood: boolean): void {
     void lobby?.setActivity("in_lobby");
+    drawTimes();
     if (!forGood) {
       if (bySlot !== view.slot) {
         notice(`${partner?.username ?? "They"} went back to the map.`);
@@ -590,10 +708,13 @@ export function playScreen(host: HTMLElement): () => void {
     partner = null;
     linkKind = "";
     leave.hidden = true;
+    hand.hidden = true;
     stalling = false;
     void lobby?.setActivity("in_lobby");
     notice(why);
     drawPanel(lobby?.list ?? []);
+    // The pair's map has just been handed back for this browser's own.
+    drawTimes();
   }
 
   // A tab that goes away without saying so leaves the other person waiting on

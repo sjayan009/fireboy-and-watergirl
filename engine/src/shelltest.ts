@@ -16,7 +16,7 @@
  *  * progress: finishing a level has to record a medal and open the next node
  *    through the Adjacencies graph.
  */
-import { Game } from "./game/game.js";
+import { Game, Recuento } from "./game/game.js";
 import { advanceTree, enterFrameTree, MouseEvent, SoundBus } from
   "./flash/flash.js";
 import { Intent, ShellInput } from "./game/shellinput.js";
@@ -163,6 +163,20 @@ console.log("\nthe buttons that change shared state, and the ones that do not");
   check("a map node names the level it would have started",
         seen, [{ kind: "start", mode: "adventure", num: 1 }]);
   check("and did not start it", symbols(), ["MainMenu"]);
+
+  // The results board, which is the other way a level ends. Built directly
+  // rather than by winning one: `Recuent` is what puts it on screen and what it
+  // is made of is the same either way, and the thing under test is which INTENT
+  // its button carries, not the twelve minutes of play in front of it.
+  seen.length = 0;
+  const results: any = new (Recuento as any)();
+  game.addChild(results);
+  press(results.Rboard.ToMenuBtn);
+  check("the results board's continue is a quit, like the other board's",
+        seen.map((i) => i.kind), ["quit"]);
+  check("and the board is still there, because nobody dispatched it",
+        game.children.includes(results), true);
+  game.removeChild(results);
 
   seen.length = 0;
   press(game.m_mainMenu.BackToIntro);

@@ -249,6 +249,21 @@ try {
     v.shell.pointerUp();
   }, path);
 
+  /**
+   * Wait until the two peers are observably on the same frame with the same
+   * digest.
+   *
+   * Under rollback the newest frame or two on each side is a prediction, so
+   * two peers compared at an arbitrary instant legitimately differ -- that is
+   * the mechanism working. They converge as the truth arrives, so this waits
+   * for agreement rather than asserting it now.
+   */
+  const agree = () => until(() => ({
+    frame: window.__fbwg.view.session.frame,
+    digest: window.__fbwg.view.digest(),
+  }), (both) => both[0].frame === both[1].frame &&
+                !!both[0].digest && both[0].digest === both[1].digest);
+
   /** Poll both pages with one evaluate each until they agree with `want`. */
   const until = async (read, want, tries = 60, gap = 150) => {
     let last = null;
@@ -406,19 +421,22 @@ try {
     const before = await Promise.all([a, b].map((p) =>
       p.evaluate(() => window.__fbwg.view.simFrame)));
     await pressInGame(b, "m_pauseMenu.retryBtn");
-    const retried = await until(() => ({
+    // Two claims, asked separately, because they are true at different times.
+    // "Both rebuilt" is visible the moment the frame counter drops; "both agree"
+    // needs the two peers observed on the same frame, which under rollback is a
+    // moment that has to be waited for. Requiring them in one sample means
+    // waiting for a window where both hold at once -- narrow, and for no reason.
+    const rebuilt = await until(() => ({
       frame: window.__fbwg.view.session.frame,
-      digest: window.__fbwg.view.digest(),
       paused: !!window.__fbwg.view.game.m_level?.pause,
-    }), (both) =>
-      both[0].frame < before[0] - 50 && both[1].frame < before[1] - 50 &&
-      both[0].frame === both[1].frame &&
-      !!both[0].digest && both[0].digest === both[1].digest);
-    check("and retry rebuilds the level on both, in step", retried !== null, true);
-    if (retried) {
-      check("nobody was left paused in the rebuilt level",
-            [retried[0].paused, retried[1].paused], [false, false]);
+    }), (both) => both[0].frame < before[0] && both[1].frame < before[1]);
+    check("one player's mouse on retry rebuilds the level on both",
+          rebuilt !== null, true);
+    if (rebuilt) {
+      check("with nobody left paused in it",
+            [rebuilt[0].paused, rebuilt[1].paused], [false, false]);
     }
+    check("and they are in step in it", (await agree()) !== null, true);
     check("still no desyncs",
           await Promise.all([a, b].map((p) =>
             p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
@@ -490,6 +508,113 @@ try {
     check("with no desyncs from any of it",
           await Promise.all([a, b].map((p) =>
             p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
+  }
+
+  console.log("\na link that dies is rebuilt, and the level starts again");
+  {
+    // Killing the data channel from inside the page is as close to pulling the
+    // wifi as a test can get: the peer connection goes, both sides find out
+    // from their own transports, and everything after that is the real path.
+    // Wait for them to be properly into it. The scene before this one started
+    // a fresh level, so measuring immediately would compare a restart against
+    // a level that had barely begun and prove nothing either way.
+    const under = await until(() => window.__fbwg.view.session.frame,
+                              (both) => both[0] > 80 && both[1] > 80);
+    check("they were some way into the level", under !== null, true);
+    const before = under ?? [0, 0];
+
+    await b.evaluate(() => {
+      // Private only to TypeScript. The peer connection is the thing there is
+      // to break, and closing it is what a network going away does.
+      const t = window.__fbwg.view.session.transport;
+      if (!t.pc) throw new Error("not a peer connection -- nothing to break");
+      t.pc.close();
+    });
+
+    // The restart is asserted INSIDE the wait, not after it. A level that has
+    // begun again counts up from zero at twenty-six frames a second, so by the
+    // time a poll happens to catch both peers agreeing it can already be past
+    // where the old one was -- and then "did it start again" reads as no.
+    const back = await until(() => ({
+      running: window.__fbwg.view.session?.running ?? false,
+      frame: window.__fbwg.view.session?.frame ?? -1,
+    }), (both) => both[0].running && both[1].running &&
+                  both[0].frame < before[0] && both[1].frame < before[1],
+      200, 250);
+    check("both are back in a level, and it started again", back !== null, true);
+    if (back) console.log(`  restarted at frame ${back[0].frame}, ` +
+                          `where they had reached ${before[0]}`);
+    const together = await agree();
+    check("and they are in step in it", together !== null, true);
+    if (together) console.log(`  frame ${together[0].frame}, ` +
+                              `digest ${together[0].digest}`);
+    check("with no desyncs",
+          await Promise.all([a, b].map((p) =>
+            p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
+  }
+
+  console.log("\nand the level pick can be handed over");
+  {
+    // Alice invited, so the picks are hers. Giving them away is a message on
+    // the pair's channel rather than a command, because between levels nothing
+    // is being simulated and there is no frame to agree on.
+    await pressInGame(b, "m_pauseMenu.endGameBtn");
+    await until(() => window.__fbwg.view.session.running,
+                (both) => !both[0] && !both[1]);
+
+    check("only alice can offer to hand it over",
+          await Promise.all([a, b].map((p) =>
+            p.locator("header button:has-text('Let')").isVisible())),
+          [true, false]);
+
+    // Whether the message arrives at all is worth seeing on failure: a
+    // handover that does not land looks exactly like a page that ignored one.
+    await b.evaluate(() => {
+      window.__handovers = [];
+      window.__fbwg.lobby.onHandover((h) => window.__handovers.push(h));
+    });
+
+    await a.click("header button:has-text('Let')");
+    // Alice is the one who loses it, so Alice is the one told a name; bob is
+    // told it is his.
+    try {
+      await a.waitForSelector(".banner:has-text('picks the next level')",
+                              { timeout: 15000 });
+      await b.waitForSelector(".banner:has-text('You pick the next level')",
+                              { timeout: 15000 });
+    } catch (err) {
+      // The message rides the pair's channel, which is also presence and
+      // invitations -- so if it did not arrive, say whether the channel is
+      // even open before blaming the feature.
+      for (const [tag, p] of [["A", a], ["B", b]]) {
+        console.log(`  [${tag}] ` + JSON.stringify(await p.evaluate(() => ({
+          channels: [...window.__fbwg.lobby.channels.values()]
+            .map((c) => c.channel.state),
+          heard: window.__handovers ?? null,
+        }))));
+      }
+      throw err;
+    }
+    check("and after that it is bob who picks",
+          await Promise.all([a, b].map((p) =>
+            p.evaluate(() => window.__fbwg.view.canChooseLevel))),
+          [false, true]);
+
+    // Which is to say the refusal has swapped sides too.
+    await pressInGame(a, "m_mainMenu.b_1_1");
+    await a.waitForSelector(".banner:has-text('to pick')", { timeout: 10000 });
+    check("alice is now the one who cannot start it",
+          await a.evaluate(() => window.__fbwg.view.session.running), false);
+
+    await pressInGame(b, "m_mainMenu.b_1_1");
+    const started = await until(() => ({
+      running: window.__fbwg.view.session.running,
+      digest: window.__fbwg.view.digest(),
+      frame: window.__fbwg.view.session.frame,
+    }), (both) => both[0].running && both[1].running &&
+                  both[0].frame === both[1].frame &&
+                  !!both[0].digest && both[0].digest === both[1].digest);
+    check("and bob's pick starts it for both", started !== null, true);
   }
 
   console.log("\nthe progress they see is the pair's, not each browser's");
