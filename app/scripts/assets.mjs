@@ -59,7 +59,7 @@ import sharp from "sharp";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "../..");
 const FROM = resolve(ROOT, "extracted/assets");
-const TO = resolve(HERE, "../dist/extracted/assets");
+const TO = resolve(ROOT, "dist/extracted/assets");
 
 const QUALITY = 80;
 const EFFORT = 4;

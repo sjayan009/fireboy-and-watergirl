@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "../..");
-const DIST = resolve(HERE, "../dist");
+const DIST = resolve(ROOT, "dist");
 const ASSETS = join(DIST, "extracted/assets");
 
 let failures = 0;
