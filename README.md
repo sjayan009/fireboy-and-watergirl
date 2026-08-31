@@ -9,16 +9,14 @@ because it is the only thing the rest was derived from.
 
 ```bash
 npm install
-pip install pillow   # the build converts 1,865 sprite frames to WebP
-npm run dev          # http://localhost:5174
-npm test             # the fast tier: engine, build, secret scan
-npm run test:all     # everything, including the soak and three browsers
+npm run dev        # http://localhost:5174
+npm test           # the fast tier: engine, build, secret scan
+npm run test:all   # everything, including the soak and three browsers
 ```
 
-Python and Pillow are a **build** dependency, not a runtime one: the asset step
-lives beside the extraction tools that produced those frames in the first place,
-and it is what takes the download from 42 MB to 13 MB. The build fails loudly
-without it rather than quietly shipping the originals.
+`npm install` is the whole toolchain. Python is still what turned the SWF into
+the assets in the first place (`tools/`), but nothing in a normal build or
+deploy needs it.
 
 ## What it is
 

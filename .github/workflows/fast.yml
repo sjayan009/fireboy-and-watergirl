@@ -22,14 +22,6 @@ jobs:
           node-version: 22
           cache: npm
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      # The asset step converts the sprites to WebP; Pillow is the only thing
-      # it needs, and it is the same library the extraction tools use.
-      - run: pip install pillow
-
       - run: npm ci
 
       - name: the engine, on its own
