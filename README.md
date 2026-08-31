@@ -73,7 +73,7 @@ npm run app:test   # accounts and two-account play, in real browsers
 |---|---|
 | simulation | all 32 levels pinned by digest, snapshot round-trips on every one, a soak of 640,000 frames -- about seven hours of play, run twice and compared |
 | netcode | 192 combinations of latency, jitter, loss, mode and input pattern; damaged, duplicated and stale packets |
-| rendering | a perceptual signature per level, so a mask that stops clipping is caught |
+| rendering | a perceptual signature per level, so a mask that stops clipping -- or an encoder swap that changes the picture -- is caught |
 | database | row level security from a third account, races run in parallel, ordering fuzz |
 | the app | the emailed links, the invite gate, two-factor, and two people playing |
 
