@@ -10,6 +10,7 @@
     "build": "npm --prefix app run build",
     "test": "npm --prefix engine test && npm run build && npm run check",
     "invite": "node supabase/invite.mjs",
+    "unenrol": "node supabase/unenrol.mjs",
     "app:test": "npm --prefix app test",
     "check": "npm --prefix app run check",
     "test:all": "npm --prefix engine run test:full && npm run build && npm run check && npm run db:test && npm --prefix app test",
