@@ -3,10 +3,10 @@
  *
  * `production.mjs` serves the built `dist/` from a throwaway Node server on
  * localhost. That proves the ARTEFACT is good and says nothing about the thing
- * in front of it: the CDN, the headers `vercel.json` asks for, the rewrite that
- * has to send an unknown path to `index.html`, TLS, and a Content-Security-
- * Policy that is only enforced on a real origin. Every one of those can be
- * wrong while the bundle is perfect -- and three deployments in a row were.
+ * in front of it: the CDN, the headers `vercel.json` asks for, how an unknown
+ * path is answered, TLS, and a Content-Security-Policy that is only enforced on
+ * a real origin. Every one of those can be wrong while the bundle is perfect --
+ * and three deployments in a row were.
  *
  * So this points a browser at the deployed URL, signs a real account in against
  * the live database, and plays a frame.
@@ -22,6 +22,15 @@ import { env } from "../../supabase/connect.mjs";
 const SITE = (process.argv[2] ?? process.env.FBWG_URL ??
               "https://fireboy-and-watergirl-official.vercel.app")
   .replace(/\/+$/, "");
+
+/**
+ * The commit this run is about, if it was given one.
+ *
+ * Set by CI to the SHA it just pushed. Without it the test happily passes
+ * against whatever is currently deployed, which after a failed build is the
+ * PREVIOUS release -- a green check for a deployment that never happened.
+ */
+const WANT = process.env.FBWG_COMMIT ?? null;
 
 const e = env();
 const API = e.SUPABASE_URL;
@@ -52,6 +61,12 @@ const root = await fetch(`${SITE}/`);
 const h = (r, k) => r.headers.get(k) ?? null;
 
 check("the page is served", root.status, 200);
+
+const version = (await (await fetch(`${SITE}/version.txt`)).text()).trim();
+console.log(`  deployed commit: ${version}`);
+if (WANT) {
+  check("and it is the commit we are asking about", version, WANT);
+}
 check("frame-ancestors none", (h(root, "content-security-policy") ?? "")
       .includes("frame-ancestors 'none'"), true);
 check("supabase is reachable under the csp",

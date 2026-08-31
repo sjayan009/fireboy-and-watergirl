@@ -58,12 +58,45 @@ export interface Ready {
   /** Whether this peer is the one that should send Start. */
   host: boolean;
   friend: FriendState;
+  /**
+   * The invitation this came from, carried back so the caller can hold on to
+   * it. Rebuilding a dropped link means re-offering the same one -- same
+   * session, same level, same roles -- so it has to outlive the handshake.
+   */
+  invite: Invite;
 }
 
-const STUN: RTCIceServer[] = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun.cloudflare.com:3478" },
-];
+/**
+ * Where to ask what our own address looks like from outside.
+ *
+ * Two public STUN servers by default, which is all a pair needs to find each
+ * other unless one of them is behind a NAT that refuses to be discovered -- and
+ * those pairs relay over their own Realtime channel instead, which is why there
+ * is no TURN server here and no bill for one.
+ *
+ * It is a build-time value rather than a literal so that adding TURN later is a
+ * setting and not a release: a relayed pair pays a hop of latency and, if cam
+ * and mic ever happen, cannot have them at all.
+ */
+const STUN: RTCIceServer[] = iceServers();
+
+function iceServers(): RTCIceServer[] {
+  const configured = __ICE_SERVERS__;
+  if (!configured) {
+    return [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun.cloudflare.com:3478" },
+    ];
+  }
+  try {
+    // A JSON array of RTCIceServer, exactly as WebRTC wants it, so a TURN
+    // server with credentials needs no shape of our own inventing.
+    return JSON.parse(configured) as RTCIceServer[];
+  } catch (e) {
+    console.warn("ICE_SERVERS is not valid JSON; using the defaults:", e);
+    return [{ urls: "stun:stun.l.google.com:19302" }];
+  }
+}
 
 export class Lobby {
   private channels = new Map<string, PairChannel>();
@@ -71,6 +104,7 @@ export class Lobby {
   private friends: FriendState[] = [];
   private changeHandlers = new Set<(f: FriendState[]) => void>();
   private inviteHandlers = new Set<(i: Invite, from: FriendState) => void>();
+  private resumeHandlers = new Set<(i: Invite, from: FriendState) => void>();
   private cancelHandlers =
     new Set<(session: string, from: FriendState) => void>();
   /**
@@ -155,6 +189,12 @@ export class Lobby {
       for (const fn of this.inviteHandlers) fn(invite, from);
     });
 
+    channel.onResume((invite) => {
+      const from = this.friends.find((f) => f.id === friendId);
+      if (!from) return;
+      for (const fn of this.resumeHandlers) fn(invite, from);
+    });
+
     channel.onReply((reply) => {
       const waiting = this.outbound.get(reply.session);
       if (!waiting) return;
@@ -199,6 +239,17 @@ export class Lobby {
     return () => this.inviteHandlers.delete(fn);
   }
 
+  /**
+   * The other side is rebuilding the link for a match we are already in.
+   *
+   * Answered exactly like an invitation, by `join` -- but silently, because
+   * nobody is being asked anything. They said yes before the connection broke.
+   */
+  onResume(fn: (i: Invite, from: FriendState) => void): () => void {
+    this.resumeHandlers.add(fn);
+    return () => this.resumeHandlers.delete(fn);
+  }
+
   /** An invitation was withdrawn, by whichever side had it in hand. */
   onCancel(fn: (session: string, from: FriendState) => void): () => void {
     this.cancelHandlers.add(fn);
@@ -225,12 +276,47 @@ export class Lobby {
     /** Abort and withdraw the invitation, at any point up to the first frame. */
     signal?: AbortSignal;
   }): Promise<Ready> {
+    return this.offer(friendId, {
+      session: crypto.randomUUID(),
+      mode: o.mode, num: o.num,
+      fireboy: o.iAmFireboy ? this.me.userId : friendId,
+      from: this.me.userId,
+    }, false, o);
+  }
+
+  /**
+   * Build the link again for a match that already exists.
+   *
+   * The pair's Realtime channel is not the game's link and never was -- it is
+   * presence and invitations, and it outlives any one session. So when the peer
+   * connection dies, the thing that would have introduced the two of them in
+   * the first place is still there, and reconnecting is the same handshake with
+   * every question already answered: same session, same level, same roles.
+   *
+   * Only the peer who sent the original invitation calls this. It was the
+   * caller then and is the caller now, so there is no role to re-agree and no
+   * race between two peers both trying to offer.
+   */
+  async resume(friendId: string, invite: Invite, o: {
+    onProgress?: (what: string) => void;
+    signal?: AbortSignal;
+  } = {}): Promise<Ready> {
+    return this.offer(friendId, invite, true, o);
+  }
+
+  /**
+   * The offering half of the handshake, for both a first invitation and a
+   * reconnection. See `invite` for what each step is waiting on and why.
+   */
+  private async offer(friendId: string, invite: Invite, resuming: boolean, o: {
+    onProgress?: (what: string) => void;
+    signal?: AbortSignal;
+  }): Promise<Ready> {
     const channel = this.channels.get(friendId);
     const friend = this.friends.find((f) => f.id === friendId);
     if (!channel || !friend) throw new Error("that friend is not connected");
 
-    const session = crypto.randomUUID();
-    const fireboy = o.iAmFireboy ? this.me.userId : friendId;
+    const { session, fireboy } = invite;
 
     let onAccepted!: () => void;
     let onReady!: () => void;
@@ -242,8 +328,14 @@ export class Lobby {
     // heard while we are still waiting to accept AND while we are already
     // negotiating a peer connection.
     const refused = new Promise<never>((_, reject) => { fail = reject; });
+    // A reconnection is given far less rope than an invitation. Two minutes is
+    // how long somebody might reasonably take to notice a banner; a peer that
+    // is there at all answers a resume in seconds, and waiting longer only
+    // delays the next attempt.
     const timer = setTimeout(
-      () => fail(new Error("they did not answer")), 120000);
+      () => fail(new Error(resuming ? "they did not come back"
+                                    : "they did not answer")),
+      resuming ? 15000 : 120000);
 
     // Withdrawing means telling them, or their banner sits there offering a
     // game nobody is on the other end of any more.
@@ -258,10 +350,9 @@ export class Lobby {
 
     try {
       if (o.signal?.aborted) throw new Error("cancelled");
-      o.onProgress?.("waiting for them to accept…");
-      channel.invite({
-        session, mode: o.mode, num: o.num, fireboy, from: this.me.userId,
-      });
+      o.onProgress?.(resuming ? "reconnecting…" : "waiting for them to accept…");
+      if (resuming) channel.resume(invite);
+      else channel.invite(invite);
       await Promise.race([accepted, refused]);
 
       // Offering before this point would put the offer on a channel the other
@@ -282,7 +373,7 @@ export class Lobby {
       return {
         ...link,
         slot: (fireboy === this.me.userId ? 0 : 1) as Slot,
-        mode: o.mode, num: o.num, host: true, friend,
+        mode: invite.mode, num: invite.num, host: true, friend, invite,
       };
     } finally {
       // The timer used to be left running. It fired minutes into a game that
@@ -360,7 +451,7 @@ export class Lobby {
       return {
         ...link,
         slot: (invite.fireboy === this.me.userId ? 0 : 1) as Slot,
-        mode: invite.mode, num: invite.num, host: false, friend,
+        mode: invite.mode, num: invite.num, host: false, friend, invite,
       };
     } finally {
       o.signal?.removeEventListener("abort", onAbort);
@@ -387,6 +478,7 @@ export class Lobby {
     this.channels.clear();
     this.changeHandlers.clear();
     this.inviteHandlers.clear();
+    this.resumeHandlers.clear();
     this.cancelHandlers.clear();
     // Awaited, because leaving a topic is a message to the server and joining
     // the same topic again before it lands is a race the server resolves by

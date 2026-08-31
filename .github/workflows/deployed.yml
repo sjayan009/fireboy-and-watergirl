@@ -1,0 +1,82 @@
+# Does the thing that is actually live work?
+#
+# `fast` proves the code and `full` proves it in browsers, both against a
+# checkout. Neither says anything about the deployment -- the CDN, the headers
+# vercel.json asks for, TLS, a Content-Security-Policy that is only enforced on
+# a real origin. Three releases in a row shipped with none of the headers
+# applied and nothing noticed, which is what app/test/deployed.mjs was written
+# for; until now it was only ever run by hand, which is another way of saying
+# it was run when somebody remembered.
+#
+# The waiting is the interesting part. Vercel builds on its own schedule, so
+# this polls /version.txt -- stamped with the commit at build time -- until the
+# deployment being asked about is the one that is live. Comparing anything
+# softer than a commit means passing against the PREVIOUS release when a build
+# fails, which is a green check for a deployment that never happened.
+name: deployed
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One at a time, and never cancel one halfway: a run that is interrupted while
+# polling tells you nothing, and two runs racing would each be waiting for a
+# different commit to be the live one.
+concurrency:
+  group: deployed
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+
+      - name: write the environment the test scripts read
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: |
+          umask 077
+          {
+            echo "SUPABASE_URL=$SUPABASE_URL"
+            echo "SUPABASE_PUBLISHABLE_KEY=$SUPABASE_PUBLISHABLE_KEY"
+            echo "SUPABASE_SECRET_KEY=$SUPABASE_SECRET_KEY"
+          } > .env.local
+
+      - name: wait for this commit to be the one that is live
+        env:
+          SITE: ${{ vars.FBWG_URL || 'https://fireboy-and-watergirl-official.vercel.app' }}
+        run: |
+          for i in $(seq 1 60); do
+            live=$(curl -fsS "$SITE/version.txt" 2>/dev/null | tr -d '[:space:]' || true)
+            if [ "$live" = "$GITHUB_SHA" ]; then
+              echo "live after $((i * 10))s"
+              exit 0
+            fi
+            echo "live is '${live:-nothing}', waiting for $GITHUB_SHA"
+            sleep 10
+          done
+          echo "::error::the deployment never became $GITHUB_SHA"
+          exit 1
+
+      - name: and does it work
+        env:
+          FBWG_URL: ${{ vars.FBWG_URL || 'https://fireboy-and-watergirl-official.vercel.app' }}
+          FBWG_COMMIT: ${{ github.sha }}
+        run: npm run test:deployed
+
+      - name: and never leave the credentials lying about
+        if: always()
+        run: rm -f .env.local

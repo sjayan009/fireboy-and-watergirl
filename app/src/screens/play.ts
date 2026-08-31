@@ -78,6 +78,23 @@ export function playScreen(host: HTMLElement): () => void {
   /** Who we are paired with, for as long as the session lasts. */
   let partner: FriendState | null = null;
   /**
+   * The match, which outlives the link.
+   *
+   * A peer connection can die and be built again without the two of you having
+   * stopped playing together, so what identifies a match cannot be the session
+   * object -- it is this: who, which level, which roles, and who did the
+   * inviting. Reconnecting needs every one of them, and so does knowing whether
+   * there is anything to reconnect TO.
+   */
+  let match: {
+    friend: FriendState;
+    invite: Invite;
+    slot: 0 | 1;
+    iInvited: boolean;
+  } | null = null;
+  /** Set while the link is being rebuilt, so nothing tries twice at once. */
+  let rebuilding: AbortController | null = null;
+  /**
    * An invitation in flight, in either direction.
    *
    * `session` is set only for one we RECEIVED, because that is the only case
@@ -113,8 +130,8 @@ export function playScreen(host: HTMLElement): () => void {
   /** The one line in the header that says what is going on. */
   function describe(): string {
     const s = view.session;
-    if (!s) return "solo";
     const who = partner?.username ?? "your friend";
+    if (!s) return match ? `with ${who} · reconnecting` : "solo";
     if (!s.running) return `with ${who} · ${linkKind} · choosing a level`;
     return `${view.slot === 0 ? "Fireboy" : "Watergirl"} · ${linkKind} · ` +
       (s.stalled ? "waiting for the other player" : "in step") +
@@ -203,7 +220,11 @@ export function playScreen(host: HTMLElement): () => void {
   let stalling = false;
   function watchStall(): void {
     const s = view.session;
-    const bad = !!s && s.running && s.stalled && s.stalledFrames > STALL_FRAMES;
+    // Never while the link is being rebuilt. "Waiting for them" and "the
+    // connection is gone" are the two things this whole change exists to tell
+    // apart, and the weaker of the two must not overwrite the stronger.
+    const bad = !rebuilding && !!s && s.running && !s.linkDown &&
+                s.stalled && s.stalledFrames > STALL_FRAMES;
     if (bad === stalling) return;
     stalling = bad;
     if (bad) notice(`Waiting for ${partner?.username ?? "your friend"}…`);
@@ -226,6 +247,7 @@ export function playScreen(host: HTMLElement): () => void {
     void l.setActivity("in_lobby");
     unsubscribe.push(l.onChange((friends) => drawPanel(friends)));
     unsubscribe.push(l.onInvite((invite, from) => showInvite(invite, from)));
+    unsubscribe.push(l.onResume((invite) => void showResume(invite)));
     // Their invitation is gone: take the banner down whether or not this side
     // had got as far as pressing anything.
     unsubscribe.push(l.onCancel((session, from) => {
@@ -265,7 +287,7 @@ export function playScreen(host: HTMLElement): () => void {
           // between levels the session is still up and still theirs. Leaving is
           // what makes this button live again, and there is a button for that.
           class: "ghost",
-          disabled: !online || view.session !== null || pending !== null,
+          disabled: !online || match !== null || pending !== null,
           onclick: () => showInviteForm(f),
         }, "Invite")));
     }
@@ -327,7 +349,7 @@ export function playScreen(host: HTMLElement): () => void {
           onProgress: (what) => { say.textContent = what; },
         });
         pending = null;
-        begin(ready);
+        begin(ready, ready.invite);
       } catch (e) {
         pending = null;
         progress.release();
@@ -339,7 +361,7 @@ export function playScreen(host: HTMLElement): () => void {
   }
 
   function showInvite(invite: Invite, from: FriendState): void {
-    if (view.session) return;          // already playing
+    if (match) return;                 // already playing
     // One at a time. Two people inviting each other in the same breath used to
     // replace one banner with the other and start two games.
     if (pending) return;
@@ -395,7 +417,7 @@ export function playScreen(host: HTMLElement): () => void {
           onProgress: (what) => { say.textContent = what; },
         });
         pending = null;
-        begin(ready);
+        begin(ready, invite);
       } catch (e) {
         pending = null;
         progress.release();
@@ -408,11 +430,15 @@ export function playScreen(host: HTMLElement): () => void {
   }
 
   /** Hand the clock to the session, and start the level if we are the host. */
-  function begin(ready: Ready): void {
+  function begin(ready: Ready, invite: Invite): void {
     linkKind = ready.kind === "webrtc" ? "direct" : "relay";
     partner = ready.friend;
+    match = {
+      friend: ready.friend, invite, slot: ready.slot, iInvited: ready.host,
+    };
     banner.hidden = true;
     noticeText = "";
+    stalling = false;
     leave.hidden = false;
     void lobby?.setActivity("in_game");
 
@@ -422,10 +448,107 @@ export function playScreen(host: HTMLElement): () => void {
       onDesync: (f, mine, theirs) =>
         console.warn(`desync at frame ${f}: ${mine} != ${theirs}`),
       onQuit: (bySlot, forGood) => quit(bySlot, forGood),
+      onLinkDown: (why) => lost(why),
     });
     if (ready.host) session.requestStart(ready.mode, ready.num);
     canvas.focus();
     drawPanel(lobby?.list ?? []);
+  }
+
+  // ---- losing the link, and getting it back ------------------------------
+
+  /**
+   * The transport says it is gone.
+   *
+   * Not the same as the peer being slow, and that distinction is the point:
+   * a stall is answered by waiting, and this is answered by building a new
+   * link. The old session goes without a word, because a Quit could not
+   * arrive over the thing that just died.
+   */
+  function lost(why: string): void {
+    if (!match || rebuilding) return;
+    console.info("the link is gone:", why);
+    view.dropLink();
+    void reconnect();
+  }
+
+  /**
+   * Rebuild the link over the channel the pair still shares.
+   *
+   * Only the peer who did the inviting offers -- it was the caller the first
+   * time and is the caller now, so there is nothing to re-agree and no race
+   * between two peers both trying. The other side waits for the broadcast and
+   * answers it in `showResume`.
+   *
+   * The level restarts. Resuming mid-level would mean both peers swapping how
+   * far their input logs are confirmed and truncating to the earlier, which is
+   * real machinery to save ninety seconds of a level you are about to replay
+   * anyway.
+   */
+  async function reconnect(): Promise<void> {
+    if (!match || rebuilding) return;
+    const abort = new AbortController();
+    rebuilding = abort;
+    const them = match.friend.username;
+
+    if (!match.iInvited) {
+      // Nothing to do but be ready to answer. `showResume` takes it from here.
+      notice(`Lost the connection to ${them}. Waiting for them to reconnect…`);
+      return;
+    }
+
+    // Backing off, because the usual cause is a network that is still coming
+    // back and hammering it helps nobody.
+    for (const wait of [500, 1000, 2000, 4000, 8000, 16000]) {
+      if (abort.signal.aborted || !match) break;
+      notice(`Lost the connection to ${them}. Reconnecting…`);
+      try {
+        const ready = await lobby!.resume(match.friend.id, match.invite, {
+          signal: abort.signal,
+        });
+        rebuilding = null;
+        begin(ready, match.invite);
+        return;
+      } catch (e) {
+        if (abort.signal.aborted) return;
+        console.info("reconnect attempt failed:", (e as Error).message);
+      }
+      // A friend who has gone offline in presence has closed the tab. There is
+      // nobody to reconnect to and no point pretending otherwise.
+      const still = lobby?.list.find((f) => f.id === match?.friend.id);
+      if (!still || still.activity === null) break;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    if (abort.signal.aborted) return;
+    rebuilding = null;
+    endSession(`Could not get back to ${them}.`);
+  }
+
+  /** The other side is rebuilding the link. Answer it, without asking anybody. */
+  async function showResume(invite: Invite): Promise<void> {
+    if (!match || match.invite.session !== invite.session) return;
+    // The inviter offers and the other side answers, the same way round as the
+    // first time. Realtime does not echo a broadcast back to its sender, so
+    // this should be unreachable -- but a peer answering its own offer would
+    // deadlock the handshake, which is too quiet a failure to leave to a
+    // library's default.
+    if (match.iInvited) return;
+    if (rebuilding && rebuilding.signal.aborted) return;
+    const abort = rebuilding ?? new AbortController();
+    rebuilding = abort;
+    // A resume can arrive before this side has even noticed the link died --
+    // the peer connection fails at each end on its own schedule.
+    view.dropLink();
+    try {
+      const ready = await lobby!.join(invite, { signal: abort.signal });
+      rebuilding = null;
+      begin(ready, invite);
+    } catch (e) {
+      if (abort.signal.aborted) return;
+      console.info("could not answer a resume:", (e as Error).message);
+      // Left in place deliberately: they are the one retrying, and the next
+      // attempt is theirs to make.
+    }
   }
 
   /**
@@ -449,9 +572,19 @@ export function playScreen(host: HTMLElement): () => void {
       : `${partner?.username ?? "Your friend"} left the game.`);
   }
 
-  /** Drop the session, put the solo progress back, and say why. */
+  /**
+   * Drop the match, put the solo progress back, and say why.
+   *
+   * Keyed on the MATCH and not on `view.session`, because there is a real state
+   * where you are still in a match and there is no session: the link has gone
+   * and is being rebuilt. Leave has to work there most of all -- it is the way
+   * out of a reconnection that is not coming.
+   */
   function endSession(why: string): void {
-    if (!view.session) return;
+    if (!match) return;
+    match = null;
+    rebuilding?.abort();
+    rebuilding = null;
     view.leave();
     progress.release();
     partner = null;
@@ -466,7 +599,7 @@ export function playScreen(host: HTMLElement): () => void {
   // A tab that goes away without saying so leaves the other person waiting on
   // input that is never coming. This is the last chance to tell them, and it is
   // one small packet on a channel that is still open.
-  const onHide = () => { if (view.session) view.leave(); };
+  const onHide = () => { rebuilding?.abort(); if (view.session) view.leave(); };
   addEventListener("pagehide", onHide);
 
   // Tearing the view down matters: it owns a requestAnimationFrame loop, window
@@ -475,6 +608,9 @@ export function playScreen(host: HTMLElement): () => void {
   // to each other every time somebody opened their friends list.
   return () => {
     removeEventListener("pagehide", onHide);
+    rebuilding?.abort();
+    rebuilding = null;
+    match = null;
     // Told FIRST. Opening the friends list mid-level used to destroy this view
     // and say nothing, which to the other person is identical to the game
     // having died: their partner stops moving and never starts again.

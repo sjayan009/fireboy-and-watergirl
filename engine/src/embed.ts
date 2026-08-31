@@ -75,6 +75,8 @@ export interface JoinOptions {
   onDesync?: (frame: number, mine: string, theirs: string) => void;
   /** A Quit took effect. `bySlot` is who asked for it. */
   onQuit?: (bySlot: Slot, forGood: boolean) => void;
+  /** The link is gone. The page decides whether to rebuild it. */
+  onLinkDown?: (why: string) => void;
 }
 
 export class GameView {
@@ -331,9 +333,25 @@ export class GameView {
       // in single-player, and the peer's input is predicted and corrected.
       rollback: true,
       slot, transport, host: new GameHost(this.game),
-      onDesync: o.onDesync, onQuit: o.onQuit,
+      onDesync: o.onDesync, onQuit: o.onQuit, onLinkDown: o.onLinkDown,
     });
     return this.session;
+  }
+
+  /**
+   * Put the session down without saying anything, because there is nobody to
+   * say it to.
+   *
+   * The counterpart to `leave`, for a link that has already gone: no Quit,
+   * because it could not arrive, and no delay before closing, because there is
+   * nothing left to flush. What follows is either another `join` on a rebuilt
+   * link or nothing at all, and both want this first.
+   */
+  dropLink(): void {
+    this.session = null;
+    this.transport?.close();
+    this.transport = null;
+    this.held.clear();
   }
 
   /**

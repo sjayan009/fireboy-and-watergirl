@@ -50,6 +50,7 @@ export interface Invite {
 
 /** Events on the wire. Kept short: they are typed on every message. */
 const INVITE = "invite";
+const RESUME = "resume";
 const REPLY = "reply";
 const CANCEL = "cancel";
 const BYTES = "b";
@@ -93,8 +94,10 @@ export class PairChannel {
   ) {}
 
   private inviteHandlers = new Set<(i: Invite) => void>();
+  private resumeHandlers = new Set<(i: Invite) => void>();
   private replyHandlers = new Set<(r: InviteReply) => void>();
   private cancelHandlers = new Set<(c: InviteCancel) => void>();
+  private statusHandlers = new Set<(status: string) => void>();
   private byteHandlers = new Set<(d: Uint8Array) => void>();
   private presenceHandlers = new Set<(p: Presence[]) => void>();
 
@@ -114,6 +117,13 @@ export class PairChannel {
 
     channel.on("broadcast", { event: INVITE }, ({ payload }) => {
       for (const fn of pair.inviteHandlers) fn(payload as Invite);
+    });
+    // Deliberately an Invite, and deliberately a different event. It carries
+    // exactly the same five things -- who, which level, who is Fireboy -- but
+    // it must not raise a banner asking a question that was answered before the
+    // connection dropped.
+    channel.on("broadcast", { event: RESUME }, ({ payload }) => {
+      for (const fn of pair.resumeHandlers) fn(payload as Invite);
     });
     channel.on("broadcast", { event: REPLY }, ({ payload }) => {
       for (const fn of pair.replyHandlers) fn(payload as InviteReply);
@@ -164,7 +174,23 @@ export class PairChannel {
       }, 15000);
 
       channel.subscribe(async (status) => {
-        if (settled) return;
+        // Everything AFTER the first status is what the connection is doing
+        // for the rest of its life, and it used to be dropped on the floor.
+        // The client reconnects a dropped websocket on its own, so these
+        // arrive: an error or a close, then a fresh SUBSCRIBED. Whoever is
+        // relaying a game over this channel needs to hear the first, and
+        // presence needs the second.
+        if (settled) {
+          if (status === "SUBSCRIBED") {
+            // Re-announced, because a reconnect brings back the subscription
+            // and not what we had told it about ourselves. Without this, a
+            // websocket blip leaves you invisible to a friend who is looking
+            // straight at your name.
+            await channel.track(pair.me);
+          }
+          for (const fn of pair.statusHandlers) fn(status);
+          return;
+        }
         if (status === "SUBSCRIBED") {
           settled = true;
           clearTimeout(timer);
@@ -204,9 +230,20 @@ export class PairChannel {
     return () => this.replyHandlers.delete(fn);
   }
 
+  onResume(fn: (i: Invite) => void): () => void {
+    this.resumeHandlers.add(fn);
+    return () => this.resumeHandlers.delete(fn);
+  }
+
   onCancel(fn: (c: InviteCancel) => void): () => void {
     this.cancelHandlers.add(fn);
     return () => this.cancelHandlers.delete(fn);
+  }
+
+  /** Every status the subscription reports after the first one. */
+  onStatus(fn: (status: string) => void): () => void {
+    this.statusHandlers.add(fn);
+    return () => this.statusHandlers.delete(fn);
   }
 
   send(event: string, payload: unknown): void {
@@ -214,6 +251,7 @@ export class PairChannel {
   }
 
   invite(i: Invite): void { this.send(INVITE, i); }
+  resume(i: Invite): void { this.send(RESUME, i); }
   reply(r: InviteReply): void { this.send(REPLY, r); }
   cancel(c: InviteCancel): void { this.send(CANCEL, c); }
 
@@ -231,8 +269,10 @@ export class PairChannel {
   /** Awaitable: leaving is a message to the server, not a local flag. */
   async close(): Promise<void> {
     this.inviteHandlers.clear();
+    this.resumeHandlers.clear();
     this.replyHandlers.clear();
     this.cancelHandlers.clear();
+    this.statusHandlers.clear();
     this.byteHandlers.clear();
     this.presenceHandlers.clear();
     await supabase.removeChannel(this.channel);
