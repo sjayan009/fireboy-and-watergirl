@@ -7,7 +7,7 @@
     "engine:test": "npm --prefix engine test",
     "serve": "node serve.mjs",
     "dev": "npm --prefix app run dev",
-    "build": "npm --prefix engine run build && npm --prefix app run build",
+    "build": "npm --prefix app run build",
     "test": "npm --prefix engine test && npm run build && npm run check",
     "invite": "node supabase/invite.mjs",
     "app:test": "npm --prefix app test",
