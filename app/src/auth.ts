@@ -213,6 +213,57 @@ export async function setPassword(password: string): Promise<void> {
 }
 
 /**
+ * Change the password of an account that is already signed in.
+ *
+ * The old password is checked by USING it, because Supabase does not ask for
+ * one: `updateUser({ password })` will happily take a session's word for it.
+ * That is fine for the emailed reset link, where the mail was the proof -- and
+ * not fine here, where the proof would be a tab somebody left open.
+ */
+export async function changePassword(current: string,
+                                     next: string): Promise<void> {
+  const email = state.user?.email;
+  if (!email) throw new Error("not signed in");
+  const { error: wrong } = await supabase.auth.signInWithPassword({
+    email, password: current,
+  });
+  if (wrong) throw new Error("that is not your current password");
+  await setPassword(next);
+}
+
+/**
+ * Ask to move the account to a different address.
+ *
+ * Nothing changes until the link is followed; Supabase mails the new address
+ * and, depending on the project's settings, the old one as well. So this
+ * returns having sent something, not having done something, and the screen has
+ * to say so rather than reporting success.
+ */
+export async function changeEmail(email: string): Promise<void> {
+  const { error } = await supabase.auth.updateUser(
+    { email }, { emailRedirectTo: landing("email") });
+  fail(error);
+}
+
+/**
+ * Delete this account and everything that hangs off it.
+ *
+ * `delete_me` is a security-definer function rather than an admin call,
+ * because the admin API needs the secret key and this deployment is static
+ * with nowhere to keep one. Everything else is a cascade: the profile, the
+ * friendships, the progress each pair earned together.
+ *
+ * The sign-out afterwards is not tidying. The session's token stays valid for
+ * its lifetime and would otherwise keep a signed-in-looking app in front of an
+ * account that no longer exists.
+ */
+export async function deleteAccount(): Promise<void> {
+  const { error } = await supabase.rpc("delete_me");
+  fail(error);
+  await signOut();
+}
+
+/**
  * Claim a username, redeeming an invite code in the same statement.
  *
  * Both halves are one database function on purpose: a code checked and then

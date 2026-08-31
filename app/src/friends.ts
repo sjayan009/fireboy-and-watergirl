@@ -20,6 +20,14 @@ export interface Friend {
   theirMove: boolean;
   /** True when we are waiting on them. */
   ourMove: boolean;
+  /**
+   * True when the block on this row is ours to lift.
+   *
+   * Blocked rows are visible to both people -- the row is still theirs too --
+   * but only one of them can do anything about it, and the screen has to be
+   * able to tell which one it is looking at.
+   */
+  blockedByMe: boolean;
 }
 
 function fail(error: { message: string } | null): void {
@@ -39,7 +47,7 @@ export async function listFriends(): Promise<Friend[]> {
 
   const { data: rows, error } = await supabase
     .from("friendships")
-    .select("user_a, user_b, status, requested_by");
+    .select("user_a, user_b, status, requested_by, blocked_by");
   fail(error);
   if (!rows || rows.length === 0) return [];
 
@@ -59,6 +67,7 @@ export async function listFriends(): Promise<Friend[]> {
       status: r.status as FriendStatus,
       theirMove: pending && r.requested_by === me,
       ourMove: pending && r.requested_by !== me,
+      blockedByMe: r.status === "blocked" && r.blocked_by === me,
     };
   }).sort((a, b) => a.username.localeCompare(b.username));
 }
@@ -103,15 +112,26 @@ export async function remove(theirId: string): Promise<void> {
   fail(error);
 }
 
+/**
+ * Block a friend, and lift it again.
+ *
+ * Both go through the database rather than through an update, for the same
+ * reason `request_friend` does: the rule is "only the person who blocked may
+ * unblock", and a rule the client states is a rule the client can decline to
+ * state. `0009` owns it -- the row records who cast the block, the update and
+ * delete policies refuse everyone else, and `request_friend` will not reopen a
+ * blocked pair.
+ *
+ * The friendship survives a block rather than being deleted, deliberately:
+ * unfriending takes the pair's shared progress with it, and blocking somebody
+ * you have played thirty levels with should not quietly throw those away.
+ */
 export async function block(theirId: string): Promise<void> {
-  const me = auth().user?.id;
-  if (!me) return;
-  const lo = me < theirId ? me : theirId;
-  const hi = me < theirId ? theirId : me;
-  const { error } = await supabase
-    .from("friendships")
-    .update({ status: "blocked" })
-    .eq("user_a", lo)
-    .eq("user_b", hi);
+  const { error } = await supabase.rpc("block_friend", { their_id: theirId });
+  fail(error);
+}
+
+export async function unblock(theirId: string): Promise<void> {
+  const { error } = await supabase.rpc("unblock_friend", { their_id: theirId });
   fail(error);
 }

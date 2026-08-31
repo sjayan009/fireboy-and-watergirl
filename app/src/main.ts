@@ -49,6 +49,9 @@ startAuth().then(() => {
   // A password reset lands signed in, so the stage alone cannot tell that the
   // point of arriving was to choose a new password.
   if (wanted === "password") location.hash = "/password";
+  // An address change lands signed in too, and with nothing left to do -- the
+  // link WAS the confirmation. Settings is where the new address is on screen.
+  if (wanted === "email") location.hash = "/settings";
   startRouter(host, routes);
 }).catch((e) => {
   host.replaceChildren();

@@ -1,11 +1,15 @@
 /**
- * Account settings: rename yourself, and turn on a second factor.
+ * Account settings: everything about the account that is not playing the game.
  *
  * Two-factor is optional and, once enrolled, is enforced at every sign-in --
  * `auth.ts` holds the session at the `locked` stage until the code is answered.
+ * There are no recovery codes: this is invite-only for a handful of people, and
+ * `supabase/unenrol.mjs` is the answer to a lost authenticator. Inventing a
+ * second credential store to avoid one script would be the larger risk.
  */
 import {
-  auth, claimUsername, enrolTotp, listFactors, unenrolTotp, verifyTotp,
+  auth, changeEmail, changePassword, claimUsername, deleteAccount, enrolTotp,
+  listFactors, unenrolTotp, verifyTotp,
 } from "../auth.js";
 import { card, el, field, form, inputOf, note } from "../ui/dom.js";
 
@@ -39,12 +43,102 @@ export function settingsScreen(host: HTMLElement): void {
         // leaving a save that looks like nothing happened.
       },
     }),
+    el("h2", {}, "Password"),
+    passwordSection(),
+    el("h2", {}, "Email"),
+    emailSection(),
     el("h2", {}, "Two-factor"),
     factors,
+    el("h2", {}, "Delete this account"),
+    dangerSection(),
     el("p", { class: "note" },
       el("a", { href: "#/play" }, "Back to the game"))));
 
   void drawFactors(factors);
+}
+
+/** Change the password, proving the old one on the way through. */
+function passwordSection(): HTMLElement {
+  const current = field("Current password", {
+    type: "password", required: true, autocomplete: "current-password",
+  });
+  const next = field("New password", {
+    type: "password", required: true, minlength: 8,
+    autocomplete: "new-password",
+  });
+  const done = note("Changed.");
+  done.hidden = true;
+
+  return el("div", {}, form({
+    submit: "Change password",
+    children: [current, next, done],
+    onSubmit: async () => {
+      done.hidden = true;
+      await changePassword(inputOf(current).value, inputOf(next).value);
+      inputOf(current).value = "";
+      inputOf(next).value = "";
+      done.hidden = false;
+    },
+  }));
+}
+
+/**
+ * Move the account to another address.
+ *
+ * Says "check your email", not "done", because nothing has changed yet: the
+ * link in the message is the thing that changes it, and reporting success here
+ * would have somebody sign out believing an address they cannot yet sign in
+ * with.
+ */
+function emailSection(): HTMLElement {
+  const current = auth().user?.email ?? "";
+  const next = field("New email", {
+    type: "email", required: true, autocomplete: "email",
+  });
+  const sent = note("Check your new address for the confirmation link. " +
+                    "Nothing changes until you follow it.");
+  sent.hidden = true;
+
+  return el("div", {},
+    note("Signed in as ", el("code", {}, current), "."),
+    form({
+      submit: "Send the confirmation",
+      children: [next, sent],
+      onSubmit: async () => {
+        sent.hidden = true;
+        await changeEmail(inputOf(next).value.trim());
+        sent.hidden = false;
+      },
+    }));
+}
+
+/**
+ * Leaving, which is not undoable and says so.
+ *
+ * Typed confirmation rather than a `confirm()`, because the thing being
+ * destroyed includes every level a pair finished together and those belong to
+ * the other person too. A dialog you dismiss by reflex is the wrong weight for
+ * that.
+ */
+function dangerSection(): HTMLElement {
+  const name = auth().profile?.username ?? "";
+  const typed = field(`Type ${name} to confirm`, {
+    required: true, autocomplete: "off",
+  });
+
+  return el("div", {},
+    note("This deletes your profile, your friendships, and the progress every " +
+         "pair you played with earned together. It cannot be undone."),
+    form({
+      submit: "Delete my account",
+      children: [typed],
+      onSubmit: async () => {
+        if (inputOf(typed).value.trim() !== name) {
+          throw new Error(`Type ${name} exactly to confirm.`);
+        }
+        await deleteAccount();
+      },
+    }));
 }
 
 async function drawFactors(host: HTMLElement): Promise<void> {

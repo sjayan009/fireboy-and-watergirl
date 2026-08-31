@@ -295,6 +295,70 @@ try {
   });
   check("nor sync a whole map into it", rogueMap.status >= 400, true);
 
+  console.log("\na block is only liftable by whoever cast it");
+  {
+    // The whole feature is this assertion. `block()` used to be a PATCH through
+    // a policy that asked only whether you were one of the two people in the
+    // row -- so the blocked party could set the status back to 'accepted' from
+    // the browser, and a block either side can lift is not a block.
+    const cast = await rpc(alice, "block_friend", { their_id: bob.id });
+    check("alice can block bob", cast.status < 400, true);
+
+    const row = await api(bob, `/friendships?select=status,blocked_by`);
+    check("bob can see he is blocked", row.body?.[0]?.status, "blocked");
+
+    const lift = await rpc(bob, "unblock_friend", { their_id: alice.id });
+    check("but he cannot lift it", lift.status >= 400, true);
+
+    const patch = await api(bob, `/friendships?user_a=eq.${lo}&user_b=eq.${hi}`, {
+      method: "PATCH", body: JSON.stringify({ status: "accepted" }),
+    });
+    check("nor patch his way out of it",
+          Array.isArray(patch.body) ? patch.body.length : patch.status, 0);
+
+    // Deleting would be the other way out: drop the row, ask again, and the
+    // block never happened.
+    const drop = await api(bob, `/friendships?user_a=eq.${lo}&user_b=eq.${hi}`, {
+      method: "DELETE",
+    });
+    check("nor delete it and start again",
+          Array.isArray(drop.body) ? drop.body.length : drop.status, 0);
+
+    const again = await rpc(bob, "request_friend",
+                            { their_username: an });
+    check("and asking again gets him nowhere", again.status >= 400, true);
+
+    const still = await api(alice, "/friendships?select=status");
+    check("so it is still a block", still.body?.[0]?.status, "blocked");
+
+    const lifted = await rpc(alice, "unblock_friend", { their_id: bob.id });
+    check("alice can lift her own", lifted.status < 400, true);
+    const after = await api(bob, "/friendships?select=status,blocked_by");
+    check("and they are friends again",
+          [after.body?.[0]?.status, after.body?.[0]?.blocked_by],
+          ["accepted", null]);
+  }
+
+  console.log("\nan account can delete itself, and only itself");
+  {
+    // `delete_me` borrows the owner's privilege to reach `auth.users`, which is
+    // exactly the kind of function worth proving cannot be pointed anywhere
+    // else. It takes no argument, so the only thing it can delete is the
+    // caller -- and that is the assertion.
+    const before = await admin(`/auth/v1/admin/users/${mallory.id}`);
+    check("mallory exists to begin with", before.status, 200);
+
+    const gone = await rpc(mallory, "delete_me", {});
+    check("and can delete herself", gone.status < 400, true);
+
+    const after = await admin(`/auth/v1/admin/users/${mallory.id}`);
+    check("after which she does not exist", after.status >= 400, true);
+
+    const others = await admin("/rest/v1/profiles?select=id&id=eq." + alice.id);
+    check("and everybody else is untouched",
+          (await others.json()).length, 1);
+  }
+
   console.log("\nan anonymous caller sees nothing");
   for (const [what, path] of [["profiles", "/profiles?select=username"],
                               ["friendships", "/friendships?select=status"],
