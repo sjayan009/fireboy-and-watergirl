@@ -71,6 +71,18 @@ export default defineConfig({
     alias: { "@engine": resolve(ROOT, "engine/dist") },
   },
   build: {
+    /**
+     * The repository root's `dist/`, not `app/dist`.
+     *
+     * The deploy looks for an output directory named `dist` relative to the
+     * project root, and the project root is the repository. Pointing
+     * `outputDirectory` at `app/dist` in vercel.json did not survive that --
+     * the build produced 27 MB in the right place and the deploy looked in
+     * another one. Building where the DEFAULT already looks removes a setting
+     * that has to be right rather than making it right.
+     */
+    outDir: resolve(ROOT, "dist"),
+    emptyOutDir: true,
     target: "es2022",
     sourcemap: true,
     rollupOptions: {

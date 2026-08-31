@@ -8,8 +8,8 @@
  * sprites and MP3 audio from rewritten manifests rather than the originals.
  *
  * None of that is exercised anywhere else, and all of it can break
- * independently of the source. So this loads `app/dist` over plain HTTP with no
- * bundler anywhere near it, signs in, and looks at the pixels.
+ * independently of the source. So this loads the built `dist/` over plain HTTP,
+ * with no bundler anywhere near it, signs in, and looks at the pixels.
  *
  * It deliberately uses nothing but the DOM and the canvas -- there is no
  * `__fbwg` in a production build, which is the point of not shipping one.
@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { env } from "../../supabase/connect.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const DIST = resolve(HERE, "../dist");
+const DIST = resolve(HERE, "../../dist");
 const PORT = 5192;
 const URL_ = `http://localhost:${PORT}/`;
 
