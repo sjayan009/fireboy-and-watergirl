@@ -53,6 +53,7 @@ const INVITE = "invite";
 const RESUME = "resume";
 const REPLY = "reply";
 const CANCEL = "cancel";
+const HANDOVER = "handover";
 const BYTES = "b";
 
 export interface InviteReply {
@@ -82,6 +83,22 @@ export interface InviteCancel {
   from: string;
 }
 
+/**
+ * Who picks the levels now.
+ *
+ * Deliberately here and not in the netcode. Which map node somebody clicks is
+ * menu state -- the pair is between levels, nothing is being simulated, and the
+ * two maps are each player's own -- so it needs a message the two of them agree
+ * on, not a command applied on an agreed frame. Adding a fifth Command to a
+ * wire format that carries three bits a frame would be paying for a precision
+ * nobody needs.
+ */
+export interface Handover {
+  session: string;
+  /** The user id of whoever may start a level from here on. */
+  chooser: string;
+}
+
 export function topicFor(a: string, b: string): string {
   return `pair:${a < b ? a : b}:${a < b ? b : a}`;
 }
@@ -89,15 +106,28 @@ export function topicFor(a: string, b: string): string {
 export class PairChannel {
   private constructor(
     readonly topic: string,
-    readonly channel: RealtimeChannel,
+    private live: RealtimeChannel,
     readonly me: Presence,
   ) {}
+
+  /**
+   * The subscription as it stands right now.
+   *
+   * Deliberately not the same object for the life of the pair. A server-side
+   * close cannot be undone on a `RealtimeChannel` -- `subscribe()` refuses to
+   * run twice on one instance -- so rejoining means building another and
+   * pointing this at it. Everything that matters lives on the PairChannel:
+   * the handler sets, the topic, who we are. The channel is just the current
+   * pipe.
+   */
+  get channel(): RealtimeChannel { return this.live; }
 
   private inviteHandlers = new Set<(i: Invite) => void>();
   private resumeHandlers = new Set<(i: Invite) => void>();
   private replyHandlers = new Set<(r: InviteReply) => void>();
   private cancelHandlers = new Set<(c: InviteCancel) => void>();
   private statusHandlers = new Set<(status: string) => void>();
+  private handoverHandlers = new Set<(h: Handover) => void>();
   private byteHandlers = new Set<(d: Uint8Array) => void>();
   private presenceHandlers = new Set<(p: Presence[]) => void>();
 
@@ -110,10 +140,30 @@ export class PairChannel {
    */
   static open(friendId: string, me: Presence): Promise<PairChannel> {
     const topic = topicFor(me.userId, friendId);
-    const channel = supabase.channel(topic, {
-      config: { private: true, presence: { key: me.userId } },
-    });
-    const pair = new PairChannel(topic, channel, me);
+    const pair = new PairChannel(
+      topic,
+      supabase.channel(topic, {
+        config: { private: true, presence: { key: me.userId } },
+      }),
+      me);
+    return pair.join(true).then(() => pair);
+  }
+
+  /** Whether `close` has been called, so a rejoin knows to stop trying. */
+  private closing = false;
+  private rejoinTimer: ReturnType<typeof setTimeout> | null = null;
+  private attempts = 0;
+
+  /**
+   * Subscribe, wiring every listener the pair needs on the way.
+   *
+   * `first` decides what a refusal means. The first time, it is the answer to
+   * "may I be here at all", and the caller has to hear it. Afterwards it is a
+   * connection that has gone and will be tried again.
+   */
+  private join(first: boolean): Promise<void> {
+    const pair = this;
+    const channel = this.live;
 
     channel.on("broadcast", { event: INVITE }, ({ payload }) => {
       for (const fn of pair.inviteHandlers) fn(payload as Invite);
@@ -130,6 +180,9 @@ export class PairChannel {
     });
     channel.on("broadcast", { event: CANCEL }, ({ payload }) => {
       for (const fn of pair.cancelHandlers) fn(payload as InviteCancel);
+    });
+    channel.on("broadcast", { event: HANDOVER }, ({ payload }) => {
+      for (const fn of pair.handoverHandlers) fn(payload as Handover);
     });
     channel.on("broadcast", { event: BYTES }, ({ payload }) => {
       // One message can carry several packets; see RealtimeTransport.
@@ -176,34 +229,74 @@ export class PairChannel {
       channel.subscribe(async (status) => {
         // Everything AFTER the first status is what the connection is doing
         // for the rest of its life, and it used to be dropped on the floor.
-        // The client reconnects a dropped websocket on its own, so these
-        // arrive: an error or a close, then a fresh SUBSCRIBED. Whoever is
-        // relaying a game over this channel needs to hear the first, and
-        // presence needs the second.
         if (settled) {
           if (status === "SUBSCRIBED") {
-            // Re-announced, because a reconnect brings back the subscription
-            // and not what we had told it about ourselves. Without this, a
-            // websocket blip leaves you invisible to a friend who is looking
-            // straight at your name.
-            await channel.track(pair.me);
+            pair.attempts = 0;
+            // Re-announced, because a rejoin brings back the subscription and
+            // not what we had told it about ourselves. Without this, a blip
+            // leaves you invisible to a friend looking straight at your name.
+            await channel.track(pair.activity
+              ? { ...pair.me, activity: pair.activity } : pair.me);
+          } else {
+            pair.rejoin();
           }
           for (const fn of pair.statusHandlers) fn(status);
           return;
         }
         if (status === "SUBSCRIBED") {
           settled = true;
+          pair.attempts = 0;
           clearTimeout(timer);
-          await channel.track(me);
-          resolve(pair);
+          await channel.track(pair.me);
+          resolve();
         } else if (status === "CHANNEL_ERROR" || status === "CLOSED") {
           settled = true;
           clearTimeout(timer);
-          reject(new Error(
-            "that channel is not yours -- the friendship must be accepted"));
+          if (first) {
+            reject(new Error(
+              "that channel is not yours -- the friendship must be accepted"));
+          } else {
+            pair.rejoin();
+            resolve();
+          }
         }
       });
     });
+  }
+
+  /**
+   * Join again, on a channel the server has closed on us.
+   *
+   * It does close them. The stack when it happens is `Socket.onConnMessage` --
+   * a `phx_close` pushed from the other end, not anything this client did --
+   * and the Supabase client does not come back from it on its own. What made
+   * that so hard to see is that `send` keeps returning "ok" afterwards, by
+   * quietly falling back to the REST endpoint: messages go out, nobody is
+   * subscribed to receive them, and the pair simply stops hearing each other.
+   * Presence, invitations, reconnection and the level handover all ride on
+   * this channel, so all four die together and none of them says anything.
+   *
+   * A closed `RealtimeChannel` cannot be re-subscribed -- the client refuses
+   * to run `subscribe()` twice on one instance -- so this builds another and
+   * re-wires it. The handler sets belong to the PairChannel, so nothing above
+   * here notices that the pipe underneath was replaced.
+   */
+  private rejoin(): void {
+    if (this.closing || this.rejoinTimer !== null) return;
+    // Backing off, and capped: the usual cause is a limit at the far end, and
+    // hammering it is the one response guaranteed not to help.
+    const wait = Math.min(1000 * 2 ** this.attempts++, 30000);
+    this.rejoinTimer = setTimeout(() => {
+      this.rejoinTimer = null;
+      if (this.closing) return;
+      void supabase.removeChannel(this.live).catch(() => { /* already gone */ });
+      this.live = supabase.channel(this.topic, {
+        config: { private: true, presence: { key: this.me.userId } },
+      });
+      void this.join(false).catch((e) => {
+        console.warn("could not rejoin the pair's channel:", e);
+      });
+    }, wait);
   }
 
   // ---- presence ----------------------------------------------------------
@@ -215,8 +308,18 @@ export class PairChannel {
 
   /** Say what we are doing now. */
   async setActivity(activity: Activity): Promise<void> {
-    await this.channel.track({ ...this.me, activity });
+    this.activity = activity;
+    await this.live.track({ ...this.me, activity });
   }
+
+  /**
+   * What we last said we were doing, so a rejoin can say it again.
+   *
+   * Presence is per-subscription: the new channel knows nothing about what the
+   * old one had been told, and announcing the default would put somebody who
+   * is mid-game back to "online" in their friend's list.
+   */
+  private activity: Activity | null = null;
 
   // ---- invites -----------------------------------------------------------
 
@@ -240,6 +343,11 @@ export class PairChannel {
     return () => this.cancelHandlers.delete(fn);
   }
 
+  onHandover(fn: (h: Handover) => void): () => void {
+    this.handoverHandlers.add(fn);
+    return () => this.handoverHandlers.delete(fn);
+  }
+
   /** Every status the subscription reports after the first one. */
   onStatus(fn: (status: string) => void): () => void {
     this.statusHandlers.add(fn);
@@ -247,13 +355,23 @@ export class PairChannel {
   }
 
   send(event: string, payload: unknown): void {
-    void this.channel.send({ type: "broadcast", event, payload });
+    // The result is worth looking at. `send` resolves to "ok", "timed out" or
+    // "error" -- and, on a channel the server has closed, quietly falls back to
+    // the REST endpoint and still says "ok" while nobody is subscribed to
+    // receive it. Discarding that makes a message that never arrived look
+    // exactly like one that was never sent.
+    void this.live.send({ type: "broadcast", event, payload })
+      .then((status) => {
+        if (status !== "ok") console.warn(`${event} did not send: ${status}`);
+      })
+      .catch((e) => console.warn(`${event} did not send:`, e));
   }
 
   invite(i: Invite): void { this.send(INVITE, i); }
   resume(i: Invite): void { this.send(RESUME, i); }
   reply(r: InviteReply): void { this.send(REPLY, r); }
   cancel(c: InviteCancel): void { this.send(CANCEL, c); }
+  handover(h: Handover): void { this.send(HANDOVER, h); }
 
   // ---- bytes -------------------------------------------------------------
 
@@ -268,14 +386,18 @@ export class PairChannel {
 
   /** Awaitable: leaving is a message to the server, not a local flag. */
   async close(): Promise<void> {
+    this.closing = true;
+    if (this.rejoinTimer !== null) clearTimeout(this.rejoinTimer);
+    this.rejoinTimer = null;
     this.inviteHandlers.clear();
     this.resumeHandlers.clear();
     this.replyHandlers.clear();
     this.cancelHandlers.clear();
     this.statusHandlers.clear();
+    this.handoverHandlers.clear();
     this.byteHandlers.clear();
     this.presenceHandlers.clear();
-    await supabase.removeChannel(this.channel);
+    await supabase.removeChannel(this.live);
   }
 }
 

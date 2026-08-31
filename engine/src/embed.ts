@@ -158,11 +158,9 @@ export class GameView {
     // silent. The page's own mute is outside the snapshot and is the honest
     // place for it.
     //
-    // What this does not fix is the little icon: its `visible` is in the
-    // snapshot too, so it cannot be made to follow a per-player setting without
-    // either rewinding or being shared. The button now does the thing it says
-    // and does not draw itself doing it, which is the better half to keep --
-    // and the page's own Mute button, which does both, is right above it.
+    // The little icon follows, because `showMute` re-asserts it after every
+    // tick. It is in the snapshot and gets rewound like everything else; it is
+    // simply written again, which is safe precisely because nothing reads it.
     if (intent.kind === "mute") {
       if (!s) return false;
       this.setMuted(!this.muted);
@@ -427,6 +425,8 @@ export class GameView {
       }
     }
 
+    this.showMute();
+
     if (this.game.m_level !== this.lastLevel) {
       this.lastLevel = this.game.m_level;
       // Ask for the whole level's art at once rather than discovering it a
@@ -453,6 +453,26 @@ export class GameView {
     this.render();
     this.onFrame?.(this);
   };
+
+  /**
+   * Draw the game's own mute button in the state this player is actually in.
+   *
+   * `Game.Muted` and the icon's `visible` are hung off the Game, so the
+   * snapshot walk reaches them and a rollback puts them back -- which is why
+   * pressing the in-canvas mute button used to silence the audio and then flip
+   * its own picture back within a frame.
+   *
+   * Re-asserting them every frame is safe for one specific reason: `hash()`
+   * covers `m_level` and nothing above it, so two peers can disagree about
+   * whether they are muted without disagreeing about the game. Mute is one
+   * player's preference. It should differ.
+   */
+  private showMute(): void {
+    const muter = this.game.m_muter;
+    if (!muter) return;
+    this.game.Muted = this.muted;
+    if (muter.muteLines) muter.muteLines.visible = !this.muted;
+  }
 
   render(): void {
     const ctx = this.ctx;

@@ -4473,7 +4473,7 @@ export class Game extends MovieClip {
          this.removeChild(this.m_pauseMenu);
          this.stage.removeEventListener(KeyboardEvent.KEY_DOWN,this.__bind(this.keyPressed));
          this.stage.removeEventListener(KeyboardEvent.KEY_UP,this.__bind(this.keyReleased));
-         this.StartGame(this.cur_type,this.cur_lev);
+         this.removeChild(this.m_muter); this.StartGame(this.cur_type,this.cur_lev);
       }
 
       GameReady(): any {
@@ -4955,7 +4955,7 @@ export class Game extends MovieClip {
          if(this.m_transition.alpha > 1)
          {
             this.removeChild(this.m_mainMenu);
-            this.StartGame(this.cur_type,this.cur_lev);
+            this.removeChild(this.m_muter); this.StartGame(this.cur_type,this.cur_lev);
             this.m_transition.removeEventListener(Event.ENTER_FRAME,this.__bind(this.Transit));
             this.removeChild(this.m_transition);
          }

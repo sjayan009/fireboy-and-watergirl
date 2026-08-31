@@ -64,14 +64,14 @@ class DataChannelTransport implements Transport {
     // afterwards -- where it used to be set and then never consulted again,
     // because the promise it belonged to had already settled.
     //
-    // `disconnected` is included deliberately, even though ICE sometimes
-    // recovers from it on its own. A pair whose link comes back finds a page
-    // that reconnects them anyway, and the cost of saying so early is a banner
-    // that clears itself; the cost of waiting for `failed` is up to thirty
-    // seconds of a game that has already stopped.
+    // `failed` and `closed` only. `disconnected` is the state ICE passes
+    // THROUGH and usually recovers from on its own -- two browser contexts on
+    // one busy machine produce it regularly -- and treating it as the end of
+    // the link tore down connections that were about to be fine, which is a
+    // more disruptive bug than the one this was written to fix.
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState;
-      if (state === "failed" || state === "disconnected" || state === "closed") {
+      if (state === "failed" || state === "closed") {
         this.linkGone("the peer connection " + state);
       }
     };
@@ -216,6 +216,13 @@ export function connectWebRTC(
     sig.onMessage((d) => {
       const s = decodeSignal(d);
       if (!s) return;
+      // A handshake that is over must not keep answering. The rendezvous is the
+      // pair's own channel and outlives any one connection, so when a link dies
+      // and the two of them negotiate another, THIS handler is still subscribed
+      // to it -- and hands the new offer to a peer connection that closed with
+      // the old link. The browser's complaint is loud and unhandled: "the
+      // RTCPeerConnection's signalingState is 'closed'".
+      if (pc.signalingState === "closed") return;
       void (async () => {
         if (s.sdp) {
           await pc.setRemoteDescription(s.sdp);

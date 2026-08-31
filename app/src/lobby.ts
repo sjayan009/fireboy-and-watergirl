@@ -38,7 +38,7 @@ import { connect, TransportKind } from "@engine/net/connect.js";
 import { Transport } from "@engine/net/transport.js";
 import { Slot } from "@engine/net/session.js";
 import {
-  Activity, Invite, InviteCancel, PairChannel, Presence,
+  Activity, Handover, Invite, InviteCancel, PairChannel, Presence,
 } from "./net/pairchannel.js";
 import { RealtimeTransport } from "./net/realtime.js";
 import { auth, onBeforeSignOut } from "./auth.js";
@@ -107,6 +107,7 @@ export class Lobby {
   private resumeHandlers = new Set<(i: Invite, from: FriendState) => void>();
   private cancelHandlers =
     new Set<(session: string, from: FriendState) => void>();
+  private handoverHandlers = new Set<(h: Handover) => void>();
   /**
    * Invitations sent and not yet answered, by session id.
    *
@@ -189,6 +190,10 @@ export class Lobby {
       for (const fn of this.inviteHandlers) fn(invite, from);
     });
 
+    channel.onHandover((h) => {
+      for (const fn of this.handoverHandlers) fn(h);
+    });
+
     channel.onResume((invite) => {
       const from = this.friends.find((f) => f.id === friendId);
       if (!from) return;
@@ -250,6 +255,17 @@ export class Lobby {
     return () => this.resumeHandlers.delete(fn);
   }
 
+  /** The other player has said who picks the levels from here on. */
+  onHandover(fn: (h: Handover) => void): () => void {
+    this.handoverHandlers.add(fn);
+    return () => this.handoverHandlers.delete(fn);
+  }
+
+  /** Say that somebody else picks the levels now. */
+  handover(friendId: string, h: Handover): void {
+    this.channels.get(friendId)?.handover(h);
+  }
+
   /** An invitation was withdrawn, by whichever side had it in hand. */
   onCancel(fn: (session: string, from: FriendState) => void): () => void {
     this.cancelHandlers.add(fn);
@@ -302,6 +318,19 @@ export class Lobby {
     signal?: AbortSignal;
   } = {}): Promise<Ready> {
     return this.offer(friendId, invite, true, o);
+  }
+
+  /**
+   * Ask the other side to rebuild the link, without offering one.
+   *
+   * The peer who did the inviting is the one who offers, so the other peer
+   * noticing first has nothing to do -- and nothing to do is a deadlock, since
+   * a peer connection can fail at one end and be perfectly happy at the other.
+   * The same `resume` broadcast serves both directions: from the inviter it is
+   * an offer, and from the other side it is a request for one.
+   */
+  askResume(friendId: string, invite: Invite): void {
+    this.channels.get(friendId)?.resume(invite);
   }
 
   /**
@@ -480,6 +509,7 @@ export class Lobby {
     this.inviteHandlers.clear();
     this.resumeHandlers.clear();
     this.cancelHandlers.clear();
+    this.handoverHandlers.clear();
     // Awaited, because leaving a topic is a message to the server and joining
     // the same topic again before it lands is a race the server resolves by
     // dropping one of them.

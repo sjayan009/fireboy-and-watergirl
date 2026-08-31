@@ -291,18 +291,44 @@ try {
     await page.click("a[href='#/settings']");
     await page.waitForSelector("text=TWO-FACTOR");
     await page.click("button:has-text('Turn it on')");
-    await page.waitForSelector("code", { timeout: 20000 });
-    const secret = await page.locator("code").innerText();
-    check("an authenticator secret was issued", secret.length > 15, true);
+    // Scoped to the two-factor section. A bare `code` used to be unambiguous;
+    // Settings now shows the signed-in address in one too, and it comes first
+    // in the document -- so this matched an email, computed a TOTP from it, and
+    // reported "a secret was issued" because an email is also longer than
+    // fifteen characters. A selector that can match the wrong thing eventually
+    // does.
+    await page.waitForSelector(".factors code", { timeout: 20000 });
+    const secret = await page.locator(".factors code").innerText();
+    check("an authenticator secret was issued",
+          /^[A-Z2-7]{16,}$/.test(secret), true);
 
-    await page.locator("form").last().locator("input").fill("000000");
-    await page.click("button:has-text('Confirm')");
-    await page.waitForTimeout(1500);
+    // Scoped to the two-factor section rather than "the last form on the page".
+    // Settings has grown a password form, an email form and a delete-account
+    // form since this was written, and the last one is now the dangerous one.
+    const enrol = page.locator(".factors form");
+    await enrol.locator("input").fill("000000");
+    // Inside the two-factor section. `has-text` is a case-insensitive substring,
+    // so a bare "Confirm" also matches the email section's "Send the
+    // confirmation" -- which is earlier in the document, and submitting it
+    // does nothing visible at all.
+    await enrol.locator("button").click();
+    // Waited FOR, not waited OUT. Verifying a factor is a round trip to the
+    // auth service, and a fixed pause is a bet on how fast that is today --
+    // one this lost the first time the platform was having a slow afternoon,
+    // and then lost twice, because the second code was typed into a form still
+    // busy with the first.
+    // Waited FOR, not waited OUT: verifying a factor is a round trip to the
+    // auth service, and a fixed pause is a bet on how fast that is today.
+    // Through waitForSelector rather than by polling `errorText`, because that
+    // helper auto-waits the full actionability timeout each time it finds
+    // nothing -- so a loop around it does not poll for twenty seconds, it
+    // blocks for twenty minutes.
+    await page.waitForSelector(".error:visible", { timeout: 30000 });
     check("a wrong code is refused",
           /invalid|incorrect|not/i.test(await errorText(page)), true);
 
-    await page.locator("form").last().locator("input").fill(totp(secret));
-    await page.click("button:has-text('Confirm')");
+    await enrol.locator("input").fill(totp(secret));
+    await enrol.locator("button").click();
     await page.waitForSelector("text=An authenticator app is enrolled",
                                { timeout: 20000 });
     check("the right one enrols it", true, true);
