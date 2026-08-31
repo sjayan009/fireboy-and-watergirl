@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build && node scripts/assets.mjs",
     "preview": "vite preview",
     "test": "node test/accounts.mjs && node test/interface.mjs && node test/production.mjs && node test/twopeople.mjs",
-    "check": "node scripts/check.mjs"
+    "check": "node scripts/check.mjs",
+    "prebuild": "npm --prefix ../engine run build"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.58.0"
