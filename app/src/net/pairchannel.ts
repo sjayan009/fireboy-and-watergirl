@@ -51,13 +51,34 @@ export interface Invite {
 /** Events on the wire. Kept short: they are typed on every message. */
 const INVITE = "invite";
 const REPLY = "reply";
+const CANCEL = "cancel";
 const BYTES = "b";
 
 export interface InviteReply {
   session: string;
+  /**
+   * False is a real answer -- "not now" -- and not merely the absence of yes.
+   *
+   * Without it the only way to decline was silence, and silence is
+   * indistinguishable from a friend who walked away from their desk: the
+   * inviter sat on "waiting for them to accept" for two minutes either way.
+   */
   accepted: boolean;
   /** Set once the replying peer is ready for the level to start. */
   ready?: boolean;
+}
+
+/**
+ * The inviter has withdrawn, or the invitee has backed out after saying yes.
+ *
+ * Sent by whichever side changed its mind, and it has to exist separately from
+ * a reply because either of them can be the one to send it -- and because it
+ * has to be able to arrive in the MIDDLE of the connection handshake, which is
+ * a place a reply never comes from.
+ */
+export interface InviteCancel {
+  session: string;
+  from: string;
 }
 
 export function topicFor(a: string, b: string): string {
@@ -73,6 +94,7 @@ export class PairChannel {
 
   private inviteHandlers = new Set<(i: Invite) => void>();
   private replyHandlers = new Set<(r: InviteReply) => void>();
+  private cancelHandlers = new Set<(c: InviteCancel) => void>();
   private byteHandlers = new Set<(d: Uint8Array) => void>();
   private presenceHandlers = new Set<(p: Presence[]) => void>();
 
@@ -95,6 +117,9 @@ export class PairChannel {
     });
     channel.on("broadcast", { event: REPLY }, ({ payload }) => {
       for (const fn of pair.replyHandlers) fn(payload as InviteReply);
+    });
+    channel.on("broadcast", { event: CANCEL }, ({ payload }) => {
+      for (const fn of pair.cancelHandlers) fn(payload as InviteCancel);
     });
     channel.on("broadcast", { event: BYTES }, ({ payload }) => {
       // One message can carry several packets; see RealtimeTransport.
@@ -179,12 +204,18 @@ export class PairChannel {
     return () => this.replyHandlers.delete(fn);
   }
 
+  onCancel(fn: (c: InviteCancel) => void): () => void {
+    this.cancelHandlers.add(fn);
+    return () => this.cancelHandlers.delete(fn);
+  }
+
   send(event: string, payload: unknown): void {
     void this.channel.send({ type: "broadcast", event, payload });
   }
 
   invite(i: Invite): void { this.send(INVITE, i); }
   reply(r: InviteReply): void { this.send(REPLY, r); }
+  cancel(c: InviteCancel): void { this.send(CANCEL, c); }
 
   // ---- bytes -------------------------------------------------------------
 
@@ -201,6 +232,7 @@ export class PairChannel {
   async close(): Promise<void> {
     this.inviteHandlers.clear();
     this.replyHandlers.clear();
+    this.cancelHandlers.clear();
     this.byteHandlers.clear();
     this.presenceHandlers.clear();
     await supabase.removeChannel(this.channel);

@@ -17,6 +17,17 @@
 
 * { box-sizing: border-box; }
 
+/*
+ * `hidden` has to actually hide.
+ *
+ * The attribute's own rule is `[hidden] { display: none }` at user-agent
+ * weight, which any class here that sets `display` silently beats. That is how
+ * the invitation banner came to be a strip that stayed on screen after it had
+ * been dismissed -- `banner.hidden = true` ran, and nothing happened, which to
+ * the person clicking is indistinguishable from a button that does not work.
+ */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   min-height: 100%;

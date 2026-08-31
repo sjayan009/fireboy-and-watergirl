@@ -29,6 +29,7 @@ import { NetSession, Slot } from "./net/session.js";
 import { GameHost } from "./net/gamehost.js";
 import { Command } from "./net/protocol.js";
 import { Transport } from "./net/transport.js";
+import type { Intent } from "./game/shellinput.js";
 
 /** The original stage: 39*20*0.8 + 16 = 640, 29*20*0.8 + 16 = 480. */
 export const STAGE_W = 640;
@@ -51,6 +52,29 @@ export interface GameViewOptions {
   assets?: string;
   /** Called after every rendered frame, for whatever the page shows around it. */
   onFrame?: (view: GameView) => void;
+  /**
+   * A button that changes shared state was pressed and could not be honoured.
+   * Today the only one is a map node clicked by the peer who does not choose
+   * levels, which the page turns into "waiting for them to pick".
+   */
+  onRefused?: (reason: RefusedReason) => void;
+}
+
+export type RefusedReason = "not-your-pick";
+
+export interface JoinOptions {
+  /**
+   * Whether this peer's map clicks start a level for the pair.
+   *
+   * Exactly one of the two says yes, and it is the one who sent the invitation.
+   * Between levels both maps are live and local, so without a single decider
+   * two people clicking different nodes at the same moment would each start
+   * their own and there would be no way back.
+   */
+  canChooseLevel?: boolean;
+  onDesync?: (frame: number, mine: string, theirs: string) => void;
+  /** A Quit took effect. `bySlot` is who asked for it. */
+  onQuit?: (bySlot: Slot, forGood: boolean) => void;
 }
 
 export class GameView {
@@ -59,6 +83,7 @@ export class GameView {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly onFrame?: (v: GameView) => void;
+  private readonly onRefused?: (reason: RefusedReason) => void;
 
   sprites: SpriteRenderer | null = null;
   audio: AudioPlayer | null = null;
@@ -66,6 +91,9 @@ export class GameView {
   /** The netplay session, once two peers have paired. Null when solo. */
   session: NetSession | null = null;
   slot: Slot = 0;
+  /** Whether this peer's map clicks start a level for the pair. */
+  canChooseLevel = false;
+  private transport: Transport | null = null;
 
   private acc = 0;
   private last = 0;
@@ -84,6 +112,7 @@ export class GameView {
     this.canvas.height = STAGE_H;
     this.ctx = this.canvas.getContext("2d")!;
     this.onFrame = o.onFrame;
+    this.onRefused = o.onRefused;
 
     resetClock();
     this.game = new (Game as any)();
@@ -98,9 +127,65 @@ export class GameView {
     AudioPlayer.load(base).then((a) => { this.audio = a; })
       .catch((e) => console.warn("audio unavailable:", e));
 
+    // Installed before anything can be clicked. Solo it answers "not mine" to
+    // everything and the ported handlers run untouched; in a session it is what
+    // stops a button changing one machine's world and not the other's.
+    this.shell.onIntent((i) => this.handleIntent(i));
+
     this.bind();
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.tick);
+  }
+
+  // ---- what a button means ----------------------------------------------
+
+  /**
+   * Turn a shared-state button into a command, or refuse it.
+   *
+   * Returning false leaves the ported handler to run, which is right whenever
+   * nothing is shared: solo, and on the map between levels where each player is
+   * looking at their own copy of the shell.
+   */
+  private handleIntent(intent: Intent): boolean {
+    const s = this.session;
+
+    // Mute is this player's preference and always has been -- one of them
+    // wanting quiet says nothing about the other. The ported button writes
+    // `Game.Muted`, which the snapshot walk reaches, so in a session it used to
+    // be undone within a frame while the audio it had already silenced stayed
+    // silent. The page's own mute is outside the snapshot and is the honest
+    // place for it.
+    //
+    // What this does not fix is the little icon: its `visible` is in the
+    // snapshot too, so it cannot be made to follow a per-player setting without
+    // either rewinding or being shared. The button now does the thing it says
+    // and does not draw itself doing it, which is the better half to keep --
+    // and the page's own Mute button, which does both, is right above it.
+    if (intent.kind === "mute") {
+      if (!s) return false;
+      this.setMuted(!this.muted);
+      return true;
+    }
+    if (!s) return false;
+
+    if (intent.kind === "start") {
+      // Mid-level there is no map to have clicked, but a Start applied on one
+      // peer and dropped by the other's guard has no way back, so say no twice.
+      if (s.running) return true;
+      if (!this.canChooseLevel) { this.onRefused?.("not-your-pick"); return true; }
+      s.requestStart(intent.mode, intent.num);
+      return true;
+    }
+
+    // Between levels the shell is local, so the pause tray and the boards --
+    // which cannot be on screen anyway -- are nobody else's business.
+    if (!s.running) return false;
+    switch (intent.kind) {
+      case "retry": s.send(Command.Retry); return true;
+      case "pause": s.send(Command.Pause); return true;
+      case "quit": s.send(Command.Quit, this.slot); return true;
+    }
+    return false;
   }
 
   // ---- input ------------------------------------------------------------
@@ -164,25 +249,39 @@ export class GameView {
     }
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 
-    if (this.session) {
+    // Only while a LEVEL is running. Between levels the same keys are the map's
+    // -- the arrows walk its nodes -- and a session that is not running a level
+    // has nothing shared for P or R to change.
+    if (this.live) {
       // In a session the level's input belongs to the netcode, not to
       // Game.keyPressed: writing it locally would apply this player's move
       // without the other peer ever hearing about it.
       if (MOVEMENT.includes(key)) { this.held.add(key); return; }
-      if (key === "p") { this.session.send(Command.Pause); return; }
-      if (key === "r") { this.session.send(Command.Retry); return; }
-      if (key === "Escape") { this.session.send(Command.Quit); return; }
+      if (key === "p") { this.session!.send(Command.Pause); return; }
+      if (key === "r") { this.session!.send(Command.Retry); return; }
     }
 
     const code = GameView.codeOf(e);
+    // The shell gets Escape first, because on a board it means that board's
+    // "to menu" button and goes out as a command through the intent hook. Only
+    // an Escape nothing else wanted is the blunt "leave this level".
     if (this.shell.keyDown(code, key)) return;
+    if (this.live && key === "Escape") {
+      this.session!.send(Command.Quit, this.slot);
+      return;
+    }
     this.shell.forwardDown(code);
   }
 
   private keyUp(e: KeyboardEvent): void {
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    if (this.session && MOVEMENT.includes(key)) { this.held.delete(key); return; }
+    if (this.live && MOVEMENT.includes(key)) { this.held.delete(key); return; }
     this.shell.forwardUp(GameView.codeOf(e));
+  }
+
+  /** A session that is actually simulating a level right now. */
+  private get live(): boolean {
+    return this.session !== null && this.session.running;
   }
 
   /**
@@ -222,24 +321,49 @@ export class GameView {
    * Everything above the transport is the same code the netcode tests drive,
    * so what they prove holds here.
    */
-  join(transport: Transport, slot: Slot,
-       onDesync?: (f: number, a: string, b: string) => void): NetSession {
+  join(transport: Transport, slot: Slot, o: JoinOptions = {}): NetSession {
     this.slot = slot;
     this.held.clear();
+    this.canChooseLevel = o.canChooseLevel ?? false;
+    this.transport = transport;
     this.session = new NetSession({
       // Rollback: your own character answers on the very next frame, exactly as
       // in single-player, and the peer's input is predicted and corrected.
       rollback: true,
-      slot, transport, host: new GameHost(this.game), onDesync,
+      slot, transport, host: new GameHost(this.game),
+      onDesync: o.onDesync, onQuit: o.onQuit,
     });
     return this.session;
   }
 
+  /**
+   * Leave for good: tell the peer, then stop being in a session at all.
+   *
+   * The Quit is sent BEFORE the session is dropped, and it is the difference
+   * between the other person being returned to their map and being left staring
+   * at a character that will never move again. The transport goes too -- for a
+   * relayed pair that only stops the batching timer, and the pair's channel
+   * outlives it either way, because it is also their presence.
+   */
   leave(): void {
-    if (!this.session) return;
-    this.session.send(Command.Quit);
+    const going = this.session;
+    if (!going) return;
+    // Cleared FIRST. `depart` ends the session, and a page that reacts to that
+    // by calling this again must find nothing left to do rather than recurse.
     this.session = null;
+    going.depart();
     this.held.clear();
+
+    // Closed on a delay, and that is the whole point of the delay: the Quit
+    // above has been handed to the transport but not yet put on the wire.
+    // Closing here and now discards it -- SCTP drops what it has not sent when
+    // the peer connection goes, and the relay's send is batched and would lose
+    // the queue with the timer. The other person is then not told at all, which
+    // is the exact failure this message exists to prevent. Half a second is far
+    // longer than either needs and costs a departing session nothing.
+    const link = this.transport;
+    this.transport = null;
+    setTimeout(() => link?.close(), 500);
   }
 
   // ---- the loop ---------------------------------------------------------
@@ -259,13 +383,23 @@ export class GameView {
     this.last = now;
     if (!this.running) return;
 
-    if (this.session) {
+    // Held in a local, not re-read off `this`. A command applied inside `tick`
+    // can end the session -- the peer left -- and the page's reaction to being
+    // told is to call `leave`, which sets `this.session` to null underneath us.
+    const session = this.session;
+    if (session && session.running) {
       // The session owns the clock now: it decides which frames run, predicts
       // the other player and corrects itself when the prediction was wrong.
-      this.session.setLocalInput(this.bits());
-      this.session.tick(dt);
-      this.frame = this.session.frame;
+      session.setLocalInput(this.bits());
+      session.tick(dt);
+      this.frame = session.frame;
     } else {
+      // No level running -- either solo, or a pair sitting on the map between
+      // levels. `NetSession.tick` returns immediately when it is not started,
+      // so handing it the clock here would stop the world: no ENTER_FRAME, a
+      // frozen map, and a level built by the next click that never advances a
+      // frame. The shell is not shared state while no level is up, so each
+      // side runs it on its own accumulator and a Start resynchronises them.
       this.acc += dt;
       let steps = 0;
       while (this.acc >= TIME_STEP && steps < 5) {
@@ -332,6 +466,8 @@ export class GameView {
   }
 
   setMuted(muted: boolean): void { this.muted = muted; }
+  /** This player's mute, which the game's own button now also drives. */
+  get isMuted(): boolean { return this.muted; }
   setRunning(on: boolean): void { this.running = on; }
 
   destroy(): void {

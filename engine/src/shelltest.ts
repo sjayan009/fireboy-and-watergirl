@@ -19,6 +19,7 @@
 import { Game } from "./game/game.js";
 import { advanceTree, enterFrameTree, MouseEvent, SoundBus } from
   "./flash/flash.js";
+import { Intent, ShellInput } from "./game/shellinput.js";
 
 let failures = 0;
 
@@ -105,6 +106,71 @@ step(20);
 game.m_level.myContactListener.deadFire = true;
 step(80);
 check("the game-over board appeared", symbols().includes("GameOvero"), true);
+
+console.log("\nthe buttons that change shared state, and the ones that do not");
+{
+  // The rule the netplay screen depends on. A button that changes what BOTH
+  // peers simulate must be answerable before it is dispatched, or it happens on
+  // one machine only -- and, inside the rollback window, gets erased there too
+  // when the next correction restores a snapshot that still has the board in it.
+  const shell = new ShellInput(game, game.stage);
+  const seen: Intent[] = [];
+  const off = shell.onIntent((i) => { seen.push(i); return true; });
+
+  const press = (target: any) => { shell.pointerDown(target); shell.pointerUp(); };
+
+  const board = game.children.filter((c: any) => c.symbol === "GameOvero").pop();
+  const level = game.m_level;
+  press(board.GOboard.RetryBtn);
+  step(20);
+  check("the game-over retry is an intent, not a rebuild",
+        seen.map((i) => i.kind), ["retry"]);
+  check("and the level it would have rebuilt is untouched",
+        game.m_level === level, true);
+  check("with the board still up", symbols().includes("GameOvero"), true);
+
+  seen.length = 0;
+  const wasPaused = game.m_level.pause;
+  press(game.m_pauseMenu.btn);
+  press(game.m_pauseMenu.retryBtn);
+  press(game.m_pauseMenu.endGameBtn);
+  press(game.m_muter.muteBtn);
+  check("so are the pause tray and the mute button",
+        seen.map((i) => i.kind), ["pause", "retry", "quit", "mute"]);
+  check("and none of them reached the level behind the hook",
+        game.m_level.pause, wasPaused);
+
+  // Everything else on this screen is one person looking around their own copy
+  // of the shell, and travels nowhere.
+  seen.length = 0;
+  press(board.GOboard.ToMenuBtn);
+  step(20);
+  check("leaving to the map is an intent too", seen.map((i) => i.kind),
+        ["quit"]);
+  check("so it did not happen either", symbols().includes("GameOvero"), true);
+
+  // Let it through this time, to get back to the map for the last two checks.
+  off();
+  press(board.GOboard.ToMenuBtn);
+  step(20);
+  check("and with nobody claiming it, the click lands exactly as before",
+        symbols(), ["MainMenu"]);
+
+  seen.length = 0;
+  const claim = shell.onIntent((i) => { seen.push(i); return true; });
+  press(game.m_mainMenu.b_1_1);
+  step(20);
+  check("a map node names the level it would have started",
+        seen, [{ kind: "start", mode: "adventure", num: 1 }]);
+  check("and did not start it", symbols(), ["MainMenu"]);
+
+  seen.length = 0;
+  press(game.m_mainMenu.BackToIntro);
+  step(20);
+  check("while the intro button is nobody else's business", seen, []);
+  check("and simply worked", symbols(), ["IntroMenu"]);
+  claim();
+}
 
 console.log("\n" + (failures === 0 ? "SHELL TEST PASSED"
                                    : `SHELL TEST FAILED (${failures})`));

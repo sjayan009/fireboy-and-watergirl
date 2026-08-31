@@ -37,7 +37,9 @@
 import { connect, TransportKind } from "@engine/net/connect.js";
 import { Transport } from "@engine/net/transport.js";
 import { Slot } from "@engine/net/session.js";
-import { Activity, Invite, PairChannel, Presence } from "./net/pairchannel.js";
+import {
+  Activity, Invite, InviteCancel, PairChannel, Presence,
+} from "./net/pairchannel.js";
 import { RealtimeTransport } from "./net/realtime.js";
 import { auth, onBeforeSignOut } from "./auth.js";
 import { Friend, listFriends } from "./friends.js";
@@ -69,16 +71,21 @@ export class Lobby {
   private friends: FriendState[] = [];
   private changeHandlers = new Set<(f: FriendState[]) => void>();
   private inviteHandlers = new Set<(i: Invite, from: FriendState) => void>();
+  private cancelHandlers =
+    new Set<(session: string, from: FriendState) => void>();
   /**
    * Invitations sent and not yet answered, by session id.
    *
-   * Two waiters, not one: the inviter needs to know when the other side has
+   * Three waiters, not one. The inviter needs to know when the other side has
    * agreed to negotiate (so it can offer) and, separately, when their session
-   * exists (so it can start the level).
+   * exists (so it can start the level) -- and it needs a way to stop waiting,
+   * because "not now" and "I changed my mind" are answers too and used to be
+   * indistinguishable from a friend who had wandered off.
    */
   private outbound = new Map<string, {
     accepted: () => void;
     ready: () => void;
+    failed: (e: Error) => void;
   }>();
 
   private constructor(private readonly me: Presence) {}
@@ -151,8 +158,22 @@ export class Lobby {
     channel.onReply((reply) => {
       const waiting = this.outbound.get(reply.session);
       if (!waiting) return;
-      if (reply.accepted) waiting.accepted();
+      if (!reply.accepted) { waiting.failed(new Error("they said not now")); return; }
+      waiting.accepted();
       if (reply.ready) waiting.ready();
+    });
+
+    // A cancel can land on either side and at any point -- including in the
+    // middle of the peer-connection handshake, where there is no reply to carry
+    // it -- so it is broadcast to whoever is interested rather than posted to
+    // one waiter. `invite` and `join` both listen, and so does the screen, which
+    // has a banner to take down whether or not anybody had pressed anything.
+    channel.onCancel((c: InviteCancel) => {
+      const from = this.friends.find((f) => f.id === friendId);
+      const waiting = this.outbound.get(c.session);
+      if (waiting) waiting.failed(new Error("they cancelled"));
+      if (!from) return;
+      for (const fn of this.cancelHandlers) fn(c.session, from);
     });
 
     return channel;
@@ -178,6 +199,12 @@ export class Lobby {
     return () => this.inviteHandlers.delete(fn);
   }
 
+  /** An invitation was withdrawn, by whichever side had it in hand. */
+  onCancel(fn: (session: string, from: FriendState) => void): () => void {
+    this.cancelHandlers.add(fn);
+    return () => this.cancelHandlers.delete(fn);
+  }
+
   async setActivity(activity: Activity): Promise<void> {
     this.me.activity = activity;
     for (const c of this.channels.values()) await c.setActivity(activity);
@@ -195,6 +222,8 @@ export class Lobby {
   async invite(friendId: string, o: {
     mode: string; num: number; iAmFireboy: boolean;
     onProgress?: (what: string) => void;
+    /** Abort and withdraw the invitation, at any point up to the first frame. */
+    signal?: AbortSignal;
   }): Promise<Ready> {
     const channel = this.channels.get(friendId);
     const friend = this.friends.find((f) => f.id === friendId);
@@ -205,14 +234,30 @@ export class Lobby {
 
     let onAccepted!: () => void;
     let onReady!: () => void;
+    let fail!: (e: Error) => void;
     const accepted = new Promise<void>((r) => { onAccepted = r; });
     const ready = new Promise<void>((r) => { onReady = r; });
-    const refused = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error("they did not answer")), 120000);
+    // One rejection for every way this can end badly -- a decline, a cancel,
+    // and nobody answering at all. Raced against each step, so "not now" is
+    // heard while we are still waiting to accept AND while we are already
+    // negotiating a peer connection.
+    const refused = new Promise<never>((_, reject) => { fail = reject; });
+    const timer = setTimeout(
+      () => fail(new Error("they did not answer")), 120000);
+
+    // Withdrawing means telling them, or their banner sits there offering a
+    // game nobody is on the other end of any more.
+    const onAbort = () => {
+      channel.cancel({ session, from: this.me.userId });
+      fail(new Error("cancelled"));
+    };
+    o.signal?.addEventListener("abort", onAbort);
+    this.outbound.set(session, {
+      accepted: onAccepted, ready: onReady, failed: fail,
     });
-    this.outbound.set(session, { accepted: onAccepted, ready: onReady });
 
     try {
+      if (o.signal?.aborted) throw new Error("cancelled");
       o.onProgress?.("waiting for them to accept…");
       channel.invite({
         session, mode: o.mode, num: o.num, fireboy, from: this.me.userId,
@@ -222,43 +267,105 @@ export class Lobby {
       // Offering before this point would put the offer on a channel the other
       // side is not yet listening to, and lose it.
       o.onProgress?.("connecting…");
-      const link = await this.link(channel, true);
+      const link = await Promise.race([
+        this.link(channel, true, o.signal), refused,
+      ]);
 
-      await Promise.race([ready, refused]);
+      try {
+        await Promise.race([ready, refused]);
+      } catch (e) {
+        // The connection came up and then the game did not happen. Nothing
+        // else is going to close it.
+        link.transport.close();
+        throw e;
+      }
       return {
         ...link,
         slot: (fireboy === this.me.userId ? 0 : 1) as Slot,
         mode: o.mode, num: o.num, host: true, friend,
       };
     } finally {
+      // The timer used to be left running. It fired minutes into a game that
+      // had started perfectly well and rejected a promise nobody was holding
+      // any more, which is an unhandled rejection and nothing else.
+      clearTimeout(timer);
+      o.signal?.removeEventListener("abort", onAbort);
       this.outbound.delete(session);
     }
   }
 
 
+  /**
+   * Say no, without connecting.
+   *
+   * Separate from aborting a `join`, because the common case never started one:
+   * the banner is up, the answer is no, and there is nothing in flight to
+   * cancel -- only somebody on the other side who deserves to be told rather
+   * than left watching a spinner for two minutes.
+   */
+  decline(invite: Invite): void {
+    this.channels.get(invite.from)?.reply({
+      session: invite.session, accepted: false,
+    });
+  }
+
   /** Accept an invitation, connect, and tell them we are ready. */
-  async join(invite: Invite, onProgress?: (what: string) => void): Promise<Ready> {
+  async join(invite: Invite, o: {
+    onProgress?: (what: string) => void;
+    /** Back out again, at any point up to the first frame. */
+    signal?: AbortSignal;
+  } = {}): Promise<Ready> {
     const channel = this.channels.get(invite.from);
     const friend = this.friends.find((f) => f.id === invite.from);
     if (!channel || !friend) throw new Error("that friend is not connected");
+    if (o.signal?.aborted) throw new Error("cancelled");
 
-    // Said FIRST, and listening started before the answer can arrive: the
-    // inviter only offers once it has heard this.
-    channel.reply({ session: invite.session, accepted: true });
-
-    onProgress?.("connecting…");
-    const link = await this.link(channel, false);
-
-    // And only now the second half. The session is built from what this
-    // returns, so telling them we are ready before it exists would invite a
-    // Start we have nothing to hear it with.
-    channel.reply({ session: invite.session, accepted: true, ready: true });
-
-    return {
-      ...link,
-      slot: (invite.fireboy === this.me.userId ? 0 : 1) as Slot,
-      mode: invite.mode, num: invite.num, host: false, friend,
+    // The same endings as the other side, minus the timeout: whoever waits here
+    // is waiting on a handshake, not on a person.
+    let fail!: (e: Error) => void;
+    const refused = new Promise<never>((_, reject) => { fail = reject; });
+    const onAbort = () => {
+      // Backing out after saying yes has to be said twice: the reply is what
+      // stops them waiting, the cancel is what stops a handshake that may
+      // already be in flight.
+      channel.reply({ session: invite.session, accepted: false });
+      channel.cancel({ session: invite.session, from: this.me.userId });
+      fail(new Error("cancelled"));
     };
+    o.signal?.addEventListener("abort", onAbort);
+    const offCancel = this.onCancel((session) => {
+      if (session === invite.session) fail(new Error("they cancelled"));
+    });
+
+    try {
+      // Said FIRST, and listening started before the answer can arrive: the
+      // inviter only offers once it has heard this.
+      channel.reply({ session: invite.session, accepted: true });
+
+      o.onProgress?.("connecting…");
+      const link = await Promise.race([
+        this.link(channel, false, o.signal), refused,
+      ]);
+
+      if (o.signal?.aborted) {
+        link.transport.close();
+        throw new Error("cancelled");
+      }
+
+      // And only now the second half. The session is built from what this
+      // returns, so telling them we are ready before it exists would invite a
+      // Start we have nothing to hear it with.
+      channel.reply({ session: invite.session, accepted: true, ready: true });
+
+      return {
+        ...link,
+        slot: (invite.fireboy === this.me.userId ? 0 : 1) as Slot,
+        mode: invite.mode, num: invite.num, host: false, friend,
+      };
+    } finally {
+      o.signal?.removeEventListener("abort", onAbort);
+      offCancel();
+    }
   }
 
   /**
@@ -266,9 +373,11 @@ export class Lobby {
    * not. The fallback is why this needs no TURN server -- and also why a pair
    * on it gets the game but not video.
    */
-  private async link(channel: PairChannel, caller: boolean) {
+  private async link(channel: PairChannel, caller: boolean,
+                     signal?: AbortSignal) {
     const rendezvous = new RealtimeTransport(channel);
-    const link = await connect(rendezvous, caller, { iceServers: STUN });
+    const link = await connect(rendezvous, caller,
+                               { iceServers: STUN, signal });
     if (link.reason) console.info("using the relay path:", link.reason);
     return { transport: link.transport, kind: link.kind };
   }
@@ -278,6 +387,7 @@ export class Lobby {
     this.channels.clear();
     this.changeHandlers.clear();
     this.inviteHandlers.clear();
+    this.cancelHandlers.clear();
     // Awaited, because leaving a topic is a message to the server and joining
     // the same topic again before it lands is a race the server resolves by
     // dropping one of them.

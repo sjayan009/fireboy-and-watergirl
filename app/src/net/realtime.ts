@@ -99,6 +99,11 @@ export class RealtimeTransport implements Transport {
   }
 
   close(): void {
+    // Flushed FIRST. Whatever is still queued is the last thing this session
+    // had to say, and the one message that is reliably in there is the Quit
+    // that tells the other person their partner has gone -- dropping it on the
+    // floor turns leaving into a peer who simply stops responding forever.
+    this.flush();
     this.closed = true;
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
