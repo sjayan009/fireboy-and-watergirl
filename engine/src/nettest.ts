@@ -68,6 +68,9 @@ class Link {
     };
   }
 
+  /** Cut the wire, or mend it. A blackout is not the same as steady loss. */
+  setLoss(loss: number): void { this.loss = loss; }
+
   advance(ms: number): void {
     this.now += ms;
     const due = this.queue.filter((p) => p.at <= this.now);
@@ -273,6 +276,33 @@ console.log("\nboth players hitting retry at once");
   check("both are on the same frame",
         peers[0].session.frame === peers[1].session.frame, true);
   check("digests match", peers[0].host.hash() === peers[1].host.hash(), true);
+  check("with no desyncs",
+        peers[0].session.desyncs + peers[1].session.desyncs, 0);
+}
+
+console.log("\na Start that is lost completely still gets there");
+{
+  // The one command a fixed number of attempts is not good enough for. Thirteen
+  // copies is a very good bet; the time it loses, the two peers sit on
+  // different generations of the level and every later packet is filtered by
+  // the epoch they no longer share, so nothing can even notice. Here the wire
+  // is cut for long enough to swallow every copy.
+  const link = new Link(40, 0, 1);
+  const peers = pair(link, 3);
+  peers[0].session.requestStart("adventure", 1);
+  link.advance(STEP_MS);
+  run(link, peers, 60, scripted);
+  check("nothing got through, so the second peer never started",
+        [peers[0].session.running, peers[1].session.running], [true, false]);
+
+  link.setLoss(0);
+  run(link, peers, 300, scripted);
+  check("once the wire is back, the Start is still being offered",
+        peers[1].session.running, true);
+  check("on the same generation",
+        peers[0].session.generation === peers[1].session.generation, true);
+  check("and they converge",
+        peers[0].host.hash() === peers[1].host.hash(), true);
   check("with no desyncs",
         peers[0].session.desyncs + peers[1].session.desyncs, 0);
 }

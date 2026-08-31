@@ -201,6 +201,20 @@ await writeFile(spritesPath, JSON.stringify(sprites));
 await writeFile(join(TO, "sounds.json"), JSON.stringify(
   Object.fromEntries(Object.entries(plan).map(([k, v]) => [k, v[0]])), null, 1));
 
+/**
+ * Which commit this build is, at the root of the output.
+ *
+ * The point is entirely about the deploy check that runs afterwards. Asking
+ * "is the new version live yet?" without a marker means comparing a hashed
+ * bundle name against one you computed locally and hoping the two builds agree
+ * -- and if they do not, the check quietly passes against the OLD deployment
+ * and vouches for a page nobody just changed. A commit is not a guess.
+ *
+ * Vercel supplies the SHA; a local build says so rather than pretending.
+ */
+await writeFile(resolve(ROOT, "dist/version.txt"),
+                (process.env.VERCEL_GIT_COMMIT_SHA ?? "local") + "\n");
+
 console.log(
   `assets: ${(before / 1e6).toFixed(1)} MB -> ${(after / 1e6).toFixed(1)} MB ` +
   `(${Math.round(100 * (1 - after / before))}% smaller), ` +

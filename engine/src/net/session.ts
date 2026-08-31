@@ -134,6 +134,15 @@ export interface SessionOptions {
    * nothing alike to the person left sitting there.
    */
   onQuit?: (bySlot: Slot, forGood: boolean) => void;
+  /**
+   * The transport says the link is gone. Nothing more is coming over it.
+   *
+   * The session does not act on this itself, and deliberately so: it cannot
+   * know whether the answer is to reconnect, to wait, or to give up, and it has
+   * no way to build a new link even if it did. It stops predicting -- there is
+   * nothing left to predict from -- and tells whoever owns the transport.
+   */
+  onLinkDown?: (why: string) => void;
 }
 
 /**
@@ -170,6 +179,7 @@ export class NetSession {
   private readonly solo: boolean;
   private readonly onDesync?: SessionOptions["onDesync"];
   private readonly onQuit?: SessionOptions["onQuit"];
+  private readonly onLinkDown?: SessionOptions["onLinkDown"];
 
   /** Per-slot input, indexed by absolute frame. undefined = not yet known. */
   private input: [(number | undefined)[], (number | undefined)[]] = [[], []];
@@ -189,8 +199,21 @@ export class NetSession {
   private commands = new Map<number, { command: Command; a: number; b: number }[]>();
   /** Our own digests, so a remote one can be checked against the same frame. */
   private hashes = new Map<number, string>();
-  /** Commands still being re-sent, because the channel may have eaten one. */
-  private outbox: { packet: Uint8Array; left: number }[] = [];
+  /**
+   * Commands still being re-sent, because the channel may have eaten one.
+   *
+   * `left` counts down; `untilHeard` does not count at all. Start is the one
+   * command a fixed number of attempts is not good enough for -- every other
+   * command can be missed and the game merely feels wrong, but a Start that
+   * never lands leaves the two peers on different generations of the level
+   * forever, with no path back. So it is re-sent until the peer's own input
+   * proves they are on it.
+   */
+  private outbox: {
+    packet: Uint8Array; left: number; untilHeard?: boolean;
+  }[] = [];
+  /** Whether the peer has sent anything at all on this generation. */
+  private heard = false;
   /**
    * Which build of the level we are on. Bumped by every Start and Retry, which
    * both peers apply at the same frame, so both counters move together.
@@ -245,6 +268,14 @@ export class NetSession {
   rebuilds = 0;
   /** How far ahead of us the peer's newest input is, in frames. */
   lead = 0;
+  /**
+   * The transport has reported itself gone.
+   *
+   * Read by the page to tell "they are lagging" from "there is no longer a
+   * connection", which look identical from the stall counter alone and are the
+   * difference between waiting and doing something about it.
+   */
+  linkDown = false;
 
   private mode = "adventure";
   private num = 1;
@@ -264,9 +295,17 @@ export class NetSession {
     this.solo = o.solo ?? false;
     this.onDesync = o.onDesync;
     this.onQuit = o.onQuit;
+    this.onLinkDown = o.onLinkDown;
     this.snapLag = o.snapLag ?? this.hashEvery;
     if (this.rollbackOn) this.snap = new Snapshot();
     this.transport.onMessage((d) => this.receive(d));
+    // Optional on the interface, because a BroadcastChannel between two tabs
+    // and the tests' in-memory link have no such state to report.
+    this.transport.onClosed?.((why) => {
+      if (this.linkDown) return;
+      this.linkDown = true;
+      this.onLinkDown?.(why);
+    });
   }
 
   /** Whether this session predicts and corrects rather than waiting. */
@@ -303,6 +342,7 @@ export class NetSession {
     this.epoch = (this.epoch + 1) & 0xff;
     this.host.start(mode, num);
     this.started = true;
+    this.heard = false;
     this.resetLog();
   }
 
@@ -368,8 +408,12 @@ export class NetSession {
       command: Command.Start, a: m, b: num,
     });
     this.transport.send(packet);
-    // Re-sent like any other command: a lost Start is a game that never begins.
-    this.outbox.push({ packet, left: COMMAND_RESENDS });
+    // Not "like any other command": re-sent until they answer. Thirteen copies
+    // is a very good bet and not a guarantee, and the one time it loses, the
+    // two peers are stranded on different generations with nothing that can
+    // notice, because every later packet is filtered by the epoch they no
+    // longer share.
+    this.outbox.push({ packet, left: COMMAND_RESENDS, untilHeard: true });
     this.begin(mode, num);
   }
 
@@ -443,14 +487,27 @@ export class NetSession {
       frame: newest, bits, hashFrame, hash,
     }));
 
-    // Input heals itself because every packet repeats the last 16 frames.
-    // A command has no such redundancy, so it is simply sent again for a while.
+  }
+
+  /**
+   * Send the commands that are still owed an answer.
+   *
+   * Input heals itself, because every packet repeats the last sixteen frames.
+   * A command has no such redundancy, so it is simply sent again for a while.
+   *
+   * Driven from `tick` rather than from `sendInput`, which is where it used to
+   * live -- and that was a resend schedule that stopped exactly when the
+   * session stopped sending input. A stalled peer is precisely the one that has
+   * missed something, and it was the one peer whose commands stopped being
+   * repeated. It is also why a departure could not be scheduled at all.
+   */
+  private drainOutbox(): void {
+    if (this.solo || this.outbox.length === 0) return;
     for (const c of this.outbox) {
+      if (c.untilHeard) { this.transport.send(c.packet); continue; }
       if (c.left-- > 0) this.transport.send(c.packet);
     }
-    if (this.outbox.length && this.outbox[0].left <= 0) {
-      this.outbox = this.outbox.filter((c) => c.left > 0);
-    }
+    this.outbox = this.outbox.filter((c) => c.untilHeard || c.left > 0);
   }
 
   // ---- commands ---------------------------------------------------------
@@ -513,6 +570,13 @@ export class NetSession {
     if (p.epoch !== this.epoch) return;
 
     if (p.kind === Kind.Input) {
+      // They are on our generation, so whatever we were repeating until they
+      // said so has been said. Input is the acknowledgement: it is the one
+      // thing a peer that has started the level cannot help sending.
+      if (!this.heard) {
+        this.heard = true;
+        this.outbox = this.outbox.filter((c) => !c.untilHeard);
+      }
       for (let i = 0; i < p.bits.length; i++) {
         const f = p.frame - i;
         if (f < 0) break;
@@ -668,6 +732,7 @@ export class NetSession {
    */
   tick(dt: number): void {
     if (!this.started) return;
+    this.drainOutbox();
     this.settle();
     this.scheduleLocal();
     this.acc += Math.min(dt, 0.25);          // clamp after a tab stall
@@ -780,6 +845,7 @@ export class NetSession {
   private retryLevel(): void {
     this.host.retry();
     this.epoch = (this.epoch + 1) & 0xff;
+    this.heard = false;
     this.resetLog();
   }
 

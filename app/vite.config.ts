@@ -29,6 +29,10 @@ function publicEnv(): Record<string, string> {
   return {
     __SUPABASE_URL__: JSON.stringify(pick("SUPABASE_URL")),
     __SUPABASE_KEY__: JSON.stringify(pick("SUPABASE_PUBLISHABLE_KEY")),
+    // Empty unless somebody sets it. Public by nature -- a TURN credential is
+    // handed to the browser to be used by the browser -- so it belongs with the
+    // other two rather than anywhere near the secret key.
+    __ICE_SERVERS__: JSON.stringify(pick("ICE_SERVERS")),
   };
 }
 

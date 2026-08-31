@@ -45,7 +45,9 @@ export class RealtimeTransport implements Transport {
   private queue: string[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private off: (() => void) | null = null;
+  private offStatus: (() => void) | null = null;
   private closed = false;
+  private gone = false;
 
   /** Messages actually put on the wire, so the cost is observable. */
   sent = 0;
@@ -98,6 +100,25 @@ export class RealtimeTransport implements Transport {
     this.off = this.pair.onBytes(fn);
   }
 
+  /**
+   * The channel's own status, for a pair whose game is riding on it.
+   *
+   * A relayed session has no peer connection to lose, so the only way this link
+   * dies is the websocket underneath it -- which the Supabase client will try
+   * to bring back on its own. Saying so anyway is right: the page can tell
+   * somebody why their game stopped, and a reconnect that succeeds clears the
+   * message it put up.
+   */
+  onClosed(fn: (why: string) => void): void {
+    this.offStatus?.();
+    this.offStatus = this.pair.onStatus((status) => {
+      if (this.closed || this.gone) return;
+      if (status === "SUBSCRIBED") return;
+      this.gone = true;
+      fn("the channel went " + status.toLowerCase());
+    });
+  }
+
   close(): void {
     // Flushed FIRST. Whatever is still queued is the last thing this session
     // had to say, and the one message that is reliably in there is the Quit
@@ -109,6 +130,8 @@ export class RealtimeTransport implements Transport {
     this.timer = null;
     this.off?.();
     this.off = null;
+    this.offStatus?.();
+    this.offStatus = null;
     // The channel itself is NOT closed here. It outlives any one game: it is
     // also the pair's presence and their invitations, and hanging up on those
     // because a level ended would take the pair offline to each other.

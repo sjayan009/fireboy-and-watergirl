@@ -50,6 +50,8 @@ class DataChannelTransport implements Transport {
   private _rtt: number | null = null;
 
   private rttTimer: ReturnType<typeof setInterval> | null = null;
+  private closedHandler: ((why: string) => void) | null = null;
+  private gone = false;
 
   constructor(private pc: RTCPeerConnection, private dc: RTCDataChannel) {
     dc.binaryType = "arraybuffer";
@@ -57,6 +59,30 @@ class DataChannelTransport implements Transport {
     // WebRTC reports round trip time in its stats; the session uses it to size
     // the input delay rather than guessing.
     this.rttTimer = setInterval(() => void this.sampleRtt(), 2000);
+
+    // The same signal `connectWebRTC` watches during the handshake, kept live
+    // afterwards -- where it used to be set and then never consulted again,
+    // because the promise it belonged to had already settled.
+    //
+    // `disconnected` is included deliberately, even though ICE sometimes
+    // recovers from it on its own. A pair whose link comes back finds a page
+    // that reconnects them anyway, and the cost of saying so early is a banner
+    // that clears itself; the cost of waiting for `failed` is up to thirty
+    // seconds of a game that has already stopped.
+    pc.onconnectionstatechange = () => {
+      const state = pc.connectionState;
+      if (state === "failed" || state === "disconnected" || state === "closed") {
+        this.linkGone("the peer connection " + state);
+      }
+    };
+    dc.onclose = () => this.linkGone("the data channel closed");
+    dc.onerror = () => this.linkGone("the data channel failed");
+  }
+
+  private linkGone(why: string): void {
+    if (this.gone) return;
+    this.gone = true;
+    this.closedHandler?.(why);
   }
 
   private async sampleRtt(): Promise<void> {
@@ -84,8 +110,12 @@ class DataChannelTransport implements Transport {
   }
 
   onMessage(fn: (d: Uint8Array) => void): void { this.handler = fn; }
+  onClosed(fn: (why: string) => void): void { this.closedHandler = fn; }
 
   close(): void {
+    // Hanging up is not losing the link. Whoever called this knows, and firing
+    // at them would turn every deliberate departure into a lost connection.
+    this.gone = true;
     // The stats poll has to be stopped by hand. It never mattered while a page
     // built one connection and kept it until reload; now a pair connects,
     // cancels, and connects again, and every abandoned attempt would otherwise
