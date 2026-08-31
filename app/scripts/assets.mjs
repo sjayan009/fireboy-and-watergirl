@@ -12,10 +12,17 @@
  *
  * Two transforms, both measured rather than assumed:
  *
- *   sprites   PNG -> WebP at quality 80, effort 6: 72-80% smaller on this art,
+ *   sprites   PNG -> WebP at quality 80, effort 4: 72-80% smaller on this art,
  *             from sweeping settings against the real files rather than
  *             reaching for a default. Flat cartoon shapes with large
  *             single-colour regions are close to the best case for WebP.
+ *
+ *             Effort 4 rather than 6 because 6 turned out to cost NINETEEN
+ *             TIMES the encode time for 4% smaller files -- 9.0 s against
+ *             0.48 s for two hundred frames on two lanes. That is 0.2 MB
+ *             across the whole set, against seventeen minutes of a two-core
+ *             CI runner. Nobody would take that trade knowingly; it was taken
+ *             by leaving a default alone.
  *
  *   audio     `sounds/` already holds the ORIGINAL compressed streams JPEXS
  *             pulled out of the SWF; `sounds_wav/` holds them decoded, and the
@@ -46,6 +53,7 @@ import { readFile, writeFile, mkdir, readdir, stat, copyFile, rm } from
 import { existsSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { availableParallelism } from "node:os";
 import sharp from "sharp";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -54,7 +62,7 @@ const FROM = resolve(ROOT, "extracted/assets");
 const TO = resolve(HERE, "../dist/extracted/assets");
 
 const QUALITY = 80;
-const EFFORT = 6;
+const EFFORT = 4;
 
 /** Never shipped: 116 MB of JPEXS intermediates the rest was derived from. */
 const SKIP_DIRS = new Set(["_raw"]);
@@ -62,8 +70,14 @@ const SKIP_DIRS = new Set(["_raw"]);
 /** Directories whose PNGs become WebP. Vectors and fonts gain nothing. */
 const RASTER_DIRS = new Set(["sprites", "images"]);
 
-/** How many images to encode at once. libvips is already threaded. */
-const LANES = 8;
+/**
+ * How many images to encode at once.
+ *
+ * The machine's own figure, not a guess: eight lanes on a two-core CI runner is
+ * contention, and eight on a twenty-two core desktop is a quarter of the
+ * machine idle.
+ */
+const LANES = Math.max(1, availableParallelism());
 
 /** For each sound the game uses, the smallest file that will play. */
 async function audioPlan() {
