@@ -20,9 +20,9 @@
  * The signature is also readable. On a mismatch this prints WHICH cells moved
  * and by how much, and writes both frames to `snaps/` to be looked at.
  */
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { loadPlaywright, startServer, ROOT } from "./harness.mjs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 const PORT = 5195;
 const URL_ = `http://localhost:${PORT}/`;
@@ -158,8 +158,15 @@ if (!golden) {
 
 // Keep the fresh set beside the golden one, so a deliberate change is a diff
 // somebody can read rather than a file to regenerate blind.
-writeFileSync(resolve(ROOT, "snaps/rendersignatures.json"),
-              JSON.stringify(fresh, null, 1) + "\n");
+//
+// The directory is created first because `snaps/` is gitignored: it exists on
+// every machine that has ever run this and on no fresh checkout -- which is
+// what CI is. The nightly died right here, after thirteen minutes of
+// everything else passing, on a line that writes a convenience file nothing
+// asserts against.
+const out = resolve(ROOT, "snaps/rendersignatures.json");
+mkdirSync(dirname(out), { recursive: true });
+writeFileSync(out, JSON.stringify(fresh, null, 1) + "\n");
 
 console.log("\n" + (failures === 0 ? "GOLDEN RENDER PASSED"
                                    : `GOLDEN RENDER FAILED (${failures})`));
