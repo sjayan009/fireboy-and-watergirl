@@ -49,12 +49,14 @@ class DataChannelTransport implements Transport {
   private handler: ((d: Uint8Array) => void) | null = null;
   private _rtt: number | null = null;
 
+  private rttTimer: ReturnType<typeof setInterval> | null = null;
+
   constructor(private pc: RTCPeerConnection, private dc: RTCDataChannel) {
     dc.binaryType = "arraybuffer";
     dc.onmessage = (e) => this.handler?.(new Uint8Array(e.data as ArrayBuffer));
     // WebRTC reports round trip time in its stats; the session uses it to size
     // the input delay rather than guessing.
-    setInterval(() => void this.sampleRtt(), 2000);
+    this.rttTimer = setInterval(() => void this.sampleRtt(), 2000);
   }
 
   private async sampleRtt(): Promise<void> {
@@ -84,6 +86,12 @@ class DataChannelTransport implements Transport {
   onMessage(fn: (d: Uint8Array) => void): void { this.handler = fn; }
 
   close(): void {
+    // The stats poll has to be stopped by hand. It never mattered while a page
+    // built one connection and kept it until reload; now a pair connects,
+    // cancels, and connects again, and every abandoned attempt would otherwise
+    // leave a timer asking a closed peer connection for statistics forever.
+    if (this.rttTimer !== null) clearInterval(this.rttTimer);
+    this.rttTimer = null;
     try { this.dc.close(); } catch { /* already gone */ }
     try { this.pc.close(); } catch { /* already gone */ }
   }
@@ -97,14 +105,22 @@ class DataChannelTransport implements Transport {
  * perfect-negotiation machinery is needed.
  *
  * Rejects on timeout; the caller falls back to the signalling channel itself.
+ * Rejects at once if `signal` aborts, so somebody who changes their mind
+ * halfway through a handshake is not made to sit out the timeout first.
  */
 export function connectWebRTC(
   sig: Transport, caller: boolean,
-  opts: { timeoutMs?: number; iceServers?: RTCIceServer[] } = {},
+  opts: {
+    timeoutMs?: number; iceServers?: RTCIceServer[]; signal?: AbortSignal;
+  } = {},
 ): Promise<Transport> {
   const timeoutMs = opts.timeoutMs ?? 8000;
 
   return new Promise((resolve, reject) => {
+    if (opts.signal?.aborted) {
+      reject(new Error("cancelled"));
+      return;
+    }
     const pc = new RTCPeerConnection({
       iceServers: opts.iceServers ?? DEFAULT_ICE,
     });
@@ -113,12 +129,18 @@ export function connectWebRTC(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
       fn();
     };
     const timer = setTimeout(() => finish(() => {
       pc.close();
       reject(new Error("no peer connection within " + timeoutMs + "ms"));
     }), timeoutMs);
+    const onAbort = () => finish(() => {
+      pc.close();
+      reject(new Error("cancelled"));
+    });
+    opts.signal?.addEventListener("abort", onAbort);
 
     pc.onicecandidate = (e) => {
       if (e.candidate) sig.send(encodeSignal({ ice: e.candidate.toJSON() }));

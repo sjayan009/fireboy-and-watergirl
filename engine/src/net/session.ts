@@ -121,9 +121,31 @@ export interface SessionOptions {
   /** Solo: no remote peer, so never stall waiting for one. */
   solo?: boolean;
   onDesync?: (frame: number, mine: string, theirs: string) => void;
+  /**
+   * A Quit took effect and the level is over, with `bySlot` naming who asked.
+   *
+   * Both peers hear this on the same frame, including the one who sent it, so a
+   * page can say "they left" or "you left" from the same callback instead of
+   * inferring it from which button was last pressed.
+   *
+   * `forGood` separates the two very different things a Quit can mean: back to
+   * the map to pick another level, or that person closing the tab. They travel
+   * as one command because they are one thing to the simulation, and they are
+   * nothing alike to the person left sitting there.
+   */
+  onQuit?: (bySlot: Slot, forGood: boolean) => void;
 }
 
-const MODES = ["adventure", "puzzle", "speed"];
+/**
+ * The three modes, in the order the wire numbers them and the order the ported
+ * `StartGame` switches on -- adventure is type 1, so `MODES[type - 1]`.
+ *
+ * Exported because three places need the same list and disagreeing about it
+ * would be a session where each peer started a different level: `Command.Start`
+ * carries the index, `GameHost` turns it back into the type digit, and the
+ * shell reads it out of a map node's name.
+ */
+export const MODES = ["adventure", "puzzle", "speed"];
 
 /**
  * How many further times a command is sent after the first.
@@ -147,6 +169,7 @@ export class NetSession {
   private readonly hashEvery: number;
   private readonly solo: boolean;
   private readonly onDesync?: SessionOptions["onDesync"];
+  private readonly onQuit?: SessionOptions["onQuit"];
 
   /** Per-slot input, indexed by absolute frame. undefined = not yet known. */
   private input: [(number | undefined)[], (number | undefined)[]] = [[], []];
@@ -240,6 +263,7 @@ export class NetSession {
     this.hashEvery = o.hashEvery ?? 8;
     this.solo = o.solo ?? false;
     this.onDesync = o.onDesync;
+    this.onQuit = o.onQuit;
     this.snapLag = o.snapLag ?? this.hashEvery;
     if (this.rollbackOn) this.snap = new Snapshot();
     this.transport.onMessage((d) => this.receive(d));
@@ -247,6 +271,25 @@ export class NetSession {
 
   /** Whether this session predicts and corrects rather than waiting. */
   get predicting(): boolean { return this.rollbackOn && !this.solo; }
+
+  /**
+   * Whether a level is running and this session owns the clock.
+   *
+   * False before the first Start and again after a Quit, and that gap is a real
+   * state rather than a broken one: the pair is still connected, still hears
+   * each other's commands, and is sitting on the map deciding what to play
+   * next. The page has to know, because between levels the SHELL runs -- the
+   * map, its fireflies, the boards -- and nothing shared is being simulated, so
+   * the clock belongs to the page's own loop and not to this.
+   */
+  get running(): boolean { return this.started; }
+
+  /**
+   * Which build of the level this peer is on. Two peers in step are on the
+   * same one, and a test that only compares digests cannot see the difference
+   * between "agreed" and "both idle on nothing".
+   */
+  get generation(): number { return this.epoch; }
 
   // ---- starting ---------------------------------------------------------
 
@@ -306,8 +349,17 @@ export class NetSession {
     this.captures++;
   }
 
-  /** Ask the other peer to start a level, and start it ourselves. */
+  /**
+   * Ask the other peer to start a level, and start it ourselves.
+   *
+   * Refused while a level is already running. The one caller that could reach
+   * this mid-level is a map click, and the map is not on screen mid-level --
+   * but a Start applied on one peer and dropped by the other's `started` guard
+   * is a divergence with no way back, so it is worth being explicit rather
+   * than relying on where the button happens to live.
+   */
   requestStart(mode: string, num: number): void {
+    if (this.started) return;
     const m = Math.max(0, MODES.indexOf(mode));
     // Start is the one command that cannot be scheduled on a future frame:
     // there is no session running yet to count frames in.
@@ -319,6 +371,34 @@ export class NetSession {
     // Re-sent like any other command: a lost Start is a game that never begins.
     this.outbox.push({ packet, left: COMMAND_RESENDS });
     this.begin(mode, num);
+  }
+
+  /**
+   * Leave for good, and make sure they hear about it.
+   *
+   * Not `send(Command.Quit)`, and the difference is the whole point. An
+   * ordinary command is scheduled a rollback window into the future so both
+   * peers apply it on the same frame -- which works because both peers keep
+   * feeding each other the input needed to GET to that frame. Somebody closing
+   * their tab does not: they schedule a Quit ten frames ahead and then send
+   * nothing else, so the peer runs to the edge of its prediction window and
+   * stalls one frame short of the very command that would have released it.
+   * It is a race the leaver always wins by leaving.
+   *
+   * So a departure is not scheduled at all. There is no longer a pair to keep
+   * in step, so there is nothing for the two of them to disagree about, and the
+   * honest thing is to apply it the moment it lands. Sent a few times because
+   * the resends ride on input packets that are not coming either.
+   */
+  depart(): void {
+    if (!this.started) return;
+    const packet = encodeCommand({
+      kind: Kind.Command, slot: this.slot, epoch: this.epoch,
+      frame: this.frame, command: Command.Quit, a: this.slot, b: 1,
+    });
+    if (!this.solo) for (let i = 0; i < 3; i++) this.transport.send(packet);
+    this.host.quit();
+    this.started = false;
   }
 
   // ---- input ------------------------------------------------------------
@@ -454,6 +534,17 @@ export class NetSession {
 
     if (p.command === Command.Start) {
       if (!this.started) this.begin(MODES[p.a] ?? "adventure", p.b);
+      return;
+    }
+    // A peer that has gone. See `depart`: this one is deliberately not
+    // scheduled, because the frame it would be scheduled on is one this peer
+    // may never be able to reach -- the input that would carry it there left
+    // with them.
+    if (p.command === Command.Quit && p.b === 1) {
+      if (!this.started) return;
+      this.host.quit();
+      this.started = false;
+      this.onQuit?.((p.a === 1 ? 1 : 0) as Slot, true);
       return;
     }
     // Only a command we did not already have is worth re-simulating for. This
@@ -671,7 +762,11 @@ export class NetSession {
     switch (command) {
       case Command.Pause: this.host.pause(); break;
       case Command.Retry: this.retryLevel(); break;
-      case Command.Quit: this.host.quit(); this.started = false; break;
+      case Command.Quit:
+        this.host.quit();
+        this.started = false;
+        this.onQuit?.((a === 1 ? 1 : 0) as Slot, b === 1);
+        break;
       case Command.Start: this.begin(MODES[a] ?? "adventure", b); break;
     }
   }

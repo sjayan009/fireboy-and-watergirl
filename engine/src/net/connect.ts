@@ -32,8 +32,11 @@ export interface Connection {
  */
 export async function connect(
   rendezvous: Transport, caller: boolean,
-  opts: { timeoutMs?: number; iceServers?: RTCIceServer[] } = {},
+  opts: {
+    timeoutMs?: number; iceServers?: RTCIceServer[]; signal?: AbortSignal;
+  } = {},
 ): Promise<Connection> {
+  if (opts.signal?.aborted) throw new Error("cancelled");
   if (typeof RTCPeerConnection === "undefined") {
     return { transport: rendezvous, kind: "relay", reason: "no WebRTC here" };
   }
@@ -41,6 +44,10 @@ export async function connect(
     const transport = await connectWebRTC(rendezvous, caller, opts);
     return { transport, kind: "webrtc" };
   } catch (e) {
+    // Everything else here is a reason to fall back to the relay. Being
+    // cancelled is not: somebody pressed Cancel, and quietly handing them a
+    // working relay session instead is the opposite of what they asked for.
+    if (opts.signal?.aborted) throw new Error("cancelled");
     return {
       transport: rendezvous,
       kind: "relay",

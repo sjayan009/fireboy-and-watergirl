@@ -10,12 +10,8 @@ import {
   advanceTree, enterFrameTree, MouseEvent, SoundBus,
 } from "../flash/flash.js";
 import { applyInput, hashLevel } from "./hash.js";
-import { SessionHost } from "./session.js";
+import { MODES, SessionHost } from "./session.js";
 import { Snapshot } from "./snapshot.js";
-
-const MODE_INDEX: Record<string, number> = {
-  adventure: 1, puzzle: 2, speed: 3,
-};
 
 export class GameHost implements SessionHost {
   constructor(private game: any) {}
@@ -72,7 +68,7 @@ export class GameHost implements SessionHost {
    */
   start(mode: string, num: number): void {
     const g = this.game;
-    const type = MODE_INDEX[mode] ?? 1;
+    const type = MODES.indexOf(mode) + 1 || 1;
     const name = `${type}_${num}`;
     const node = g.Translation ? g.Translation.indexOf(name) + 1 : 0;
 

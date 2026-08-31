@@ -20,10 +20,28 @@
  *
  * The two stay in step: picking a node with the mouse moves the keyboard
  * cursor to it, so arrow keys carry on from wherever the pointer left off.
+ *
+ * ## The intent hook
+ *
+ * Every button on this screen is one of two kinds, and dispatching them the
+ * same way is a bug in a netplay session.
+ *
+ * Retry, quit, pause and picking a level all change state BOTH peers simulate.
+ * The whole `Game` is inside the rollback snapshot, so applying one of them
+ * here -- locally, the moment the mouse comes up -- is either erased by the
+ * next correction restoring the snapshot the click was supposed to change, or
+ * kept and never told to the other machine. Both outcomes look to a player like
+ * a button that does nothing.
+ *
+ * So a caller may install `onIntent`, and the shell asks it before dispatching
+ * anything. A session answers "handled" and sends a command instead, to be
+ * applied on a frame both peers agree on. With no hook installed -- solo, and
+ * every engine test -- not one dispatch changes.
  */
 import {
   DisplayObject, KeyboardEvent, MouseEvent, Keyboard, Stage,
 } from "../flash/flash.js";
+import { MODES } from "../net/session.js";
 
 /** Which of the 32 map nodes is highlighted, 1-based like Game.cur_node. */
 const FIRST_NODE = 1;
@@ -41,13 +59,27 @@ function setState(target: any, state: "up" | "over" | "down"): void {
   if (target) target.__btnState = state;
 }
 
-function click(target: any): void {
+function dispatch(target: any): void {
   if (!target) return;
   target.dispatchEvent(new MouseEvent(MouseEvent.CLICK, target));
   // Several screens listen for MOUSE_DOWN rather than CLICK -- the pause
   // tray's retry and end-game buttons, the results board's back button.
   target.dispatchEvent(new MouseEvent(MouseEvent.MOUSE_DOWN, target));
 }
+
+/**
+ * What a button MEANS, as opposed to which clip it is.
+ *
+ * Only the buttons that change shared state are named here. Everything else --
+ * the intro menu, the instructions, the credits, the map's navigation -- is
+ * this player looking around their own copy of the shell, and travels nowhere.
+ */
+export type Intent =
+  | { kind: "retry" }
+  | { kind: "quit" }
+  | { kind: "pause" }
+  | { kind: "mute" }
+  | { kind: "start"; mode: string; num: number };
 
 function roll(target: any, over: boolean): void {
   if (!target) return;
@@ -68,6 +100,73 @@ export class ShellInput {
   private readonly introButtons = ["Starter", "Instructer", "Crediter"];
 
   constructor(private game: any, private stage: Stage) {}
+
+  // ---- intents ----------------------------------------------------------
+
+  private intentHandler: ((i: Intent) => boolean) | null = null;
+
+  /**
+   * Be asked before any button is dispatched.
+   *
+   * Return true to swallow the click -- the caller has taken responsibility for
+   * making it happen, which for a session means scheduling a command on a frame
+   * both peers agree on. Return false and the ported handler runs exactly as it
+   * always has.
+   */
+  onIntent(fn: (i: Intent) => boolean): () => void {
+    this.intentHandler = fn;
+    return () => { if (this.intentHandler === fn) this.intentHandler = null; };
+  }
+
+  /** Ask about the button, then dispatch it if nobody claimed it. */
+  private click(target: any): void {
+    if (!target) return;
+    if (this.intentHandler) {
+      const intent = this.intentFor(target);
+      if (intent && this.intentHandler(intent)) return;
+    }
+    dispatch(target);
+  }
+
+  /**
+   * Which of the shared-state buttons this clip is, if it is one.
+   *
+   * Compared by IDENTITY against the clips the ported code built, not by name.
+   * Names in this shell are not unique -- every map node is a `b_*`, and the
+   * boards reuse `RetryBtn` and `ToMenuBtn` between them -- so identity is the
+   * only test that cannot quietly match the wrong thing after a rebuild.
+   */
+  private intentFor(target: any): Intent | null {
+    const g = this.game as any;
+
+    if (g.m_muter && target === g.m_muter.muteBtn) return { kind: "mute" };
+
+    if (g.m_pauseMenu) {
+      if (target === g.m_pauseMenu.btn) return { kind: "pause" };
+      if (target === g.m_pauseMenu.retryBtn) return { kind: "retry" };
+      if (target === g.m_pauseMenu.endGameBtn) return { kind: "quit" };
+    }
+
+    const board: any = this.overlay();
+    const inner = board && (board.GOboard || board.Rboard);
+    if (inner) {
+      if (target === inner.RetryBtn) return { kind: "retry" };
+      if (target === inner.ToMenuBtn) return { kind: "quit" };
+    }
+
+    // A map node. `Translation` holds "1_13" -- type then level -- and the type
+    // digit is the same one `StartGame` switches on.
+    if (g.m_mainMenu && this.has(g.m_mainMenu)) {
+      const name: string = (target && target.name) || "";
+      if (name.startsWith("b_") && g.m_mainMenu[name] === target) {
+        const parts = name.slice(2).split("_");
+        const mode = MODES[Number(parts[0]) - 1];
+        const num = Number(parts[1]);
+        if (mode && num > 0) return { kind: "start", mode, num };
+      }
+    }
+    return null;
+  }
 
   // ---- what is on screen ------------------------------------------------
 
@@ -163,7 +262,7 @@ export class ShellInput {
 
     // The mute button is reachable wherever it exists.
     if (key === "m" && this.has(g.m_muter)) {
-      click(g.m_muter.muteBtn);
+      this.click(g.m_muter.muteBtn);
       return true;
     }
 
@@ -174,13 +273,13 @@ export class ShellInput {
         return this.mapKey(code);
       case "instructions":
         if (code === Keyboard.ENTER || code === Keyboard.ESCAPE) {
-          click(g.instr.OKO);
+          this.click(g.instr.OKO);
           return true;
         }
         return false;
       case "credits":
         if (code === Keyboard.ENTER || code === Keyboard.ESCAPE) {
-          click(g.crd.OKO);
+          this.click(g.crd.OKO);
           return true;
         }
         return false;
@@ -201,7 +300,7 @@ export class ShellInput {
       return true;
     }
     if (code === Keyboard.ENTER || code === Keyboard.SPACE) {
-      click(buttons[this.introButtons[this.introSel]]);
+      this.click(buttons[this.introButtons[this.introSel]]);
       return true;
     }
     return false;
@@ -216,10 +315,10 @@ export class ShellInput {
       case Keyboard.DOWN:  this.step(0, 1); return true;
       case Keyboard.ENTER:
       case Keyboard.SPACE:
-        click(this.nodeButton(this.nodeSel));
+        this.click(this.nodeButton(this.nodeSel));
         return true;
       case Keyboard.ESCAPE:
-        click(g.m_mainMenu.BackToIntro);
+        this.click(g.m_mainMenu.BackToIntro);
         return true;
     }
     return false;
@@ -230,11 +329,11 @@ export class ShellInput {
     const inner = board.GOboard || board.Rboard;
     if (!inner) return false;
     if (key === "r" && inner.RetryBtn) {
-      click(inner.RetryBtn);
+      this.click(inner.RetryBtn);
       return true;
     }
     if (code === Keyboard.ENTER || code === Keyboard.ESCAPE) {
-      click(inner.ToMenuBtn);
+      this.click(inner.ToMenuBtn);
       return true;
     }
     return false;
@@ -254,8 +353,8 @@ export class ShellInput {
         return true;
       }
       if (code === Keyboard.ENTER) {
-        click(this.traySel === 0 ? g.m_pauseMenu.retryBtn
-                                 : g.m_pauseMenu.endGameBtn);
+        this.click(this.traySel === 0 ? g.m_pauseMenu.retryBtn
+                                      : g.m_pauseMenu.endGameBtn);
         return true;
       }
     }
@@ -305,7 +404,7 @@ export class ShellInput {
     this.pressed = null;
     if (!target) return false;
     setState(target, "up");
-    click(target);
+    this.click(target);
     // The click usually tears down the screen the button lived on, so the
     // hover is stale: a later ROLL_OUT would fire at a detached clip.
     this.hovered = null;

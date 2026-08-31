@@ -234,6 +234,72 @@ try {
   };
   check("each sees the other online", await seeEachOther(), true);
 
+  /**
+   * Press a button INSIDE the canvas, the way a mouse does.
+   *
+   * Through the shell rather than at a pixel, because the point of the test is
+   * what happens after the button is identified -- and hard-coding where a map
+   * node is drawn would make it a test of the artwork.
+   */
+  const pressInGame = (page, path) => page.evaluate((where) => {
+    const v = window.__fbwg.view;
+    const target = where.split(".").reduce((o, k) => o && o[k], v.game);
+    if (!target) throw new Error("no such button: " + where);
+    v.shell.pointerDown(target);
+    v.shell.pointerUp();
+  }, path);
+
+  /** Poll both pages with one evaluate each until they agree with `want`. */
+  const until = async (read, want, tries = 60, gap = 150) => {
+    let last = null;
+    for (let i = 0; i < tries; i++) {
+      last = await Promise.all([a, b].map((p) => p.evaluate(read)));
+      if (want(last)) return last;
+      await a.waitForTimeout(gap);
+    }
+    return null;
+  };
+
+  console.log("\nan invitation can be taken back");
+  {
+    // Cancel used to hide the banner and nothing else: the invitation carried
+    // on being accepted behind it and the game started anyway.
+    await a.click(".panel .row button:has-text('Invite')");
+    await a.waitForSelector(".banner select");
+    await a.click(".banner button:has-text('Send invite')");
+    await b.waitForSelector(".banner:has-text('wants to play')", { timeout: 30000 });
+
+    await a.click(".banner button:has-text('Cancel')");
+    await b.waitForSelector(".banner:has-text('called that off')", { timeout: 20000 });
+    check("bob is told, rather than left holding an invitation",
+          /called that off/.test(await b.locator(".banner").innerText()), true);
+    check("and neither of them ended up in a game",
+          await Promise.all([a, b].map((p) =>
+            p.evaluate(() => window.__fbwg.view.session === null))),
+          [true, true]);
+    await b.click(".banner button:has-text('Dismiss')");
+    check("and alice can invite again",
+          await a.locator(".panel .row button:has-text('Invite')").isEnabled(),
+          true);
+  }
+
+  console.log("\nand declined, which is an answer and not silence");
+  {
+    // "Not now" used to do nothing at all, so the only way to decline was to say
+    // nothing -- which is also what somebody who has walked away from their desk
+    // does. The inviter waited out two full minutes either way.
+    await a.click(".panel .row button:has-text('Invite')");
+    await a.waitForSelector(".banner select");
+    await a.click(".banner button:has-text('Send invite')");
+    await b.waitForSelector(".banner:has-text('wants to play')", { timeout: 30000 });
+
+    await b.click(".banner button:has-text('Not now')");
+    await a.waitForSelector(".banner:has-text('not now')", { timeout: 20000 });
+    check("alice hears it, well inside the two minutes she used to wait",
+          /not now/.test(await a.locator(".banner").innerText()), true);
+    check("and bob's banner is gone", await b.locator(".banner").isHidden(), true);
+    await a.click(".banner button:has-text('Cancel')");
+  }
 
   console.log("\nalice invites bob, and assigns the roles");
   await a.click(".panel .row button:has-text('Invite')");
@@ -325,6 +391,107 @@ try {
     p.evaluate(() => window.__fbwg.view.session.desyncs)));
   check("no desyncs", desyncs, [0, 0]);
 
+  console.log("\nthe buttons inside the game reach both machines");
+  {
+    // The bug this is here for: a click on the canvas ran the ported 2009
+    // handler locally and told nobody, so it either desynced the pair or -- if
+    // it landed inside the rollback window -- was erased by the next correction
+    // restoring a snapshot that still had the screen it was meant to dismiss.
+    await pressInGame(b, "m_pauseMenu.btn");
+    const paused = await until(
+      () => !!window.__fbwg.view.game.m_level?.pause,
+      (both) => both[0] && both[1]);
+    check("one player's mouse on the pause tab pauses both", paused, [true, true]);
+
+    const before = await Promise.all([a, b].map((p) =>
+      p.evaluate(() => window.__fbwg.view.simFrame)));
+    await pressInGame(b, "m_pauseMenu.retryBtn");
+    const retried = await until(() => ({
+      frame: window.__fbwg.view.session.frame,
+      digest: window.__fbwg.view.digest(),
+      paused: !!window.__fbwg.view.game.m_level?.pause,
+    }), (both) =>
+      both[0].frame < before[0] - 50 && both[1].frame < before[1] - 50 &&
+      both[0].frame === both[1].frame &&
+      !!both[0].digest && both[0].digest === both[1].digest);
+    check("and retry rebuilds the level on both, in step", retried !== null, true);
+    if (retried) {
+      check("nobody was left paused in the rebuilt level",
+            [retried[0].paused, retried[1].paused], [false, false]);
+    }
+    check("still no desyncs",
+          await Promise.all([a, b].map((p) =>
+            p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
+  }
+
+  console.log("\nback to the map, which has to be a place they can use");
+  {
+    // Quitting used to stop the world. The page handed its clock to a session
+    // that returns immediately when no level is running, so the map never drew
+    // a frame and a level built by the next click never advanced one.
+    await pressInGame(b, "m_pauseMenu.endGameBtn");
+    const left = await until(
+      () => ({ running: window.__fbwg.view.session.running,
+               level: window.__fbwg.view.level !== null }),
+      (both) => !both[0].running && !both[1].running &&
+                !both[0].level && !both[1].level);
+    check("both are out of the level", left !== null, true);
+
+    const first = await Promise.all([a, b].map((p) =>
+      p.evaluate(() => window.__fbwg.view.simFrame)));
+    await a.waitForTimeout(1000);
+    const second = await Promise.all([a, b].map((p) =>
+      p.evaluate(() => window.__fbwg.view.simFrame)));
+    const moving = [second[0] > first[0], second[1] > first[1]];
+    check("and the map is running, not frozen", moving, [true, true]);
+    if (!moving[0] || !moving[1]) {
+      // A frozen map and a map that is not there at all look identical from a
+      // frame counter, and they have nothing to do with each other.
+      for (const [tag, p] of [["A", a], ["B", b]]) {
+        console.log(`  [${tag}] ` + JSON.stringify(await p.evaluate(() => {
+          const v = window.__fbwg.view;
+          return {
+            screens: v.game.children.map((c) => c.symbol).filter(Boolean),
+            map: !!v.game.m_mainMenu,
+            node: !!(v.game.m_mainMenu && v.game.m_mainMenu.b_1_1),
+            level: !!v.game.m_level,
+            onStage: !!(v.game.m_level && v.game.m_level.parent),
+            session: v.session === null ? null : v.session.running,
+            sessionFrame: v.session === null ? null : v.session.frame,
+            viewFrame: v.simFrame,
+          };
+        })));
+      }
+    }
+
+    // Bob did not send the invitation, so the levels are not his to pick.
+    await pressInGame(b, "m_mainMenu.b_1_1");
+    await b.waitForSelector(".banner:has-text('to pick')", { timeout: 10000 });
+    check("bob is told the pick is not his",
+          await b.evaluate(() => window.__fbwg.view.session.running), false);
+
+    // Alice did, so hers starts it for both.
+    await pressInGame(a, "m_mainMenu.b_1_1");
+    const started = await until(() => ({
+      running: window.__fbwg.view.session.running,
+      mode: window.__fbwg.view.level?.CurrentMode ?? null,
+      num: window.__fbwg.view.level?.CurrentLevel ?? null,
+      digest: window.__fbwg.view.digest(),
+      frame: window.__fbwg.view.session.frame,
+    }), (both) => both[0].running && both[1].running &&
+                  both[0].frame === both[1].frame &&
+                  !!both[0].digest && both[0].digest === both[1].digest);
+    check("and alice's pick starts the same level on both", started !== null, true);
+    if (started) {
+      check("the level they both got",
+            [started[0].mode, started[0].num, started[1].mode, started[1].num],
+            ["adventure", 1, "adventure", 1]);
+    }
+    check("with no desyncs from any of it",
+          await Promise.all([a, b].map((p) =>
+            p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
+  }
+
   console.log("\nthe progress they see is the pair's, not each browser's");
   const seen = await Promise.all([a, b].map((p) => p.evaluate(() => {
     const cookie = window.__fbwg.view.game.The_cookie;
@@ -397,6 +564,41 @@ try {
   check("and a worse one from the other peer changes nothing",
         await stored(),
         [[1, 3, 25, "00:25"], [2, 0, null, null], [3, 0, null, null]]);
+  console.log("\nand one of them walking off mid-game says so");
+  {
+    // The block above deliberately stopped both loops to let a save settle, and
+    // a session only applies a command on a frame it actually runs.
+    // One page at a time, and asked whether the hook is there before reaching
+    // through it: driving both at once caught a page mid-render once and threw
+    // an error about the test harness rather than about the app.
+    for (const [tag, p] of [["A", a], ["B", b]]) {
+      const ready = await p.evaluate(() => typeof window.__fbwg === "object");
+      if (!ready) {
+        console.log(`  [${tag}] ` + JSON.stringify(await p.evaluate(() => ({
+          hash: location.hash,
+          stage: !!document.getElementById("stage"),
+        }))));
+        throw new Error(`page ${tag} has no play screen to resume`);
+      }
+      await p.evaluate(() => window.__fbwg.view.setRunning(true));
+    }
+
+    // Opening the friends list used to tear this screen down without a word,
+    // which to the other person is indistinguishable from the game having died:
+    // their partner stops moving and never starts again.
+    await b.click("a[href='#/friends']");
+    await a.waitForSelector(".banner:has-text('left the game')", { timeout: 20000 });
+    check("alice is told",
+          /left the game/.test(await a.locator(".banner").innerText()), true);
+    check("and is out of the session rather than stalled in it",
+          await a.evaluate(() => window.__fbwg.view.session === null), true);
+    check("so she can start another game",
+          await a.locator(".panel .row button:has-text('Invite')").isEnabled(),
+          true);
+    await b.click("a[href='#/play']");
+    await b.waitForSelector("#stage", { timeout: 20000 });
+  }
+
   console.log("\nand again with no peer connection available at all");
   {
     // The path a pair behind a strict NAT takes: no RTCPeerConnection, so the

@@ -80,12 +80,15 @@ class Link {
 interface Peer { session: NetSession; host: LevelHost; }
 
 function pair(link: Link, delay: number,
-              onDesync?: (s: Slot) => void): [Peer, Peer] {
+              onDesync?: (s: Slot) => void,
+              onQuit?: (heardBy: Slot, by: Slot, forGood: boolean) => void,
+): [Peer, Peer] {
   const make = (slot: Slot): Peer => {
     const host = new LevelHost();
     const session = new NetSession({
       slot, host, transport: link.endpoint(slot), delay,
       onDesync: () => onDesync?.(slot),
+      onQuit: (by, forGood) => onQuit?.(slot, by, forGood),
     });
     return { session, host };
   };
@@ -200,6 +203,108 @@ console.log("\nretry restarts both peers together");
         peers[0].session.frame === peers[1].session.frame, true);
   check("digests match after the retry",
         peers[0].host.hash() === peers[1].host.hash(), true);
+}
+
+console.log("\nquitting to the map, then starting another level");
+{
+  // The flow that used to strand a pair. Quit stops the session running, and
+  // for a while that also stopped the whole world: the page handed its clock to
+  // a session that returned immediately, so the map never drew a frame and the
+  // level a click built never advanced one.
+  const heard: [Slot, Slot, boolean][] = [];
+  const link = new Link(40, 0, 0);
+  const peers = pair(link, 3, undefined,
+                     (heardBy, by, forGood) => heard.push([heardBy, by, forGood]));
+  peers[0].session.requestStart("adventure", 1);
+  link.advance(STEP_MS);
+  run(link, peers, 300, scripted);
+  check("both are running a level",
+        [peers[0].session.running, peers[1].session.running], [true, true]);
+
+  peers[1].session.send(Command.Quit, 1);
+  run(link, peers, 60, scripted);
+  check("both left it",
+        [peers[0].session.running, peers[1].session.running], [false, false]);
+  check("and both were told who by, and that it was not for good",
+        heard.map((h) => [h[1], h[2]]), [[1, false], [1, false]]);
+
+  // Only one of them chooses levels, and this is that one.
+  peers[0].session.requestStart("puzzle", 3);
+  link.advance(STEP_MS);
+  run(link, peers, 400, scripted);
+  check("both started the new one",
+        [peers[0].session.running, peers[1].session.running], [true, true]);
+  check("and it is the same one",
+        [peers[0].host.lv.CurrentMode, peers[0].host.lv.CurrentLevel,
+         peers[1].host.lv.CurrentMode, peers[1].host.lv.CurrentLevel],
+        ["puzzle", 3, "puzzle", 3]);
+  check("on the same generation of it",
+        peers[0].session.generation === peers[1].session.generation, true);
+  check("in step", peers[0].host.hash() === peers[1].host.hash(), true);
+  check("with no desyncs",
+        peers[0].session.desyncs + peers[1].session.desyncs, 0);
+}
+
+console.log("\nboth players hitting retry at once");
+{
+  // Either player may retry, so both pressing at the same moment is ordinary,
+  // not exotic. They schedule on different frames; whichever is earlier applies
+  // on both, the epoch moves, and the later one is dropped as stale rather than
+  // retrying a second time -- which would leave the two on different builds of
+  // the same level with matching digests and no way to notice.
+  const link = new Link(40, 0, 0);
+  const peers = pair(link, 3);
+  peers[0].session.requestStart("adventure", 1);
+  link.advance(STEP_MS);
+  run(link, peers, 300, scripted);
+  const was = [peers[0].host.lv, peers[1].host.lv];
+  const generation = peers[0].session.generation;
+
+  peers[0].session.send(Command.Retry);
+  peers[1].session.send(Command.Retry);
+  run(link, peers, 400, scripted);
+
+  check("both rebuilt the level",
+        [peers[0].host.lv !== was[0], peers[1].host.lv !== was[1]],
+        [true, true]);
+  check("once each, not twice",
+        [peers[0].session.generation - generation,
+         peers[1].session.generation - generation], [1, 1]);
+  check("both are on the same frame",
+        peers[0].session.frame === peers[1].session.frame, true);
+  check("digests match", peers[0].host.hash() === peers[1].host.hash(), true);
+  check("with no desyncs",
+        peers[0].session.desyncs + peers[1].session.desyncs, 0);
+}
+
+console.log("\na peer that closes its tab is heard, not merely missed");
+{
+  // The one command that cannot be scheduled on a future frame. An ordinary
+  // command is applied a rollback window ahead, which works because both peers
+  // keep sending the input that carries each other there. Somebody who has gone
+  // sends nothing more, so a scheduled Quit sits one frame past the edge of the
+  // prediction window and the peer stalls in front of the very message that
+  // would have released it -- forever, and looking exactly like a crash.
+  const heard: [Slot, Slot, boolean][] = [];
+  const link = new Link(40, 0, 0);
+  const peers = pair(link, 3, undefined,
+                     (heardBy, by, forGood) => heard.push([heardBy, by, forGood]));
+  peers[0].session.requestStart("adventure", 1);
+  link.advance(STEP_MS);
+  run(link, peers, 300, scripted);
+  check("both were playing", peers[0].session.running, true);
+
+  // Peer 1 leaves and never ticks again, which is what a closed tab looks like.
+  peers[1].session.depart();
+  for (let i = 0; i < 200; i++) {
+    peers[0].session.setLocalInput(scripted(0, i));
+    link.advance(STEP_MS);
+    peers[0].session.tick(STEP);
+  }
+  check("the one still there was told, and told that it was for good",
+        heard, [[0, 1, true]]);
+  check("and is out of the level rather than stalled in front of it",
+        peers[0].session.running, false);
 }
 
 console.log("\na corrupted peer notices, and repairs itself by replaying");
