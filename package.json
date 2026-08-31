@@ -13,7 +13,8 @@
     "app:test": "npm --prefix app test",
     "check": "npm --prefix app run check",
     "test:all": "npm --prefix engine run test:full && npm run build && npm run check && npm run db:test && npm --prefix app test",
-    "test:db": "npm run db:test"
+    "test:db": "npm run db:test",
+    "test:deployed": "node app/test/deployed.mjs"
   },
   "description": "Fireboy & Watergirl: The Forest Temple, recovered from the 2009 SWF and rebuilt for online co-op.",
   "dependencies": {
