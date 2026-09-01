@@ -12,6 +12,7 @@ import {
   usernameScreen, verifyScreen,
 } from "./screens/accounts.js";
 import { playScreen } from "./screens/play.js";
+import { watchScreen } from "./screens/watch.js";
 import { friendsScreen } from "./screens/friends.js";
 import { settingsScreen } from "./screens/settings.js";
 
@@ -26,6 +27,7 @@ const routes: Route[] = [
   { path: "/username", stages: ["nameless"], render: usernameScreen },
   { path: "/play", stages: ["in"], render: playScreen },
   { path: "/friends", stages: ["in"], render: friendsScreen },
+  { path: "/watch", stages: ["in"], render: watchScreen },
   { path: "/settings", stages: ["in"], render: settingsScreen },
 ];
 

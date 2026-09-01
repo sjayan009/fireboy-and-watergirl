@@ -328,6 +328,49 @@ export async function verifyTotp(factorId: string, code: string): Promise<void> 
   await refresh(data.session);
 }
 
+/**
+ * Ten single-use codes, handed back exactly once.
+ *
+ * Any unused codes from a previous set are dropped by the database, so this is
+ * "these are your codes now" rather than "here are some more" -- two live sets
+ * would mean one somebody wrote down a year ago still works.
+ */
+export async function generateRecoveryCodes(): Promise<string[]> {
+  const { data, error } = await supabase.rpc("generate_recovery_codes");
+  fail(error);
+  return (data as string[]) ?? [];
+}
+
+export async function recoveryCodesLeft(): Promise<number> {
+  const { data, error } = await supabase.rpc("recovery_codes_left");
+  fail(error);
+  return (data as number) ?? 0;
+}
+
+/**
+ * Spend a code, which turns two-factor off.
+ *
+ * Not "let me past this once", because Supabase cannot express that: the second
+ * factor is an assurance level and a session reaches `aal2` only by answering a
+ * challenge. So recovery means unenrolling, and every screen that offers this
+ * says so before the button.
+ *
+ * `refresh` afterwards is what moves the stage: with no factor enrolled,
+ * `needsSecondFactor` is false and `locked` becomes `in`.
+ */
+export async function redeemRecoveryCode(code: string): Promise<void> {
+  const { data, error } = await supabase.rpc("redeem_recovery_code", { code });
+  fail(error);
+  if (data !== true) throw new Error("that is not one of your recovery codes");
+  // The factor is gone from the database and still in this browser's copy of
+  // the session, which is what `getAuthenticatorAssuranceLevel` reads to decide
+  // whether a second factor is owed. Without a new token the stage stays
+  // `locked` and the person who just used their last resort is left looking at
+  // the screen that asked for it.
+  const { data: fresh } = await supabase.auth.refreshSession();
+  await refresh(fresh?.session ?? state.session);
+}
+
 export async function unenrolTotp(factorId: string): Promise<void> {
   const { error } = await supabase.auth.mfa.unenroll({ factorId });
   fail(error);

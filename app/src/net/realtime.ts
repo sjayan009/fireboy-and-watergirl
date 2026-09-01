@@ -30,7 +30,21 @@
  * Verify the quota against current pricing before relying on those numbers.
  */
 import { Transport } from "@engine/net/transport.js";
-import { PairChannel, encode } from "./pairchannel.js";
+import { encode } from "./pairchannel.js";
+
+/**
+ * The three things this needs from a channel, and nothing else.
+ *
+ * Named rather than taking a `PairChannel`, because a watcher rides the same
+ * transport over a different topic -- and asking for the whole pair channel
+ * would have meant handing a spectator an object that also carries the two
+ * players' presence and invitations.
+ */
+export interface ByteChannel {
+  onBytes(fn: (d: Uint8Array) => void): () => void;
+  sendBytes(packets: string[]): void;
+  onStatus(fn: (status: string) => void): () => void;
+}
 
 /**
  * How long packets may wait before going out, in milliseconds.
@@ -52,7 +66,7 @@ export class RealtimeTransport implements Transport {
   /** Messages actually put on the wire, so the cost is observable. */
   sent = 0;
 
-  constructor(private readonly pair: PairChannel) {}
+  constructor(private readonly pair: ByteChannel) {}
 
   /**
    * Realtime gives no round-trip figure, and measuring one would mean sending
