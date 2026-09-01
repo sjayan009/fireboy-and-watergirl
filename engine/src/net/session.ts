@@ -227,6 +227,8 @@ export class NetSession {
    */
   private outbox: {
     packet: Uint8Array; left: number; untilHeard?: boolean;
+    /** The generation this was minted on; see `drainOutbox`. */
+    epoch: number;
   }[] = [];
   /** Whether the peer has sent anything at all on this generation. */
   private heard = false;
@@ -272,8 +274,22 @@ export class NetSession {
   private started = false;
   /** True while waiting on the other peer's input. */
   stalled = false;
-  /** Frames spent stalled, for the connection readout. */
+  /**
+   * How long the CURRENT stall has lasted, in frames. Zero whenever a frame
+   * has just run.
+   *
+   * A duration, not a tally, and the difference is what a reader does with it:
+   * the page waits two seconds before saying "waiting for your friend", so that
+   * every jittery moment does not flash a warning. As a lifetime total that
+   * threshold is crossed once and then satisfied forever -- and a relayed pair
+   * crosses it in the first seconds, because batching at 115 ms means the
+   * session runs to the edge of its prediction window and waits on every burst.
+   * The message then flickered on and off at frame rate for the rest of the
+   * level. `stalls` is the tally, for anyone who wants one.
+   */
   stalledFrames = 0;
+  /** Frames spent stalled since the level began, for the connection readout. */
+  stalls = 0;
   desyncs = 0;
   /** Corrections made, and the deepest one, for the connection readout. */
   rollbacks = 0;
@@ -393,7 +409,9 @@ export class NetSession {
     this.confirmed = 0;
     this.lastRemote = 0;
     this.acc = 0;
+    this.stalled = false;
     this.stalledFrames = 0;
+    this.stalls = 0;
     this.owed = -1;
     this.snapFrame = -1;
     // The first `delay` frames have no decided input, so both peers agree in
@@ -444,7 +462,9 @@ export class NetSession {
     // two peers are stranded on different generations with nothing that can
     // notice, because every later packet is filtered by the epoch they no
     // longer share.
-    this.outbox.push({ packet, left: COMMAND_RESENDS, untilHeard: true });
+    this.outbox.push({
+      packet, left: COMMAND_RESENDS, untilHeard: true, epoch: this.epoch,
+    });
     this.begin(mode, num);
   }
 
@@ -550,7 +570,24 @@ export class NetSession {
       if (c.untilHeard) { this.transport.send(c.packet); continue; }
       if (c.left-- > 0) this.transport.send(c.packet);
     }
-    this.outbox = this.outbox.filter((c) => c.untilHeard || c.left > 0);
+    // "Until heard" is until heard on the generation it was sent for. A Start
+    // the peer never answered -- they closed the tab during the handshake -- is
+    // asking a question nobody is going to answer, and it used to be asked on
+    // every tick for the rest of the session, one stale entry per unanswered
+    // Start, each of them filtered by the epoch at the far end anyway.
+    this.outbox = this.outbox.filter((c) =>
+      (c.untilHeard && this.sameEpochRun(c.epoch)) || c.left > 0);
+  }
+
+  /**
+   * Whether a packet minted on `epoch` still belongs to the level we are on.
+   *
+   * A Start is sent on the generation BEFORE `begin` bumps it, so its own
+   * generation and the one it moved us to are both current for it, and nothing
+   * older is.
+   */
+  private sameEpochRun(epoch: number): boolean {
+    return epoch === this.epoch || ((epoch + 1) & 0xff) === this.epoch;
   }
 
   // ---- commands ---------------------------------------------------------
@@ -581,7 +618,7 @@ export class NetSession {
       frame: at, command, a, b,
     });
     this.transport.send(packet);
-    this.outbox.push({ packet, left: COMMAND_RESENDS });
+    this.outbox.push({ packet, left: COMMAND_RESENDS, epoch: this.epoch });
   }
 
   /**
@@ -817,9 +854,11 @@ export class NetSession {
       if (!this.ready(this.frame)) {
         this.stalled = true;
         this.stalledFrames++;
+        this.stalls++;
         return;
       }
       this.stalled = false;
+      this.stalledFrames = 0;
       const at = this.frame;
       this.runFrame(at);
       this.acc -= this.timeStep;
@@ -850,12 +889,17 @@ export class NetSession {
     const pending = this.commands.get(frame);
     if (pending) {
       for (const c of pending) this.applyCommand(c.command, c.a, c.b);
-      // Retry, Quit and Start all tear the level down and reset the frame
-      // count. There is no "rest of this frame" to run: the log this frame was
-      // indexed in no longer exists. Detected by the frame counter MOVING --
-      // it equals `frame` on the way in, so testing it against `frame` alone
-      // would abort every frame that carried any command at all.
-      if (this.frame !== frame) return;
+      // Retry and Start tear the level down and reset the frame count. There is
+      // no "rest of this frame" to run: the log this frame was indexed in no
+      // longer exists. Detected by the frame counter MOVING -- it equals
+      // `frame` on the way in, so testing it against `frame` alone would abort
+      // every frame that carried any command at all.
+      //
+      // Quit does not reset the count, which is why it needs the second test.
+      // Without it the frame went on to step a shell that had just been put
+      // back on the map, and `tick`'s loop carried on running frames of a level
+      // that had ended.
+      if (this.frame !== frame || !this.started) return;
     }
 
     // The peer's input, or the best guess at it: whatever they were doing last.
@@ -893,6 +937,12 @@ export class NetSession {
   }
 
   private applyCommand(command: Command, a: number, b: number): void {
+    // See `replaying`: rebuilding the level a second time would bump the epoch
+    // a second time, and only on this side.
+    if (this.replaying &&
+        (command === Command.Start || command === Command.Retry)) {
+      return;
+    }
     switch (command) {
       case Command.Pause: this.host.pause(); break;
       case Command.Retry: this.retryLevel(); break;
@@ -947,13 +997,34 @@ export class NetSession {
     this.owed = -1;
     this.snapFrame = -1;
     if (this.rollbackOn && !this.solo) this.takeSnapshot(0);
-    for (let f = 0; f < upto; f++) {
-      if (this.input[this.slot][f] === undefined) break;
-      if (!this.rollbackOn && this.input[this.other][f] === undefined) break;
-      this.runFrame(f);
-      if (this.frame <= f) break;            // a command rebuilt the level
+    this.replaying = true;
+    try {
+      for (let f = 0; f < upto; f++) {
+        if (this.input[this.slot][f] === undefined) break;
+        if (!this.rollbackOn && this.input[this.other][f] === undefined) break;
+        this.runFrame(f);
+        if (this.frame <= f) break;          // a command rebuilt the level
+      }
+    } finally {
+      this.replaying = false;
     }
   }
+
+  /**
+   * Set while `resync` walks the log again from frame zero.
+   *
+   * Every command in that log except one is safe to re-apply -- that is the
+   * whole point of `queueCommand`'s duplicate check. The exception is a command
+   * that rebuilds the level, because `begin` and `retryLevel` each bump the
+   * epoch, and a second bump on this side alone puts the two peers on
+   * generations that can never agree again: every later packet is filtered as
+   * stale, in both directions, with nothing left that could notice.
+   *
+   * It should be unreachable -- both of them call `resetLog`, which clears the
+   * command table, so no applied Start or Retry survives in it. This is the
+   * cheap way to keep it that way rather than a fix for something observed.
+   */
+  private replaying = false;
 
   /** How much of the level has been simulated, in seconds of play. */
   get elapsed(): number { return this.frame * this.timeStep; }

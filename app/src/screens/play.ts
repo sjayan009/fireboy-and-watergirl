@@ -60,6 +60,17 @@ const GRADES: Record<number, string> = { 3: "A", 2: "B", 1: "C", 0: "—" };
  */
 const STALL_FRAMES = 52;
 
+/**
+ * How long the link has to be healthy again before the message comes down.
+ *
+ * The banner appearing is cheap and the banner FLICKERING is not -- it relaid
+ * the page out at frame rate, which is what sent the scrollbar up and down.
+ * `stalledFrames` is now the length of the current stall rather than a lifetime
+ * tally, so this is no longer load-bearing; it is here so that one good frame
+ * inside a bad patch cannot blink the message away either.
+ */
+const RECOVERED_FRAMES = 26;
+
 export function playScreen(host: HTMLElement): () => void {
   const canvas = el("canvas", {
     id: "stage", width: STAGE_W, height: STAGE_H, tabindex: "0",
@@ -108,6 +119,15 @@ export function playScreen(host: HTMLElement): () => void {
     invite: Invite;
     slot: 0 | 1;
     iInvited: boolean;
+    /**
+     * Whose pick it is, which is NOT the same as who did the inviting.
+     *
+     * It starts as the inviter and moves with every handover, so it has to be
+     * remembered here: rebuilding a dropped link goes back through `begin`, and
+     * `begin` taking `ready.host` as the answer handed the pick silently back
+     * to the inviter while the banner still said otherwise.
+     */
+    chooser: string;
   } | null = null;
   /** Set while the link is being rebuilt, so nothing tries twice at once. */
   let rebuilding: AbortController | null = null;
@@ -146,6 +166,8 @@ export function playScreen(host: HTMLElement): () => void {
   let noticeText = "";
   /** What the status line last said, so it is not rewritten 26 times a second. */
   let lastStatus = "";
+  /** Whether presence has been told a level is running. */
+  let inGame = false;
 
   const view = new GameView({
     canvas,
@@ -156,6 +178,15 @@ export function playScreen(host: HTMLElement): () => void {
       // session it now drives this same local mute -- so neither button can own
       // the label and it is read back from the one thing both of them set.
       if (view.isMuted !== muted) syncMute();
+      // A level starting is not an event this screen is told about -- either
+      // peer's map click can begin one, and the command lands inside the
+      // session. Presence used to say "in a game" until the first level ended
+      // and "in the lobby" for the rest of the evening.
+      const playing = match !== null && (view.session?.running ?? false);
+      if (playing !== inGame) {
+        inGame = playing;
+        if (playing) void lobby?.setActivity("in_game");
+      }
       showHand();
       showShare();
       watchStall();
@@ -248,25 +279,42 @@ export function playScreen(host: HTMLElement): () => void {
    * Told to everyone who could watch, on the channels we are allowed to speak
    * on. Both players announce, so a friend of either of them hears about it.
    */
-  function announceShowing(on: boolean): void {
-    if (!match) return;
+  function announceShowing(on: boolean, m = match): void {
+    if (!m) return;
     const me = auth().profile?.username ?? "";
     lobby?.announceShowing({
-      topic: watchTopicFor(auth().user!.id, match.friend.id),
-      players: [me, match.friend.username],
+      topic: watchTopicFor(auth().user!.id, m.friend.id),
+      players: [me, m.friend.username],
       on,
     });
   }
 
+  /**
+   * Written only when it actually changes.
+   *
+   * `onFrame` runs 26 to 60 times a second, and assigning `textContent` the
+   * string it already holds still replaces the text node and dirties layout.
+   * With a stage whose height is a function of the page's width -- see the
+   * scrollbar gutter in styles.css -- a permanently dirty layout is a page that
+   * never settles.
+   */
+  function set(node: HTMLElement, text: string, hidden: boolean): void {
+    if (node.textContent !== text) node.textContent = text;
+    if (node.hidden !== hidden) node.hidden = hidden;
+  }
+
   function showShare(): void {
-    share.hidden = match === null || mirror === null;
-    share.textContent = sharing ? "Stop letting friends watch"
-                                : "Let friends watch";
+    // Gated on the match and not on the mirror. Only the inviter carries the
+    // feed, but being watched is not one of two people's decision to make: the
+    // other player flips the same switch and both are told.
+    set(share, sharing ? "Stop letting friends watch" : "Let friends watch",
+        match === null);
   }
 
   /** Put the pick where the pair has just agreed it goes. */
   function setChooser(chooser: string): void {
     const mine = chooser === auth().user?.id;
+    if (match) match.chooser = chooser;
     view.canChooseLevel = mine;
     showHand();
     // Both of them, because both need to know. Telling only the person who
@@ -283,8 +331,8 @@ export function playScreen(host: HTMLElement): () => void {
    */
   function showHand(): void {
     const between = match !== null && !(view.session?.running ?? true);
-    hand.hidden = !between || !view.canChooseLevel;
-    hand.textContent = `Let ${partner?.username ?? "them"} pick`;
+    set(hand, `Let ${partner?.username ?? "them"} pick`,
+        !between || !view.canChooseLevel);
   }
 
   host.append(el("div", { class: "play" },
@@ -349,13 +397,18 @@ export function playScreen(host: HTMLElement): () => void {
    * stops -- is indistinguishable from the game having crashed.
    */
   let stalling = false;
+  /** Frames since the session last looked stalled, for the hysteresis above. */
+  let healthy = 0;
   function watchStall(): void {
     const s = view.session;
     // Never while the link is being rebuilt. "Waiting for them" and "the
     // connection is gone" are the two things this whole change exists to tell
     // apart, and the weaker of the two must not overwrite the stronger.
-    const bad = !rebuilding && !!s && s.running && !s.linkDown &&
-                s.stalled && s.stalledFrames > STALL_FRAMES;
+    const live = !rebuilding && !!s && s.running && !s.linkDown;
+    healthy = live && s!.stalled ? 0 : healthy + 1;
+    const bad = stalling
+      ? live && healthy < RECOVERED_FRAMES
+      : live && s!.stalled && s!.stalledFrames > STALL_FRAMES;
     if (bad === stalling) return;
     stalling = bad;
     if (bad) notice(`Waiting for ${partner?.username ?? "your friend"}…`);
@@ -502,8 +555,18 @@ export function playScreen(host: HTMLElement): () => void {
   // outlives this screen, so an invitation still arrives while you are looking
   // at your friends list.
   let unsubscribe: (() => void)[] = [];
+  /**
+   * Whether this screen has already been torn down.
+   *
+   * `getLobby()` is a round trip, and navigating away inside it used to leave
+   * the teardown running over an empty list while every handler below landed
+   * afterwards -- holding a detached DOM and redrawing panels nobody could see,
+   * for as long as the tab stayed open.
+   */
+  let gone = false;
 
   getLobby().then(async (l) => {
+    if (gone) return;
     lobby = l;
     // The list may be stale if a friendship was accepted on another screen.
     await l.refresh();
@@ -540,7 +603,11 @@ export function playScreen(host: HTMLElement): () => void {
       progress.release();
       notice(`${from.username} called that off.`);
     }));
+    // The `await` above is another place this screen can have gone, and by
+    // here there is something to take back. Last, so it covers every handler.
+    if (gone) { for (const off of unsubscribe) off(); unsubscribe = []; }
   }).catch((e) => {
+    if (gone) return;
     panel.replaceChildren(el("p", { class: "note" },
       `Could not reach your friends list: ${(e as Error).message}`));
   });
@@ -743,8 +810,14 @@ export function playScreen(host: HTMLElement): () => void {
     }
     linkKind = ready.kind === "webrtc" ? "direct" : "relay";
     partner = ready.friend;
+    // Whoever was picking before this link died is still picking. Only a match
+    // that did not exist a moment ago starts with the inviter.
+    const chooser = match?.invite.session === invite.session
+      ? match.chooser
+      : (ready.host ? auth().user!.id : ready.friend.id);
     match = {
       friend: ready.friend, invite, slot: ready.slot, iInvited: ready.host,
+      chooser,
     };
     banner.hidden = true;
     noticeText = "";
@@ -766,8 +839,9 @@ export function playScreen(host: HTMLElement): () => void {
     }
 
     const session = view.join(transport, ready.slot, {
-      // The inviter picked this level and picks the rest of them.
-      canChooseLevel: ready.host,
+      // The inviter picked the first level; after that it is whoever the pair
+      // last agreed on, which a reconnection must not quietly undo.
+      canChooseLevel: chooser === auth().user?.id,
       onDesync: (f, mine, theirs) =>
         console.warn(`desync at frame ${f}: ${mine} != ${theirs}`),
       onQuit: (bySlot, forGood) => quit(bySlot, forGood),
@@ -864,7 +938,13 @@ export function playScreen(host: HTMLElement): () => void {
     // The inviter offers and the other side answers, the same way round as the
     // first time -- so a resume arriving HERE, at the inviter, is not an offer.
     // It is the other side saying their link is gone and asking for one.
-    if (match.iInvited) { void reconnect(); return; }
+    //
+    // The old session goes first, as it does on every other route into
+    // `reconnect`. A peer connection fails at each end on its own schedule, so
+    // this side may still believe it has a perfectly good link -- and building
+    // the replacement on top of it left the old session and its transport
+    // running, unreferenced, for the rest of the match.
+    if (match.iInvited) { view.dropLink(); void reconnect(); return; }
     if (rebuilding && rebuilding.signal.aborted) return;
     const abort = rebuilding ?? new AbortController();
     rebuilding = abort;
@@ -893,6 +973,9 @@ export function playScreen(host: HTMLElement): () => void {
    */
   function quit(bySlot: number, forGood: boolean): void {
     void lobby?.setActivity("in_lobby");
+    // Between levels, not out of the match. Whichever of them starts the next
+    // one puts both back to "in a game"; see `onFrame`.
+    inGame = false;
     drawTimes();
     void drawBoard();
     if (!forGood) {
@@ -916,7 +999,14 @@ export function playScreen(host: HTMLElement): () => void {
    */
   function endSession(why: string): void {
     if (!match) return;
+    // Held, because the announcement below is addressed BY topic and the topic
+    // is derived from who the two of us are. Reading `watchRoom?.topic` instead
+    // meant the peer who did not do the inviting -- who has no watch room --
+    // published an empty topic that matched nothing in anybody's list, and the
+    // row for a game that had ended sat there until it aged out.
+    const was = match;
     match = null;
+    inGame = false;
     rebuilding?.abort();
     rebuilding = null;
     view.leave();
@@ -931,9 +1021,7 @@ export function playScreen(host: HTMLElement): () => void {
     if (beating !== null) { clearInterval(beating); beating = null; }
     if (sharing) {
       sharing = false;
-      lobby?.announceShowing({
-        topic: watchRoom?.topic ?? "", players: ["", ""], on: false,
-      });
+      announceShowing(false, was);
     }
     mirror = null;
     void watchRoom?.close();
@@ -956,11 +1044,17 @@ export function playScreen(host: HTMLElement): () => void {
   // it belongs to the session, and closing it here would take the pair offline
   // to each other every time somebody opened their friends list.
   return () => {
+    gone = true;
     removeEventListener("pagehide", onHide);
     rebuilding?.abort();
     rebuilding = null;
     if (beating !== null) { clearInterval(beating); beating = null; }
+    // The audience is told here too. Leaving this screen ends the feed, and a
+    // row offering a game nobody is publishing is a link to a frozen canvas
+    // until it ages out.
+    if (sharing) { sharing = false; announceShowing(false); }
     match = null;
+    inGame = false;
     mirror = null;
     void watchRoom?.close();
     watchRoom = null;

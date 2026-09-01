@@ -105,7 +105,12 @@ export function watchScreen(host: HTMLElement): () => void {
       // hear the status of -- and a watcher uses two of the three.
       const transport = new RealtimeTransport(w);
       view.observe(transport, {
-        onQuit: () => say("They finished that level."),
+        // A level ending and a player leaving are the same command and nothing
+        // alike to somebody watching: one is followed by the next level, the
+        // other is not followed by anything.
+        onQuit: (_bySlot, forGood) => say(forGood
+          ? "One of them left. There is nothing more to watch."
+          : "That level ended. Waiting for the next one."),
         onLinkDown: () => say("Lost the connection to that game."),
       });
       say("Connected. Waiting for them to start a level.");
