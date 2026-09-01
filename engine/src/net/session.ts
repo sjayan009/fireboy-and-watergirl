@@ -180,6 +180,18 @@ export const MODES = ["adventure", "puzzle", "speed"];
  */
 const COMMAND_RESENDS = 12;
 
+/**
+ * The most commands the outbox will carry at once.
+ *
+ * The epoch stamp below already drops the entry that used to grow without
+ * bound -- a Start nobody ever answered, re-sent on every tick for the rest of
+ * the session. This is the floor under that rather than the fix for it: the
+ * outbox is a resend buffer, and a resend buffer that can be grown by anything
+ * a peer does is a place to put memory. Twelve resends of sixty-four commands
+ * is far more than any real run of losses needs.
+ */
+const OUTBOX_MAX = 64;
+
 export class NetSession {
   readonly slot: Slot;
   private readonly other: Slot;
@@ -577,6 +589,16 @@ export class NetSession {
     // Start, each of them filtered by the epoch at the far end anyway.
     this.outbox = this.outbox.filter((c) =>
       (c.untilHeard && this.sameEpochRun(c.epoch)) || c.left > 0);
+    // And a hard ceiling, oldest first. `untilHeard` entries are held back from
+    // the eviction: they are the level the pair is trying to agree on, and
+    // dropping one strands them on different generations -- which is the exact
+    // failure the resend exists to prevent.
+    if (this.outbox.length > OUTBOX_MAX) {
+      const held = this.outbox.filter((c) => c.untilHeard);
+      const rest = this.outbox.filter((c) => !c.untilHeard);
+      const room = Math.max(0, OUTBOX_MAX - held.length);
+      this.outbox = [...held, ...rest.slice(Math.max(0, rest.length - room))];
+    }
   }
 
   /**
