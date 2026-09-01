@@ -38,7 +38,8 @@ import { connect, TransportKind } from "@engine/net/connect.js";
 import { Transport } from "@engine/net/transport.js";
 import { Slot } from "@engine/net/session.js";
 import {
-  Activity, Handover, Invite, InviteCancel, PairChannel, Presence,
+  Activity, Handover, Invite, InviteCancel, PairChannel, Presence, Sharing,
+  Showing,
 } from "./net/pairchannel.js";
 import { RealtimeTransport } from "./net/realtime.js";
 import { auth, onBeforeSignOut } from "./auth.js";
@@ -108,6 +109,9 @@ export class Lobby {
   private cancelHandlers =
     new Set<(session: string, from: FriendState) => void>();
   private handoverHandlers = new Set<(h: Handover) => void>();
+  private sharingHandlers = new Set<(s: Sharing) => void>();
+  private showingHandlers =
+    new Set<(s: Showing, from: FriendState) => void>();
   /**
    * Invitations sent and not yet answered, by session id.
    *
@@ -194,6 +198,16 @@ export class Lobby {
       for (const fn of this.handoverHandlers) fn(h);
     });
 
+    channel.onSharing((x) => {
+      for (const fn of this.sharingHandlers) fn(x);
+    });
+
+    channel.onShowing((x) => {
+      const from = this.friends.find((f) => f.id === friendId);
+      if (!from) return;
+      for (const fn of this.showingHandlers) fn(x, from);
+    });
+
     channel.onResume((invite) => {
       const from = this.friends.find((f) => f.id === friendId);
       if (!from) return;
@@ -259,6 +273,34 @@ export class Lobby {
   onHandover(fn: (h: Handover) => void): () => void {
     this.handoverHandlers.add(fn);
     return () => this.handoverHandlers.delete(fn);
+  }
+
+  /** Whether this match may be watched. Told to the other player. */
+  onSharing(fn: (s: Sharing) => void): () => void {
+    this.sharingHandlers.add(fn);
+    return () => this.sharingHandlers.delete(fn);
+  }
+
+  sharing(friendId: string, s: Sharing): void {
+    this.channels.get(friendId)?.sharing(s);
+  }
+
+  /** A friend's game has opened, or closed, to watchers. */
+  onShowing(fn: (s: Showing, from: FriendState) => void): () => void {
+    this.showingHandlers.add(fn);
+    return () => this.showingHandlers.delete(fn);
+  }
+
+  /**
+   * Tell everybody we could be watched by.
+   *
+   * Every accepted friend of OURS, because those are the channels we are
+   * allowed to speak on -- and between the two players that covers exactly the
+   * set the watch topic's policy admits. A friend of both hears it twice and
+   * shows one row, which is what the session id is for.
+   */
+  announceShowing(s: Showing): void {
+    for (const channel of this.channels.values()) channel.showing(s);
   }
 
   /** Say that somebody else picks the levels now. */
@@ -510,6 +552,8 @@ export class Lobby {
     this.resumeHandlers.clear();
     this.cancelHandlers.clear();
     this.handoverHandlers.clear();
+    this.sharingHandlers.clear();
+    this.showingHandlers.clear();
     // Awaited, because leaving a topic is a message to the server and joining
     // the same topic again before it lands is a race the server resolves by
     // dropping one of them.

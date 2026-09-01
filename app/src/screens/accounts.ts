@@ -6,8 +6,9 @@
  * which part failed.
  */
 import {
-  auth, claimUsername, resendVerification, sendPasswordReset, setPassword,
-  signIn, signOut, signUp, listFactors, verifyTotp,
+  auth, claimUsername, redeemRecoveryCode, resendVerification,
+  sendPasswordReset, setPassword, signIn, signOut, signUp, listFactors,
+  verifyTotp,
 } from "../auth.js";
 import { card, el, field, form, inputOf, link, note } from "../ui/dom.js";
 import { go, rerender } from "../router.js";
@@ -143,10 +144,51 @@ export function unlockScreen(host: HTMLElement): void {
         await verifyTotp(verified.id, inputOf(code).value.trim());
       },
       footer: el("p", { class: "note" },
+        el("a", { href: "#", onclick: (e: Event) => {
+          e.preventDefault();
+          host.replaceChildren();
+          recoveryScreen(host);
+        } }, "Lost your authenticator?"),
+        " · ",
         el("a", { href: "#", onclick: async (e: Event) => {
           e.preventDefault();
           await signOut();
         } }, "Sign out instead")),
+    })));
+}
+
+/**
+ * The way back in when the authenticator is gone.
+ *
+ * Says what it does before it does it. Redeeming a code turns two-factor off
+ * rather than letting one session past it -- Supabase has no way to raise a
+ * session to `aal2` without a factor challenge -- so somebody arriving here
+ * upset should not discover afterwards that their account is now protected by
+ * a password alone.
+ */
+function recoveryScreen(host: HTMLElement): void {
+  const code = field("Recovery code", {
+    required: true, autocomplete: "one-time-code",
+    placeholder: "XXXXX-XXXXX",
+  });
+
+  host.append(card("Use a recovery code",
+    note("One of the ten you were given when you turned two-factor on. " +
+         "Each works once."),
+    note("Using one turns two-factor OFF for this account. You can turn it " +
+         "on again from Settings straight afterwards, and you should."),
+    form({
+      submit: "Use it",
+      children: [code],
+      onSubmit: async () => {
+        await redeemRecoveryCode(inputOf(code).value.trim().toUpperCase());
+      },
+      footer: el("p", { class: "note" },
+        el("a", { href: "#", onclick: (e: Event) => {
+          e.preventDefault();
+          host.replaceChildren();
+          unlockScreen(host);
+        } }, "Back to the code from your app")),
     })));
 }
 

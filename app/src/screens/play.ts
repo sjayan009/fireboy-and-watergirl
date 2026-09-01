@@ -27,8 +27,11 @@
 import { GameView, STAGE_W, STAGE_H } from "@engine/embed.js";
 import { LocalSave, setSaveStore } from "@engine/game/save.js";
 import { pairProgress } from "../pairsave.js";
-import type { Invite } from "../net/pairchannel.js";
+import type { Invite, Showing } from "../net/pairchannel.js";
+import { WatchChannel, watchTopicFor } from "../net/watchchannel.js";
+import { WatchMirror } from "../net/watch.js";
 import { auth, signOut } from "../auth.js";
+import { supabase } from "../supabase.js";
 import { clear, el } from "../ui/dom.js";
 import { FriendState, getLobby, Lobby, Ready } from "../lobby.js";
 
@@ -78,10 +81,13 @@ export function playScreen(host: HTMLElement): () => void {
   leave.hidden = true;
   const hand = el("button", { class: "ghost" }, "Let them pick");
   hand.hidden = true;
+  const share = el("button", { class: "ghost" }, "Let friends watch");
+  share.hidden = true;
   const banner = el("div", { class: "banner" });
   banner.hidden = true;
   const panel = el("div", { class: "panel" });
   const times = el("div", { class: "panel" });
+  const board = el("div", { class: "panel" });
   const name = auth().profile?.username ?? "";
 
   let linkKind = "";
@@ -106,6 +112,18 @@ export function playScreen(host: HTMLElement): () => void {
   /** Set while the link is being rebuilt, so nothing tries twice at once. */
   let rebuilding: AbortController | null = null;
   /**
+   * The feed, when there is one.
+   *
+   * Only the peer who sent the invitation has a mirror: one copy of the traffic
+   * carries both players, and a second would double the message count for
+   * packets a watcher already has.
+   */
+  let mirror: WatchMirror | null = null;
+  let watchRoom: WatchChannel | null = null;
+  let sharing = false;
+  /** Games our friends have opened to watchers, by topic. */
+  const showing = new Map<string, Showing>();
+  /**
    * An invitation in flight, in either direction.
    *
    * `session` is set only for one we RECEIVED, because that is the only case
@@ -128,6 +146,7 @@ export function playScreen(host: HTMLElement): () => void {
       // the label and it is read back from the one thing both of them set.
       if (view.isMuted !== muted) syncMute();
       showHand();
+      showShare();
       watchStall();
     },
     onRefused: (why) => {
@@ -186,6 +205,45 @@ export function playScreen(host: HTMLElement): () => void {
     setChooser(chooser);
   });
 
+  /**
+   * Open the game to friends, or close it again.
+   *
+   * Off by default and per match, so nothing is published unless somebody asks
+   * for it. Either player may flip it and both are told, because being watched
+   * is not a thing one of two people should be able to decide.
+   */
+  share.addEventListener("click", () => {
+    if (!match || !lobby) return;
+    setSharing(!sharing);
+    lobby.sharing(match.friend.id,
+                  { session: match.invite.session, on: sharing });
+  });
+
+  function setSharing(on: boolean): void {
+    if (!match) return;
+    sharing = on;
+    mirror?.setSharing(on);
+    showShare();
+    notice(on
+      ? "Your friends can watch this game."
+      : "This game is private again.");
+
+    // Told to everyone who could watch, on the channels we are allowed to speak
+    // on. Both players announce, so a friend of either of them hears about it.
+    const me = auth().profile?.username ?? "";
+    lobby?.announceShowing({
+      topic: watchTopicFor(auth().user!.id, match.friend.id),
+      players: [me, match.friend.username],
+      on,
+    });
+  }
+
+  function showShare(): void {
+    share.hidden = match === null || mirror === null;
+    share.textContent = sharing ? "Stop letting friends watch"
+                                : "Let friends watch";
+  }
+
   /** Put the pick where the pair has just agreed it goes. */
   function setChooser(chooser: string): void {
     const mine = chooser === auth().user?.id;
@@ -216,6 +274,7 @@ export function playScreen(host: HTMLElement): () => void {
       el("span", { class: "spacer" }),
       mute,
       hand,
+      share,
       leave,
       el("a", { class: "ghost", href: "#/friends" }, "Friends"),
       el("a", { class: "ghost", href: "#/settings" }, "Settings"),
@@ -227,7 +286,7 @@ export function playScreen(host: HTMLElement): () => void {
     el("div", { class: "screen" }, canvas),
     el("p", { class: "keys" },
       "Fireboy: arrow keys. Watergirl: W, A, D. P pauses, R retries."),
-    panel, times));
+    panel, times, board));
 
   canvas.focus();
 
@@ -336,10 +395,88 @@ export function playScreen(host: HTMLElement): () => void {
     times.append(...rows);
   }
 
+  // ---- everybody else's times --------------------------------------------
+
+  /**
+   * The best time on one level, across every pair who is willing to be listed.
+   *
+   * A projection, not a window onto `pair_progress` -- that table is still
+   * members-only in every verb, and `leaderboard()` returns a rank, two names
+   * and a time rather than the row they came from. Nothing here can read a
+   * pair's progress; it can only be told where they placed.
+   */
+  let boardMode = "adventure";
+  let boardNum = 1;
+  let boardOpen = false;
+
+  /** The map node for a level, from the table the game itself indexes by. */
+  function nodeOf(mode: string, num: number): number {
+    const table = view.game.Translation as string[] | undefined;
+    if (!table) return 0;
+    const type = MODES.findIndex(([v]) => v === mode) + 1;
+    return table.indexOf(`${type}_${num}`) + 1;
+  }
+
+  async function drawBoard(): Promise<void> {
+    clear(board);
+    const toggle = el("button", {
+      class: "ghost small",
+      onclick: () => { boardOpen = !boardOpen; void drawBoard(); },
+    }, boardOpen ? "Hide" : "Show");
+    board.append(el("h2", {}, "Leaderboard", toggle));
+    if (!boardOpen) return;
+
+    const mode = el("select", { class: "pick" },
+      ...MODES.map(([value, label]) =>
+        el("option", { value, selected: value === boardMode }, label)));
+    const num = el("select", { class: "pick" });
+    const fill = () => {
+      const count = MODES.find(([v]) => v === mode.value)?.[2] ?? 1;
+      num.replaceChildren(...Array.from({ length: count }, (_, i) =>
+        el("option", { value: String(i + 1), selected: i + 1 === boardNum },
+           `Level ${i + 1}`)));
+    };
+    fill();
+    mode.addEventListener("change", () => {
+      boardMode = mode.value; boardNum = 1; void drawBoard();
+    });
+    num.addEventListener("change", () => {
+      boardNum = Number(num.value); void drawBoard();
+    });
+    board.append(el("div", { class: "row" }, mode, num));
+
+    const node = nodeOf(boardMode, boardNum);
+    if (node <= 0) {
+      board.append(el("p", { class: "note" }, "No such level."));
+      return;
+    }
+    const { data, error } = await supabase.rpc("leaderboard", { p_node: node });
+    if (error) {
+      board.append(el("p", { class: "note" }, error.message));
+      return;
+    }
+    const rows = (data ?? []) as {
+      rank: number; a_username: string; b_username: string;
+      best_time_str: string; is_mine: boolean;
+    }[];
+    if (rows.length === 0) {
+      board.append(el("p", { class: "note" },
+        "Nobody has finished this one yet."));
+      return;
+    }
+    for (const r of rows) {
+      board.append(el("div", { class: r.is_mine ? "row mine" : "row" },
+        el("span", { class: "rank" }, `${r.rank}.`),
+        el("span", { class: "name" }, `${r.a_username} & ${r.b_username}`),
+        el("span", { class: "grade" }, r.best_time_str || "")));
+    }
+  }
+
   // ---- the lobby ---------------------------------------------------------
 
   panel.append(el("p", { class: "note" }, "Connecting to your friends…"));
   drawTimes();
+  void drawBoard();
 
   // Handlers registered here are unregistered on the way out; the lobby itself
   // outlives this screen, so an invitation still arrives while you are looking
@@ -356,6 +493,14 @@ export function playScreen(host: HTMLElement): () => void {
     unsubscribe.push(l.onResume((invite) => void showResume(invite)));
     unsubscribe.push(l.onHandover((h) => {
       if (match && match.invite.session === h.session) setChooser(h.chooser);
+    }));
+    unsubscribe.push(l.onSharing((x) => {
+      if (match && match.invite.session === x.session) setSharing(x.on);
+    }));
+    unsubscribe.push(l.onShowing((x) => {
+      if (x.on) showing.set(x.topic, x);
+      else showing.delete(x.topic);
+      drawPanel(l.list);
     }));
     // Their invitation is gone: take the banner down whether or not this side
     // had got as far as pressing anything.
@@ -399,6 +544,22 @@ export function playScreen(host: HTMLElement): () => void {
           disabled: !online || match !== null || pending !== null,
           onclick: () => showInviteForm(f),
         }, "Invite")));
+    }
+
+    // Games our friends have opened. Pushed to us when they turn watching on,
+    // because a friend cannot ask who is playing -- other people's friendships
+    // are not theirs to see.
+    if (showing.size > 0) {
+      panel.append(el("h2", {}, "Watch"));
+      for (const [topic, s] of showing) {
+        panel.append(el("div", { class: "row" },
+          el("span", { class: "dot in_game" }),
+          el("span", { class: "name" }, s.players.join(" & ")),
+          el("button", {
+            class: "ghost", disabled: match !== null,
+            onclick: () => { location.hash = `/watch?t=${topic}`; },
+          }, "Watch")));
+      }
     }
   }
 
@@ -540,6 +701,14 @@ export function playScreen(host: HTMLElement): () => void {
 
   /** Hand the clock to the session, and start the level if we are the host. */
   function begin(ready: Ready, invite: Invite): void {
+    // Opened once per match rather than per level: it is the pair's topic, not
+    // the level's, and joining it again on every Start would be a subscription
+    // churned for nothing.
+    if (!watchRoom && ready.host) {
+      void WatchChannel.open(watchTopicFor(auth().user!.id, ready.friend.id))
+        .then((w) => { watchRoom = w; showShare(); })
+        .catch((e) => console.warn("could not open the watch topic:", e));
+    }
     linkKind = ready.kind === "webrtc" ? "direct" : "relay";
     partner = ready.friend;
     match = {
@@ -551,7 +720,17 @@ export function playScreen(host: HTMLElement): () => void {
     leave.hidden = false;
     void lobby?.setActivity("in_game");
 
-    const session = view.join(ready.transport, ready.slot, {
+    // The inviter carries the feed. Built even when nothing is being shared:
+    // it costs a wrapper and no messages, and it means turning watching on is
+    // instant rather than a renegotiation.
+    let transport = ready.transport;
+    if (ready.host && watchRoom) {
+      mirror = new WatchMirror(transport, watchRoom);
+      mirror.setSharing(sharing);
+      transport = mirror;
+    }
+
+    const session = view.join(transport, ready.slot, {
       // The inviter picked this level and picks the rest of them.
       canChooseLevel: ready.host,
       onDesync: (f, mine, theirs) =>
@@ -560,6 +739,7 @@ export function playScreen(host: HTMLElement): () => void {
       onLinkDown: (why) => lost(why),
     });
     if (ready.host) session.requestStart(ready.mode, ready.num);
+    showShare();
     canvas.focus();
     drawPanel(lobby?.list ?? []);
   }
@@ -679,6 +859,7 @@ export function playScreen(host: HTMLElement): () => void {
   function quit(bySlot: number, forGood: boolean): void {
     void lobby?.setActivity("in_lobby");
     drawTimes();
+    void drawBoard();
     if (!forGood) {
       if (bySlot !== view.slot) {
         notice(`${partner?.username ?? "They"} went back to the map.`);
@@ -709,7 +890,18 @@ export function playScreen(host: HTMLElement): () => void {
     linkKind = "";
     leave.hidden = true;
     hand.hidden = true;
+    share.hidden = true;
     stalling = false;
+    // The match is over, so the audience is told and the topic is let go.
+    if (sharing) {
+      sharing = false;
+      lobby?.announceShowing({
+        topic: watchRoom?.topic ?? "", players: ["", ""], on: false,
+      });
+    }
+    mirror = null;
+    void watchRoom?.close();
+    watchRoom = null;
     void lobby?.setActivity("in_lobby");
     notice(why);
     drawPanel(lobby?.list ?? []);
@@ -732,6 +924,9 @@ export function playScreen(host: HTMLElement): () => void {
     rebuilding?.abort();
     rebuilding = null;
     match = null;
+    mirror = null;
+    void watchRoom?.close();
+    watchRoom = null;
     // Told FIRST. Opening the friends list mid-level used to destroy this view
     // and say nothing, which to the other person is identical to the game
     // having died: their partner stops moving and never starts again.

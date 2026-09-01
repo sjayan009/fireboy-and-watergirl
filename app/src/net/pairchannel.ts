@@ -54,6 +54,8 @@ const RESUME = "resume";
 const REPLY = "reply";
 const CANCEL = "cancel";
 const HANDOVER = "handover";
+const SHARING = "sharing";
+const SHOWING = "showing";
 const BYTES = "b";
 
 export interface InviteReply {
@@ -93,6 +95,37 @@ export interface InviteCancel {
  * wire format that carries three bits a frame would be paying for a precision
  * nobody needs.
  */
+/**
+ * Whether this pair's game may be watched.
+ *
+ * Opt-in, per match, off unless both of them see it turned on -- so a game
+ * nobody has asked to share puts nothing on any channel. Agreed the same way
+ * the level pick is agreed, and for the same reason: nothing about it is
+ * simulated, so it wants a message the two of them settle on rather than a
+ * command applied on a frame.
+ */
+export interface Sharing {
+  session: string;
+  on: boolean;
+}
+
+/**
+ * "We are playing, and you may watch."
+ *
+ * Sent to each player's OWN friends, on the channels that already exist and are
+ * already authorized. It has to work this way round: a friend cannot ask who is
+ * playing, because they cannot see other people's friendships -- so discovery
+ * is pushed by the people who know, not pulled by the person who wants to
+ * watch.
+ */
+export interface Showing {
+  /** The watch topic to join. */
+  topic: string;
+  /** Both usernames, for a row that says whose game it is. */
+  players: [string, string];
+  on: boolean;
+}
+
 export interface Handover {
   session: string;
   /** The user id of whoever may start a level from here on. */
@@ -128,6 +161,8 @@ export class PairChannel {
   private cancelHandlers = new Set<(c: InviteCancel) => void>();
   private statusHandlers = new Set<(status: string) => void>();
   private handoverHandlers = new Set<(h: Handover) => void>();
+  private sharingHandlers = new Set<(s: Sharing) => void>();
+  private showingHandlers = new Set<(s: Showing) => void>();
   private byteHandlers = new Set<(d: Uint8Array) => void>();
   private presenceHandlers = new Set<(p: Presence[]) => void>();
 
@@ -183,6 +218,12 @@ export class PairChannel {
     });
     channel.on("broadcast", { event: HANDOVER }, ({ payload }) => {
       for (const fn of pair.handoverHandlers) fn(payload as Handover);
+    });
+    channel.on("broadcast", { event: SHARING }, ({ payload }) => {
+      for (const fn of pair.sharingHandlers) fn(payload as Sharing);
+    });
+    channel.on("broadcast", { event: SHOWING }, ({ payload }) => {
+      for (const fn of pair.showingHandlers) fn(payload as Showing);
     });
     channel.on("broadcast", { event: BYTES }, ({ payload }) => {
       // One message can carry several packets; see RealtimeTransport.
@@ -348,6 +389,16 @@ export class PairChannel {
     return () => this.handoverHandlers.delete(fn);
   }
 
+  onSharing(fn: (s: Sharing) => void): () => void {
+    this.sharingHandlers.add(fn);
+    return () => this.sharingHandlers.delete(fn);
+  }
+
+  onShowing(fn: (s: Showing) => void): () => void {
+    this.showingHandlers.add(fn);
+    return () => this.showingHandlers.delete(fn);
+  }
+
   /** Every status the subscription reports after the first one. */
   onStatus(fn: (status: string) => void): () => void {
     this.statusHandlers.add(fn);
@@ -372,6 +423,8 @@ export class PairChannel {
   reply(r: InviteReply): void { this.send(REPLY, r); }
   cancel(c: InviteCancel): void { this.send(CANCEL, c); }
   handover(h: Handover): void { this.send(HANDOVER, h); }
+  sharing(x: Sharing): void { this.send(SHARING, x); }
+  showing(x: Showing): void { this.send(SHOWING, x); }
 
   // ---- bytes -------------------------------------------------------------
 
@@ -395,6 +448,8 @@ export class PairChannel {
     this.cancelHandlers.clear();
     this.statusHandlers.clear();
     this.handoverHandlers.clear();
+    this.sharingHandlers.clear();
+    this.showingHandlers.clear();
     this.byteHandlers.clear();
     this.presenceHandlers.clear();
     await supabase.removeChannel(this.live);

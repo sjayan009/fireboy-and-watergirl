@@ -9,8 +9,10 @@
  */
 import {
   auth, changeEmail, changePassword, claimUsername, deleteAccount, enrolTotp,
-  listFactors, unenrolTotp, verifyTotp,
+  generateRecoveryCodes, listFactors, recoveryCodesLeft, unenrolTotp,
+  verifyTotp,
 } from "../auth.js";
+import { supabase } from "../supabase.js";
 import { card, el, field, form, inputOf, note } from "../ui/dom.js";
 
 export function settingsScreen(host: HTMLElement): void {
@@ -49,12 +51,48 @@ export function settingsScreen(host: HTMLElement): void {
     emailSection(),
     el("h2", {}, "Two-factor"),
     factors,
+    el("h2", {}, "Leaderboard"),
+    boardSection(),
     el("h2", {}, "Delete this account"),
     dangerSection(),
     el("p", { class: "note" },
       el("a", { href: "#/play" }, "Back to the game"))));
 
   void drawFactors(factors);
+}
+
+/**
+ * Whether this account's pairs appear on the board.
+ *
+ * Per account, and it takes the whole entry off wherever it appears: a row on
+ * the board belongs to two people, and there is no half of one to publish. That
+ * also means nobody can put somebody else on it.
+ */
+function boardSection(): HTMLElement {
+  const box = el("input", { type: "checkbox" });
+  const label = el("label", { class: "check" }, box,
+    el("span", {}, "Keep my times off the leaderboard"));
+  const said = note("Saved.");
+  said.hidden = true;
+
+  void supabase.from("profiles")
+    .select("hide_from_leaderboard")
+    .eq("id", auth().user?.id ?? "")
+    .maybeSingle()
+    .then(({ data }) => { box.checked = !!data?.hide_from_leaderboard; });
+
+  box.addEventListener("change", async () => {
+    said.hidden = true;
+    const { error } = await supabase.from("profiles")
+      .update({ hide_from_leaderboard: box.checked })
+      .eq("id", auth().user?.id ?? "");
+    if (error) { box.checked = !box.checked; return; }
+    said.hidden = false;
+  });
+
+  return el("div", {},
+    note("Best times per level, across everybody. Both names are shown."),
+    label, said);
 }
 
 /** Change the password, proving the old one on the way through. */
@@ -151,9 +189,12 @@ async function drawFactors(host: HTMLElement): Promise<void> {
   }
 
   if (enrolled.length > 0) {
+    const codes = el("div", { class: "codes" });
     host.replaceChildren(
       note("An authenticator app is enrolled. You will be asked for a code " +
            "every time you sign in."),
+      recoverySection(codes),
+      codes,
       el("button", {
         class: "ghost",
         onclick: async () => {
@@ -178,6 +219,48 @@ async function drawFactors(host: HTMLElement): Promise<void> {
         }
       },
     }, "Turn it on"));
+}
+
+/**
+ * Recovery codes: how many are left, and how to get a new set.
+ *
+ * Shown once and never again, because they are stored hashed and the database
+ * genuinely cannot produce them a second time. The warning is not decoration --
+ * somebody who loses these and their authenticator has no way back in but to
+ * ask whoever holds the secret key.
+ */
+function recoverySection(codes: HTMLElement): HTMLElement {
+  const left = note("Checking…");
+  const mint = el("button", { class: "ghost" }, "Get recovery codes");
+
+  const count = async () => {
+    const n = await recoveryCodesLeft();
+    left.textContent = n > 0
+      ? `${n} recovery code${n === 1 ? "" : "s"} left.`
+      : "No recovery codes. Without one, a lost authenticator means asking " +
+        "whoever runs this to let you back in.";
+    mint.textContent = n > 0 ? "Replace them" : "Get recovery codes";
+  };
+  void count();
+
+  mint.addEventListener("click", async () => {
+    mint.disabled = true;
+    try {
+      const fresh = await generateRecoveryCodes();
+      codes.replaceChildren(
+        note("Write these down now. They are stored hashed, so this is the " +
+             "only time they can be shown. Any codes you had before have " +
+             "stopped working."),
+        note("Using one turns two-factor OFF, and you turn it on again after."),
+        el("ol", { class: "codelist" },
+          ...fresh.map((c) => el("li", {}, el("code", {}, c)))));
+      await count();
+    } finally {
+      mint.disabled = false;
+    }
+  });
+
+  return el("div", {}, left, mint);
 }
 
 async function drawEnrolment(host: HTMLElement): Promise<void> {

@@ -242,6 +242,27 @@ button:disabled { cursor: default; opacity: 0.6; }
 .dot.in_lobby { background: var(--water); }
 .dot.in_game { background: var(--fire); }
 
+/* Recovery codes, shown once and meant to be copied down by hand. */
+.codelist {
+  margin: 10px 0 0;
+  padding-left: 24px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+}
+
+.codelist code {
+  font-size: 15px;
+  letter-spacing: 1px;
+}
+
+.check { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.check input { width: 16px; height: 16px; }
+
+/* A pair's position on the board, beside their names. */
+.rank { color: var(--dim); min-width: 2.5em; }
+.row.mine .name { color: var(--fire); }
+
 /* The grade a level was finished with, as the results board awards it. */
 .grade {
   margin-left: auto;
