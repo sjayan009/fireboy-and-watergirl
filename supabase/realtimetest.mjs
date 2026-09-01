@@ -181,6 +181,54 @@ try {
   const payload = await heard;
   check("bob receives alice's invite", payload?.num, 1);
   check("carrying the role assignment", payload?.fireboy, alice.id);
+
+  console.log("\nwatching is a second topic, with a wider door");
+  {
+    // The pair topic stays exactly as private as the checks above found it.
+    // `watch:<lo>:<hi>` is the one a spectator uses, and it carries a copy of
+    // the input the two are already exchanging -- the game, and nothing about
+    // their presence, their invitations or their signalling.
+    const watch = "watch:" + [alice.id, bob.id].sort().join(":");
+
+    // Carol knows nobody. She is the case the whole policy exists for.
+    const carol = await makeUser("carol");
+    await rpc(carol, "claim_username",
+              { new_username: "car" + stamp % 100000, invite_code: await makeCode() });
+    check("somebody who knows neither player is refused",
+          await join(carol, watch), "refused");
+
+    // Mallory is friends with alice and not with bob, which is the rule:
+    // friends of EITHER player may watch.
+    await rpc(mallory, "accept_friend", { their_id: alice.id });
+    check("a friend of one of them is let in", await join(mallory, watch), "in");
+    check("and so are the two playing", await join(bob, watch), "in");
+
+    // End to end, because a policy that admits a reader and refuses the writer
+    // is a channel that carries nothing.
+    const eyes = createClient(URL_, PUB);
+    await eyes.realtime.setAuth(mallory.token);
+    const saw = await new Promise((resolve) => {
+      const channel = eyes.channel(watch, { config: { private: true } });
+      const timer = setTimeout(() => resolve(null), 10000);
+      channel.on("broadcast", { event: "b" }, ({ payload }) => {
+        clearTimeout(timer);
+        try { eyes.removeAllChannels(); } catch { /* gone */ }
+        resolve(payload);
+      });
+      channel.subscribe(async (status) => {
+        if (status !== "SUBSCRIBED") return;
+        const feed = createClient(URL_, PUB);
+        await feed.realtime.setAuth(alice.token);
+        const out = feed.channel(watch, { config: { private: true } });
+        out.subscribe(async (s) => {
+          if (s !== "SUBSCRIBED") return;
+          await out.send({ type: "broadcast", event: "b", payload: { p: ["AQ=="] } });
+        });
+      });
+    });
+    check("and a watcher receives what the players put on it",
+          saw?.p?.[0], "AQ==");
+  }
 } finally {
   for (const u of users) {
     await admin(`/auth/v1/admin/users/${u.id}`, { method: "DELETE" });

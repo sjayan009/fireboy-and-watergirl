@@ -95,6 +95,8 @@ export class GameView {
   slot: Slot = 0;
   /** Whether this peer's map clicks start a level for the pair. */
   canChooseLevel = false;
+  /** Watching somebody else's game rather than playing in one. */
+  watching = false;
   private transport: Transport | null = null;
 
   private acc = 0;
@@ -167,6 +169,12 @@ export class GameView {
       return true;
     }
     if (!s) return false;
+
+    // Watching. Every button that would change the game belongs to the two
+    // people playing it, so they are all swallowed -- not dispatched locally,
+    // which is the bug this hook exists to prevent, and not sent, because the
+    // session refuses that too.
+    if (this.watching) return true;
 
     if (intent.kind === "start") {
       // Mid-level there is no map to have clicked, but a Start applied on one
@@ -252,7 +260,7 @@ export class GameView {
     // Only while a LEVEL is running. Between levels the same keys are the map's
     // -- the arrows walk its nodes -- and a session that is not running a level
     // has nothing shared for P or R to change.
-    if (this.live) {
+    if (this.live && !this.watching) {
       // In a session the level's input belongs to the netcode, not to
       // Game.keyPressed: writing it locally would apply this player's move
       // without the other peer ever hearing about it.
@@ -266,7 +274,7 @@ export class GameView {
     // "to menu" button and goes out as a command through the intent hook. Only
     // an Escape nothing else wanted is the blunt "leave this level".
     if (this.shell.keyDown(code, key)) return;
-    if (this.live && key === "Escape") {
+    if (this.live && !this.watching && key === "Escape") {
       this.session!.send(Command.Quit, this.slot);
       return;
     }
@@ -337,6 +345,27 @@ export class GameView {
   }
 
   /**
+   * Follow somebody else's game.
+   *
+   * The same engine, the same host, the same everything -- the only difference
+   * is that the session is neither player, so it takes both of their inputs off
+   * the wire and sends nothing back. Determinism is what makes that enough: the
+   * simulation is a pure function of the level and the input log, and a watcher
+   * has both.
+   */
+  observe(transport: Transport, o: JoinOptions = {}): NetSession {
+    this.held.clear();
+    this.canChooseLevel = false;
+    this.watching = true;
+    this.transport = transport;
+    this.session = new NetSession({
+      slot: 0, observer: true, transport, host: new GameHost(this.game),
+      onQuit: o.onQuit, onLinkDown: o.onLinkDown,
+    });
+    return this.session;
+  }
+
+  /**
    * Put the session down without saying anything, because there is nobody to
    * say it to.
    *
@@ -347,6 +376,7 @@ export class GameView {
    */
   dropLink(): void {
     this.session = null;
+    this.watching = false;
     this.transport?.close();
     this.transport = null;
     this.held.clear();
@@ -367,6 +397,7 @@ export class GameView {
     // Cleared FIRST. `depart` ends the session, and a page that reacts to that
     // by calling this again must find nothing left to do rather than recurse.
     this.session = null;
+    this.watching = false;
     going.depart();
     this.held.clear();
 
