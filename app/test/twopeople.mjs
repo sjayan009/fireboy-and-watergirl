@@ -232,6 +232,36 @@ try {
   await c.click("a[href='#/play']");
   await c.waitForSelector("#stage");
 
+  // And wait until her client agrees that she has one. The channels a person
+  // hears "we are playing, come and watch" on are built from the friends list
+  // as the play screen loads, once, and the acceptance above is a few seconds
+  // old -- so carol can easily arrive here before her own copy of that list
+  // has caught up, end up with no channels at all, and then hear nothing for
+  // the rest of the game no matter how many times alice announces.
+  //
+  // Same remedy the accept used a moment ago: come back to the screen until it
+  // has caught up. Worth knowing that a friendship made while you are sitting
+  // on this screen needs a revisit before it means anything.
+  const carolLinked = async () => c.evaluate(() =>
+    [...(window.__fbwg?.lobby?.channels ?? new Map()).values()]
+      .some((ch) => ch.channel.state === "joined"));
+  let linked = false;
+  // Poll first and reload only when polling has given up. Reloading on every
+  // turn of the loop is worse than not trying at all: subscribing takes a
+  // moment, and tearing the page down a second later cancels the join that was
+  // already on its way, over and over.
+  for (let round = 0; round < 3 && !linked; round++) {
+    if (round > 0) {
+      await c.reload({ waitUntil: "load" });
+      await c.waitForSelector("#stage", { timeout: 30000 });
+    }
+    for (let i = 0; i < 24 && !linked; i++) {
+      linked = await carolLinked();
+      if (!linked) await c.waitForTimeout(500);
+    }
+  }
+  check("carol's client knows who her friend is", linked, true);
+
   // Seed a map for the pair, so the test can tell the pair's progress from the
   // solo progress each browser would otherwise be holding.
   const lo = alice.id < bob.id ? alice.id : bob.id;
@@ -328,33 +358,60 @@ try {
   }));
 
   /**
-   * Finish the level both of them are in.
+   * Arrange for the NEXT level to end the moment it begins.
    *
-   * Standing the two characters on their doors is what the engine's own shell
-   * test does: the doors open over 22 frames and then `level.Update` spawns the
-   * stairs whose frame 35 calls `Recuent()`. Set on BOTH pages, because the two
-   * simulations are separate and neither is told anything by the other except
-   * three bits a frame.
+   * The engine's shell test ends a level by setting a flag on the contact
+   * listener once per simulated frame, interleaved with its own `step()`.
+   * There is no per-frame hook out here, and reaching for a wall-clock timer
+   * instead is what makes it wrong: the two pages are separate simulations
+   * kept together by nothing but their inputs, so a timer fires at a DIFFERENT
+   * frame at each end and injects state that was never in the input stream.
+   * The peers diverge, and rollback re-simulates those frames from a snapshot
+   * and wipes the poke anyway.
+   *
+   * So make it a property of the level rather than an event in time.
+   * `StartGame` builds `new level(...)` synchronously and the constructor makes
+   * the contact listener, so wrapping it here -- while NO level exists, on both
+   * pages -- means the Start command, which lands on the same frame at both
+   * ends, builds an identical level at each. A constant reads the same on every
+   * frame including a re-simulated one, so the two stay in step and this block
+   * can go on asserting no desyncs.
+   *
+   * Death rather than completion, and that is the whole reason this is
+   * survivable: `deadFire`'s frame 32 calls `GameOver()`, which only puts the
+   * board up. `Recuent` would ALSO write a medal and a best time into the pair's
+   * shared progress -- and a level finished in no time flat beats the row seeded
+   * at the top of this file, which two later blocks read back. The board is the
+   * thing under test, and both boards are taken down by the same code.
    */
-  const finishLevel = async () => {
-    for (const p of [a, b]) {
-      await p.evaluate(() => {
-        const v = window.__fbwg.view;
-        v.__finishing = setInterval(() => {
-          const cl = v.game.m_level && v.game.m_level.myContactListener;
-          if (cl) { cl.finish1 = true; cl.finish2 = true; }
-        }, 10);
+  const endNextLevel = (page) => page.evaluate(() => {
+    const g = window.__fbwg.view.game;
+    if (g.__realStartGame) return;
+    g.__realStartGame = g.StartGame;
+    g.StartGame = function (...args) {
+      const out = g.__realStartGame.apply(this, args);
+      // A getter, because the level writes to this itself -- it is set from the
+      // physics contact and cleared on the way in. The setter swallows both.
+      Object.defineProperty(this.m_level.myContactListener, "deadFire", {
+        get: () => true, set: () => {}, configurable: true,
       });
-    }
-    const board = await until(
-      () => window.__fbwg.view.game.children
-        .some((c) => c.Rboard || c.GOboard),
-      (both) => both[0] && both[1], 200);
-    for (const p of [a, b]) {
-      await p.evaluate(() => clearInterval(window.__fbwg.view.__finishing));
-    }
-    return board;
-  };
+      return out;
+    };
+  });
+
+  /** Put `StartGame` back, or every level after this one dies as it begins. */
+  const playNormally = (page) => page.evaluate(() => {
+    const g = window.__fbwg.view.game;
+    if (!g.__realStartGame) return;
+    g.StartGame = g.__realStartGame;
+    g.__realStartGame = null;
+  });
+
+  /** Wait for the results or game-over board to reach both of them. */
+  const awaitBoard = () => until(
+    () => window.__fbwg.view.game.children
+      .some((c) => c.Rboard || c.GOboard),
+    (both) => both[0] && both[1], 200);
 
   /**
    * Are the two of them playing the same game?
@@ -618,13 +675,13 @@ try {
     }
 
     // Bob did not send the invitation, so the levels are not his to pick.
-    await pressInGame(b, "m_mainMenu.b_1_1");
+    await clickInGame(b, "m_mainMenu.b_1_1");
     await b.waitForSelector(".banner:has-text('to pick')", { timeout: 10000 });
     check("bob is told the pick is not his",
           await b.evaluate(() => window.__fbwg.view.session.running), false);
 
     // Alice did, so hers starts it for both.
-    await pressInGame(a, "m_mainMenu.b_1_1");
+    await clickInGame(a, "m_mainMenu.b_1_1");
     const started = await until(() => ({
       running: window.__fbwg.view.session.running,
       mode: window.__fbwg.view.level?.CurrentMode ?? null,
@@ -736,85 +793,104 @@ try {
           [false, true]);
 
     // Which is to say the refusal has swapped sides too.
-    await pressInGame(a, "m_mainMenu.b_1_1");
+    await clickInGame(a, "m_mainMenu.b_1_1");
     await a.waitForSelector(".banner:has-text('to pick')", { timeout: 10000 });
     check("alice is now the one who cannot start it",
           await a.evaluate(() => window.__fbwg.view.session.running), false);
 
-    await pressInGame(b, "m_mainMenu.b_1_1");
+    await clickInGame(b, "m_mainMenu.b_1_1");
     const started = await until(() => window.__fbwg.view.session.running,
                                 (both) => both[0] && both[1]);
     check("and bob's pick starts it for both", started !== null, true);
     check("and they are playing it together", (await agree(40)) !== null, true);
   }
 
-  console.log("\nfinishing a level leaves nothing behind, and then it is bob's pick");
+  console.log("\na level that ends leaves nothing behind, and the next is clean");
   {
     // The case the whole suite used to walk around. Every other route out of a
     // level here goes through the pause tray's End Game, and no board is ever
     // on screen when the command is applied -- so the fact that `EndGame` and
     // `RetryGame` do not remove one, and that the only code which did was the
     // click listener the intent hook now swallows, was invisible. What it looks
-    // like in front of a person is a near-opaque results screen sitting over
-    // the map and over every level after it.
+    // like in front of a person is a near-opaque board sitting over the map and
+    // over every level after it, answering the keyboard for the rest of the
+    // evening.
     await pressInGame(b, "m_pauseMenu.endGameBtn");
-    await until(() => window.__fbwg.view.session.running,
-                (both) => !both[0] && !both[1]);
-    // Bob holds the pick from the block above.
-    await pressInGame(b, "m_mainMenu.b_1_1");
-    const playing = await until(() => window.__fbwg.view.session.running,
-                                (both) => both[0] && both[1]);
-    check("they are in a level to finish", playing !== null, true);
+    const onMap = await until(
+      () => window.__fbwg.view.session?.running ?? null,
+      (both) => both.every((x) => x === false));
+    check("the pause tray put them back on the map", onMap !== null, true);
 
-    const board = await finishLevel();
-    check("both of them see the results board", board !== null, true);
+    // Ask who is holding the pick rather than assuming it. Which of them it is
+    // depends on every handover and reconnection above this line, and a block
+    // that guesses wrong does not fail as "the wrong person picked" -- it fails
+    // as a level that never started, three assertions later.
+    const holds = await Promise.all([a, b].map((p) =>
+      p.evaluate(() => window.__fbwg.view.canChooseLevel)));
+    check("exactly one of them is holding the pick",
+          holds.filter(Boolean).length, 1);
+    const picker = holds[0] ? a : b;
+    const other = holds[0] ? b : a;
 
-    check("and it is the results board, not the death screen",
+    // Both of them, and BEFORE the level exists, so the level each of them
+    // builds for the coming Start is the same level.
+    await endNextLevel(a);
+    await endNextLevel(b);
+
+    await clickInGame(picker, "m_mainMenu.b_1_1");
+    const board = await awaitBoard();
+    check("both of them see the board", board !== null, true);
+
+    // Back to survivable levels before anybody picks another one.
+    await playNormally(a);
+    await playNormally(b);
+
+    check("and it is the death screen",
           await a.evaluate(() => window.__fbwg.view.game.children
-            .some((c) => c.Rboard)), true);
+            .some((x) => x.GOboard)), true);
 
-    // Either of them may press it; it travels as a command and lands on both.
-    await a.evaluate(() => {
+    // The one who did NOT pick the level presses it: either of them may, it
+    // travels as a command, and it has to land on both.
+    await other.evaluate(() => {
       const v = window.__fbwg.view;
-      const board = v.game.children.filter((c) => c.Rboard).pop();
-      v.shell.pointerDown(board.Rboard.ToMenuBtn);
+      const board = v.game.children.filter((x) => x.GOboard).pop();
+      v.shell.pointerDown(board.GOboard.ToMenuBtn);
       v.shell.pointerUp();
     });
 
     const clean = await until(
       () => ({
-        running: window.__fbwg.view.session.running,
+        running: window.__fbwg.view.session?.running ?? null,
         boards: window.__fbwg.view.game.children
-          .filter((c) => c.Rboard || c.GOboard).length,
+          .filter((x) => x.Rboard || x.GOboard).length,
         maps: window.__fbwg.view.game.children
-          .filter((c) => c.symbol === "MainMenu").length,
+          .filter((x) => x.symbol === "MainMenu").length,
       }),
-      (both) => both.every((x) => !x.running && x.boards === 0));
-    check("continue takes the board down on BOTH machines", clean !== null,
-          true);
-    if (clean) {
-      check("and leaves one map, not two", [clean[0].maps, clean[1].maps],
-            [1, 1]);
-    } else {
+      (both) => both.every((x) => x.running === false && x.boards === 0 &&
+                                  x.maps === 1));
+    if (!clean) {
       for (const [tag, p] of [["A", a], ["B", b]]) {
         console.log(`  [${tag}] ` + JSON.stringify(await onScreen(p)));
       }
     }
+    check("back takes the board down on BOTH machines, onto one map",
+          clean !== null, true);
 
     // Which is the thing an object path could never see: with a board left up,
     // this throws rather than quietly pressing through it.
-    await clickInGame(b, "m_mainMenu.b_1_1");
+    await clickInGame(picker, "m_mainMenu.b_1_1");
     const next = await until(() => ({
-      running: window.__fbwg.view.session.running,
+      running: window.__fbwg.view.session?.running ?? null,
       boards: window.__fbwg.view.game.children
-        .filter((c) => c.Rboard || c.GOboard).length,
+        .filter((x) => x.Rboard || x.GOboard).length,
     }), (both) => both.every((x) => x.running));
-    check("and bob's next pick starts a level with nothing over it",
+    check("and the next pick starts a level with nothing over it",
           next && [next[0].boards, next[1].boards], [0, 0]);
     check("in step, as ever", (await agree(40)) !== null, true);
     check("with no desyncs",
           await Promise.all([a, b].map((p) =>
-            p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
+            p.evaluate(() => window.__fbwg.view.session?.desyncs ?? -1))),
+          [0, 0]);
   }
 
   console.log("\nand a third person can watch, once they are let in");
@@ -863,7 +939,7 @@ try {
     await pressInGame(b, "m_pauseMenu.endGameBtn");
     await until(() => window.__fbwg.view.session.running,
                 (both) => !both[0] && !both[1]);
-    await pressInGame(b, "m_mainMenu.b_1_1");
+    await clickInGame(b, "m_mainMenu.b_1_1");
 
     let saw = null;
     for (let i = 0; i < 120 && !saw; i++) {
@@ -1029,9 +1105,29 @@ try {
           /left the game/.test(await a.locator(".banner").innerText()), true);
     check("and is out of the session rather than stalled in it",
           await a.evaluate(() => window.__fbwg.view.session === null), true);
-    check("so she can start another game",
-          await inviteRow(a, bob.username).isEnabled(),
-          true);
+    // Bob's page said "online" as it was torn down, and that has to travel to
+    // alice through presence before her row for him means anything. Asking the
+    // instant her banner appears is asking too early.
+    let canInvite = false;
+    for (let i = 0; i < 40 && !canInvite; i++) {
+      canInvite = await inviteRow(a, bob.username).isEnabled();
+      if (!canInvite) await a.waitForTimeout(500);
+    }
+    if (!canInvite) {
+      // Which of the three reasons the button has for being dead is it? The
+      // row is disabled by `!online || match !== null || pending !== null`, and
+      // they are three different bugs.
+      console.log("  [A] " + JSON.stringify(await a.evaluate((who) => ({
+        friends: (window.__fbwg.lobby?.list ?? [])
+          .map((f) => `${f.username}=${f.activity}`),
+        rows: [...document.querySelectorAll(".panel .row")]
+          .map((r) => r.textContent),
+        mine: [...document.querySelectorAll(".panel .row button")]
+          .map((x) => `${x.textContent}:${x.disabled ? "off" : "on"}`),
+        who,
+      }), bob.username)));
+    }
+    check("so she can start another game", canInvite, true);
     await b.click("a[href='#/play']");
     await b.waitForSelector("#stage", { timeout: 20000 });
   }

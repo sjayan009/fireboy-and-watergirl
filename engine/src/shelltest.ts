@@ -87,7 +87,7 @@ console.log("\nfinishing the level");
 const cl = game.m_level.myContactListener;
 // stand both characters on their doors: the doors open over 22 frames, then
 // level.Update spawns the stairs whose frame 35 script calls Recuent()
-for (let i = 0; i < 140; i++) { cl.finish1 = true; cl.finish2 = true; step(); }
+for (let i = 0; i < 140; i++) { cl.finish1 = 1; cl.finish2 = 1; step(); }
 step(45);
 check("the results board appeared", symbols().includes("Recuento"), true);
 check("a medal was recorded", game.The_cookie.data.stats[0] > 0, true);
@@ -256,7 +256,7 @@ console.log("\nthe command the hook sends, applied");
   // pressed -- the case no test reached, because every other route out of a
   // level goes through the pause tray.
   const cl = game.m_level.myContactListener;
-  for (let i = 0; i < 140; i++) { cl.finish1 = true; cl.finish2 = true; run(1); }
+  for (let i = 0; i < 140; i++) { cl.finish1 = 1; cl.finish2 = 1; run(1); }
   run(45);
   check("finishing it puts the results board up", boards(), 1);
 
