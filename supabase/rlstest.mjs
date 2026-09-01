@@ -295,6 +295,95 @@ try {
   });
   check("nor sync a whole map into it", rogueMap.status >= 400, true);
 
+  console.log("\nthe leaderboard shows a pair without opening their row");
+  {
+    // The board is a projection, not a relaxed policy. Mallory can see the
+    // ranked line and still cannot read the row it came from -- which is the
+    // whole design: `pair_progress` keeps every members-only policy it has.
+    await rpc(alice, "sync_progress", {
+      their_id: bob.id,
+      p_stats: [3, ...new Array(31).fill(-1)],
+      p_times: [42, ...new Array(31).fill(0)],
+      p_times_str: ["00:42", ...new Array(31).fill("")],
+    });
+
+    // Read back rather than assume. `sync_progress` is monotonic on purpose --
+    // a time is only replaced by a faster one -- so what is stored after this
+    // is whatever the pair's best actually is, which is the number the board
+    // should be showing.
+    const stored = (await api(alice, "/pair_progress?node=eq.1&select=best_time_s"))
+      .body?.[0]?.best_time_s;
+    const board = await rpc(mallory, "leaderboard", { p_node: 1 });
+    const mine = (board.body ?? []).find((r) => r.best_time_s === stored);
+    if (!mine) {
+      console.log(`  stored ${JSON.stringify(stored)}, board said ` +
+                  `${board.status} ${JSON.stringify(board.body).slice(0, 200)}`);
+    }
+    check("a stranger can see the entry", !!mine, true);
+    check("with both names on it",
+          [mine?.a_username, mine?.b_username].sort().join() ===
+          [an, bn].sort().join(), true);
+    check("and it is not hers", mine?.is_mine, false);
+    check("but the row behind it is still hidden",
+          (await api(mallory, "/pair_progress?select=node,best_time_s")).body?.length,
+          0);
+    check("while alice knows it is hers",
+          ((await rpc(alice, "leaderboard", { p_node: 1 })).body ?? [])
+            .find((r) => r.best_time_s === stored)?.is_mine, true);
+
+    // Opting out is per account and takes the whole entry off: a row belongs to
+    // two people and there is no half of it to publish.
+    await api(bob, `/profiles?id=eq.${bob.id}`, {
+      method: "PATCH", body: JSON.stringify({ hide_from_leaderboard: true }),
+    });
+    check("either player opting out removes the pair",
+          ((await rpc(mallory, "leaderboard", { p_node: 1 })).body ?? [])
+            .some((r) => r.best_time_s === stored), false);
+    check("and neither can put the other back on",
+          (await api(alice, `/profiles?id=eq.${bob.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ hide_from_leaderboard: false }),
+          })).body?.length ?? 0, 0);
+
+    await api(bob, `/profiles?id=eq.${bob.id}`, {
+      method: "PATCH", body: JSON.stringify({ hide_from_leaderboard: false }),
+    });
+  }
+
+  console.log("\na recovery code works once, and only for its owner");
+  {
+    const minted = await rpc(alice, "generate_recovery_codes", {});
+    const codes = minted.body ?? [];
+    check("ten codes are issued", codes.length, 10);
+    check("and they are shaped to be read aloud",
+          /^[A-Z2-9]{5}-[A-Z2-9]{5}$/.test(codes[0]), true);
+    check("all ten are unused", (await rpc(alice, "recovery_codes_left", {})).body,
+          10);
+
+    // Never stored in the clear: the table holds bcrypt output, and there is no
+    // policy by which anybody -- including alice -- may read even that.
+    check("the codes are not readable by their owner",
+          (await api(alice, "/mfa_recovery_codes?select=code_hash")).body?.length,
+          0);
+
+    check("somebody else's code is refused",
+          (await rpc(bob, "redeem_recovery_code", { code: codes[0] })).body,
+          false);
+    check("a code that was never minted is refused",
+          (await rpc(alice, "redeem_recovery_code", { code: "AAAAA-AAAAA" })).body,
+          false);
+
+    check("the real one is accepted",
+          (await rpc(alice, "redeem_recovery_code", { code: codes[0] })).body,
+          true);
+    check("and the rest go with it -- they were spare keys to a lock that is "
+          + "no longer there",
+          (await rpc(alice, "recovery_codes_left", {})).body, 0);
+    check("so the same code cannot be used twice",
+          (await rpc(alice, "redeem_recovery_code", { code: codes[0] })).body,
+          false);
+  }
+
   console.log("\na block is only liftable by whoever cast it");
   {
     // The whole feature is this assertion. `block()` used to be a PATCH through

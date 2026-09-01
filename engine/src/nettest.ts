@@ -48,6 +48,18 @@ class Link {
     this.rng = new Rng(seed);
   }
 
+  /**
+   * Everything that crosses the link, for somebody who is not on either end.
+   *
+   * A watcher does not sit between the two peers -- it is handed a copy of what
+   * they said to each other. This is the in-memory version of the mirror the
+   * app puts on the pair's channel, and it delivers on the same schedule as the
+   * real traffic so a test cannot accidentally depend on being ahead of it.
+   */
+  private watchers: ((d: Uint8Array) => void)[] = [];
+
+  watch(fn: (d: Uint8Array) => void): void { this.watchers.push(fn); }
+
   endpoint(side: 0 | 1): Transport {
     const other = (side === 0 ? 1 : 0) as 0 | 1;
     const link = this;
@@ -55,6 +67,10 @@ class Link {
       get rttMs() { return link.latencyMs * 2; },
       send(data: Uint8Array) {
         link.sent++;
+        // Copied before the loss roll: a watcher is on a different wire, and a
+        // packet the peers dropped between themselves is not one the watcher
+        // is obliged to lose too.
+        for (const w of link.watchers) w(data.slice());
         if (link.rng.next() < link.loss) { link.dropped++; return; }
         const jitter = (link.rng.next() * 2 - 1) * link.jitterMs;
         link.queue.push({
@@ -278,6 +294,83 @@ console.log("\nboth players hitting retry at once");
   check("digests match", peers[0].host.hash() === peers[1].host.hash(), true);
   check("with no desyncs",
         peers[0].session.desyncs + peers[1].session.desyncs, 0);
+}
+
+console.log("\nsomebody watching sees the same game");
+{
+  // The whole of spectating, and it is nearly free: the simulation is a pure
+  // function of (mode, level, input log), so a third session fed the two
+  // players' input reaches the same world without either of them doing
+  // anything for it.
+  //
+  // The observer is neither slot. It takes both players' input off the wire,
+  // sends nothing, and never predicts -- prediction hides the delay between
+  // pressing a key and seeing your own character move, and a watcher has no
+  // key to press.
+  const link = new Link(40, 0, 0);
+  const peers = pair(link, 3);
+  const seat = new LevelHost();
+  const eyes = new NetSession({
+    slot: 0, observer: true, host: seat,
+    transport: {
+      rttMs: null,
+      send() { /* a watcher says nothing */ },
+      onMessage(fn) { link.watch(fn); },
+      close() {},
+    },
+  });
+
+  peers[0].session.requestStart("adventure", 1);
+  link.advance(STEP_MS);
+  for (let i = 0; i < 600; i++) {
+    for (const s of [0, 1] as Slot[]) {
+      peers[s].session.setLocalInput(scripted(s, i));
+    }
+    link.advance(STEP_MS);
+    peers[0].session.tick(STEP);
+    peers[1].session.tick(STEP);
+    eyes.tick(STEP);
+  }
+
+  check("the watcher started the level the pair started", eyes.running, true);
+  check("and is on the same generation of it",
+        eyes.generation === peers[0].session.generation, true);
+  // Behind, not wrong. A watcher runs a frame or two back because it waits for
+  // both players rather than guessing at either.
+  check("running a little behind, as watching does",
+        eyes.frame > 0 && eyes.frame <= peers[0].session.frame, true);
+  console.log(`  the pair are on frame ${peers[0].session.frame}, ` +
+              `the watcher on ${eyes.frame}`);
+
+  // Compared at the same frame, not at the same moment. Two sessions sampled
+  // at one instant legitimately differ; the question is whether the watcher
+  // ever simulated a different game, and the log is what answers it.
+  let sameLog = true;
+  for (let f = 0; f < eyes.frame; f++) {
+    if (eyes.log[f] !== peers[0].session.log[f]) { sameLog = false; break; }
+  }
+  check("every frame it ran was the frame the players ran", sameLog, true);
+
+  // And it follows them through a retry without being told anything special:
+  // the command carries the frame it lands on and the generation it belongs to.
+  const before = eyes.generation;
+  peers[1].session.send(Command.Retry);
+  for (let i = 0; i < 400; i++) {
+    for (const s of [0, 1] as Slot[]) {
+      peers[s].session.setLocalInput(scripted(s, i));
+    }
+    link.advance(STEP_MS);
+    peers[0].session.tick(STEP);
+    peers[1].session.tick(STEP);
+    eyes.tick(STEP);
+  }
+  check("a retry takes the watcher with it", eyes.generation - before, 1);
+  check("onto the same generation the players are on",
+        eyes.generation === peers[0].session.generation, true);
+  check("and it is still the same game",
+        eyes.log.slice(0, eyes.frame).join() ===
+        peers[0].session.log.slice(0, eyes.frame).join(), true);
+  check("with nobody desyncing", eyes.desyncs, 0);
 }
 
 console.log("\na Start that is lost completely still gets there");

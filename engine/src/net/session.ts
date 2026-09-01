@@ -120,6 +120,21 @@ export interface SessionOptions {
   hashEvery?: number;
   /** Solo: no remote peer, so never stall waiting for one. */
   solo?: boolean;
+  /**
+   * Watch a game rather than play in one.
+   *
+   * An observer is neither slot. It takes the input of BOTH players off the
+   * wire, sends nothing, and never predicts -- a frame runs when both players'
+   * input for it has arrived and not before. That is the lockstep rule this
+   * file started with, and it is exactly right here: prediction exists to hide
+   * the delay between pressing a key and seeing your own character move, and a
+   * watcher has no key to press. Running a little behind is what watching is.
+   *
+   * Commands need no special case. Start, Retry, Pause and Quit all carry the
+   * frame they take effect on and the generation they belong to, so a watcher
+   * follows a pair through a retry without knowing anything happened.
+   */
+  observer?: boolean;
   onDesync?: (frame: number, mine: string, theirs: string) => void;
   /**
    * A Quit took effect and the level is over, with `bySlot` naming who asked.
@@ -177,6 +192,7 @@ export class NetSession {
   private readonly timeStep: number;
   private readonly hashEvery: number;
   private readonly solo: boolean;
+  private readonly observer: boolean;
   private readonly onDesync?: SessionOptions["onDesync"];
   private readonly onQuit?: SessionOptions["onQuit"];
   private readonly onLinkDown?: SessionOptions["onLinkDown"];
@@ -285,10 +301,25 @@ export class NetSession {
     this.other = (o.slot === 0 ? 1 : 0) as Slot;
     this.transport = o.transport;
     this.host = o.host;
-    this.rollbackOn = (o.rollback ?? false) && !!o.host.save && !!o.host.load;
+    // Set before anything that reads it: the delay below depends on it.
+    this.observer = o.observer ?? false;
+    // Never for an observer. Rollback is the machinery for being wrong about
+    // input you had to guess, and a watcher guesses nothing -- so the snapshot
+    // it would cost buys nothing at all.
+    this.rollbackOn = (o.rollback ?? false) && !o.observer &&
+                      !!o.host.save && !!o.host.load;
     // Rollback's whole point is that there is nothing to wait for, so it wants
     // no delay. Lockstep needs enough to cover a round trip.
-    this.delay = o.delay ?? (this.rollbackOn ? 0 : 3);
+    //
+    // An observer wants none either, and for a sharper reason than taste.
+    // `resetLog` pre-fills the first `delay` frames of BOTH slots with neutral
+    // input, so that a lockstep pair does not deadlock on frame zero waiting
+    // for input neither was ever going to send. Received input only ever fills
+    // gaps -- it never overwrites -- so those fabricated zeros would beat the
+    // players' real frames 0 to 2 off the wire, and a watcher would silently
+    // diverge from the game it is watching whenever somebody was already
+    // holding a key when the level began.
+    this.delay = o.delay ?? (this.rollbackOn || this.observer ? 0 : 3);
     this.maxRollback = o.maxRollback ?? 10;
     this.timeStep = o.timeStep ?? 1 / 26;
     this.hashEvery = o.hashEvery ?? 8;
@@ -435,6 +466,10 @@ export class NetSession {
    * the resends ride on input packets that are not coming either.
    */
   depart(): void {
+    // Nothing to announce: a watcher was never part of the game it was
+    // watching, and telling the pair that somebody stopped looking is not this
+    // channel's business.
+    if (this.observer) { this.host.quit(); this.started = false; return; }
     if (!this.started) return;
     const packet = encodeCommand({
       kind: Kind.Command, slot: this.slot, epoch: this.epoch,
@@ -460,6 +495,10 @@ export class NetSession {
    * changing our mind would mean the two simulations disagree.
    */
   private scheduleLocal(): void {
+    // A watcher has no input to decide and nobody to tell. Leaving `nextLocal`
+    // where it is also keeps `ready` honest: it asks whether both players'
+    // input has arrived, and neither of them is this one.
+    if (this.observer) return;
     let sent = false;
     while (this.nextLocal <= this.frame + this.delay) {
       this.input[this.slot][this.nextLocal] = this.localBits;
@@ -522,6 +561,10 @@ export class NetSession {
    * a problem: it forces a correction, exactly as a mispredicted input does.
    */
   send(command: Command, a = 0, b = 0): void {
+    // A watcher cannot change the game it is watching. Refused here rather than
+    // only in the page, because "the netcode will not let you" is a stronger
+    // guarantee than "no screen offers you the button".
+    if (this.observer) return;
     // Far enough ahead that neither peer can already have simulated past it by
     // the time the packet lands. Input is worth shaving frames off; a command
     // is not -- nobody notices 400 ms on a pause, and a command that arrives
@@ -562,7 +605,9 @@ export class NetSession {
   private receive(data: Uint8Array): void {
     const p = decode(data);
     if (!p) return;
-    if (p.slot === this.slot) return;        // our own packet, echoed back
+    // Our own packet, echoed back -- except for an observer, which is neither
+    // slot and wants both.
+    if (!this.observer && p.slot === this.slot) return;
     // A packet from a level we have already left, or from one we have not
     // started yet. Either way its frame numbers mean nothing to us: the peer's
     // redundancy will re-send whatever we miss once we are both on the same
