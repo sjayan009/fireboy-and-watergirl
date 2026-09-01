@@ -128,6 +128,26 @@ check("a hash route is just the page", hashRoute.status, 200);
 
 // ---------------------------------------------------------------- the app
 
+/**
+ * Everything above needs no credentials. Everything below makes a throwaway
+ * account and signs it in, which needs the secret key.
+ *
+ * Stopping here is said out loud, in the same shape as "playwright not
+ * installed" below it. A check that quietly stops running is worse than one
+ * that was never written: it leaves a green tick standing for an assertion
+ * nobody is making any more.
+ */
+if (typeof SECRET !== "string" || SECRET.length < 20) {
+  console.log("\nstopping after the headers -- there is no SUPABASE_SECRET_KEY " +
+              "here.");
+  console.log("  In CI that means the repository has no such secret; locally " +
+              "it means .env.local");
+  console.log("  has none. NOT CHECKED: signing a real account in, the art " +
+              "the CDN serves, the");
+  console.log("  sounds, and the browser console. Everything above was.");
+  process.exit(failures === 0 ? 0 : 1);
+}
+
 let playwright;
 try {
   playwright = await import("playwright");
