@@ -193,6 +193,45 @@ try {
   }
   check("they are friends", status, "accepted");
 
+  // A third person, befriended NOW rather than later. Everything below happens
+  // mid-match, and opening the friends list tears the play screen down -- match
+  // and all -- so a friendship made halfway through would end the game it was
+  // made to watch.
+  console.log("\nand a third person, who knows only alice");
+  const carol = await makeUser("c");
+  const ctxC = await browser.newContext();
+  const c = await ctxC.newPage();
+  c.on("pageerror", (err) => {
+    failures++;
+    console.log("  FAIL page error: " + err.message);
+  });
+  await signIn(c, carol, await makeCode(2));
+  await c.click("a[href='#/friends']");
+  await c.waitForSelector("text=Send a request");
+  await c.fill("form input", alice.username);
+  await c.click("button[type=submit]");
+  await c.waitForSelector("text=Request sent", { timeout: 30000 });
+
+  // Alice is already looking at her friends list -- the block above left her
+  // there -- so there is no link to click, only a request to answer. Reloaded,
+  // and reloaded again if need be, because that screen draws once and does not
+  // listen: a request arriving while somebody has the list open does not show
+  // up until they come back to it. Worth knowing, and not worth fixing here.
+  let asked = false;
+  for (let i = 0; i < 6 && !asked; i++) {
+    await a.reload({ waitUntil: "load" });
+    asked = await a.locator("button:has-text('Accept')")
+      .waitFor({ timeout: 5000 }).then(() => true).catch(() => false);
+  }
+  check("alice is asked", asked, true);
+  await a.click("button:has-text('Accept')");
+
+  // Friends with alice and not with bob, deliberately: the watch policy admits
+  // friends of EITHER player, and somebody who knew both would not tell that
+  // rule apart from the stricter one.
+  await c.click("a[href='#/play']");
+  await c.waitForSelector("#stage");
+
   // Seed a map for the pair, so the test can tell the pair's progress from the
   // solo progress each browser would otherwise be holding.
   const lo = alice.id < bob.id ? alice.id : bob.id;
@@ -250,19 +289,52 @@ try {
   }, path);
 
   /**
-   * Wait until the two peers are observably on the same frame with the same
-   * digest.
+   * Are the two of them playing the same game?
    *
-   * Under rollback the newest frame or two on each side is a prediction, so
-   * two peers compared at an arbitrary instant legitimately differ -- that is
-   * the mechanism working. They converge as the truth arrives, so this waits
-   * for agreement rather than asserting it now.
+   * Asked of their HISTORIES, not of their present. Comparing two live pages at
+   * one instant asks them to be on the same frame at the same millisecond,
+   * which under rollback they legitimately are not -- the newest frame or two
+   * on each side is a prediction -- and which on a loaded machine they simply
+   * are not, because each round trip costs frames. That assertion measured how
+   * busy the computer was.
+   *
+   * `session.log` is the combined input the session actually simulated each
+   * frame, corrected in place when a prediction turns out wrong. Two peers
+   * whose logs agree over a settled prefix ran the same frames, and the engine
+   * being a pure function of that log is proved exhaustively elsewhere. The
+   * present tense is left to `desyncs`, which the sessions compare digests for
+   * continuously and report on their own.
+   *
+   * Twenty frames back from the nearer frontier, because the last few are the
+   * predictions.
    */
-  const agree = () => until(() => ({
-    frame: window.__fbwg.view.session.frame,
-    digest: window.__fbwg.view.digest(),
-  }), (both) => both[0].frame === both[1].frame &&
-                !!both[0].digest && both[0].digest === both[1].digest);
+  const agree = async (minFrame = 60) => {
+    for (let i = 0; i < 80; i++) {
+      const [x, y] = await Promise.all([a, b].map((p) => p.evaluate(() => {
+        const s = window.__fbwg.view.session;
+        return { frame: s.frame, log: s.log };
+      })));
+      const upto = Math.min(x.frame, y.frame) - 20;
+      if (upto >= minFrame) {
+        const mine = x.log.slice(0, upto).join();
+        const theirs = y.log.slice(0, upto).join();
+        if (mine === theirs) return { frame: upto, x, y };
+        return null;                      // they ran different games
+      }
+      await a.waitForTimeout(250);
+    }
+    return null;
+  };
+
+  /**
+   * Alice's Invite button for a particular friend.
+   *
+   * Scoped to the row, because she has more than one friend now and the bare
+   * selector matches every Invite on the panel -- which Playwright rejects
+   * rather than guessing at, correctly.
+   */
+  const inviteRow = (page, who) =>
+    page.locator(`.panel .row:has-text("${who}") button:has-text("Invite")`);
 
   /** Poll both pages with one evaluate each until they agree with `want`. */
   const until = async (read, want, tries = 60, gap = 150) => {
@@ -279,7 +351,7 @@ try {
   {
     // Cancel used to hide the banner and nothing else: the invitation carried
     // on being accepted behind it and the game started anyway.
-    await a.click(".panel .row button:has-text('Invite')");
+    await inviteRow(a, bob.username).click();
     await a.waitForSelector(".banner select");
     await a.click(".banner button:has-text('Send invite')");
     await b.waitForSelector(".banner:has-text('wants to play')", { timeout: 30000 });
@@ -294,7 +366,7 @@ try {
           [true, true]);
     await b.click(".banner button:has-text('Dismiss')");
     check("and alice can invite again",
-          await a.locator(".panel .row button:has-text('Invite')").isEnabled(),
+          await inviteRow(a, bob.username).isEnabled(),
           true);
   }
 
@@ -303,7 +375,7 @@ try {
     // "Not now" used to do nothing at all, so the only way to decline was to say
     // nothing -- which is also what somebody who has walked away from their desk
     // does. The inviter waited out two full minutes either way.
-    await a.click(".panel .row button:has-text('Invite')");
+    await inviteRow(a, bob.username).click();
     await a.waitForSelector(".banner select");
     await a.click(".banner button:has-text('Send invite')");
     await b.waitForSelector(".banner:has-text('wants to play')", { timeout: 30000 });
@@ -317,7 +389,7 @@ try {
   }
 
   console.log("\nalice invites bob, and assigns the roles");
-  await a.click(".panel .row button:has-text('Invite')");
+  await inviteRow(a, bob.username).click();
   await a.waitForSelector(".banner select");
   // Alice deliberately makes BOB Fireboy, so the test proves the assignment
   // travels rather than each peer picking for itself.
@@ -359,7 +431,19 @@ try {
   await water.click("#stage");
   await fire.keyboard.down("ArrowRight");
   await water.keyboard.down("ArrowLeft");
-  await a.waitForTimeout(3000);
+  // Held until they have gone somewhere, not for a fixed three seconds. The
+  // game runs on wall time, and wall time buys fewer frames on a machine
+  // running three browsers than on an idle one -- so a fixed wait is a bet on
+  // how busy the machine is, and this test lost it.
+  for (let i = 0; i < 60; i++) {
+    await a.waitForTimeout(250);
+    const far = await a.evaluate(() => {
+      const lv = window.__fbwg.view.level;
+      return lv ? lv.pers1.GetPosition().x > 22 && lv.pers2.GetPosition().x < 4
+                : false;
+    });
+    if (far) break;
+  }
   await fire.keyboard.up("ArrowRight");
   await water.keyboard.up("ArrowLeft");
 
@@ -371,36 +455,19 @@ try {
    * mechanism working. They converge as the truth arrives, so the assertion is
    * that they agree within a couple of seconds, not that they agree right now.
    */
-  let agreed = null;
-  for (let i = 0; i < 40; i++) {
-    // Frame, digest AND positions read in ONE evaluate per page. Reading them
-    // in separate calls would sample two moments: both pages keep ticking in
-    // real time between one round trip and the next, so the positions would
-    // come from a later frame than the digest that vouched for them.
-    const [x, y] = await Promise.all([a, b].map((p) => p.evaluate(() => {
-      const v = window.__fbwg.view;
-      const lv = v.level;
-      return {
-        frame: v.session.frame,
-        digest: v.digest(),
-        fire: lv ? +lv.pers1.GetPosition().x.toFixed(3) : null,
-        water: lv ? +lv.pers2.GetPosition().x.toFixed(3) : null,
-      };
-    })));
-    if (x.frame === y.frame && x.digest && x.digest === y.digest) {
-      agreed = [x, y];
-      break;
-    }
-    await a.waitForTimeout(100);
-  }
+  const agreed = await agree();
   check("the two peers agree on the simulation", agreed !== null, true);
-  if (agreed) {
-    const [x, y] = agreed;
-    console.log(`  frame ${x.frame}, digest ${x.digest}`);
-    check("and on where both characters are",
-          [x.fire, x.water], [y.fire, y.water]);
-    check("having actually moved apart", x.fire > 20 && x.water < 5, true);
-  }
+  if (agreed) console.log(`  identical for ${agreed.frame} frames`);
+
+  // Where the characters are, which is the thing a person would look at. Read
+  // in one evaluate per page so the two numbers come from one moment.
+  const where = await Promise.all([a, b].map((p) => p.evaluate(() => {
+    const lv = window.__fbwg.view.level;
+    return lv ? [+lv.pers1.GetPosition().x.toFixed(1),
+                 +lv.pers2.GetPosition().x.toFixed(1)] : null;
+  })));
+  check("having actually moved apart",
+        !!where[0] && where[0][0] > 20 && where[0][1] < 5, true);
 
   const desyncs = await Promise.all([a, b].map((p) =>
     p.evaluate(() => window.__fbwg.view.session.desyncs)));
@@ -494,17 +561,15 @@ try {
       running: window.__fbwg.view.session.running,
       mode: window.__fbwg.view.level?.CurrentMode ?? null,
       num: window.__fbwg.view.level?.CurrentLevel ?? null,
-      digest: window.__fbwg.view.digest(),
-      frame: window.__fbwg.view.session.frame,
     }), (both) => both[0].running && both[1].running &&
-                  both[0].frame === both[1].frame &&
-                  !!both[0].digest && both[0].digest === both[1].digest);
+                  both[0].mode !== null && both[1].mode !== null);
     check("and alice's pick starts the same level on both", started !== null, true);
     if (started) {
       check("the level they both got",
             [started[0].mode, started[0].num, started[1].mode, started[1].num],
             ["adventure", 1, "adventure", 1]);
     }
+    check("and they are playing it together", (await agree(40)) !== null, true);
     check("with no desyncs from any of it",
           await Promise.all([a, b].map((p) =>
             p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
@@ -546,8 +611,7 @@ try {
                           `where they had reached ${before[0]}`);
     const together = await agree();
     check("and they are in step in it", together !== null, true);
-    if (together) console.log(`  frame ${together[0].frame}, ` +
-                              `digest ${together[0].digest}`);
+    if (together) console.log(`  identical for ${together.frame} frames`);
     check("with no desyncs",
           await Promise.all([a, b].map((p) =>
             p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
@@ -562,9 +626,12 @@ try {
     await until(() => window.__fbwg.view.session.running,
                 (both) => !both[0] && !both[1]);
 
+    // Matched on "pick", not on "Let". `has-text` is a case-insensitive
+    // substring and the header now also holds "Let friends watch" -- the same
+    // trap the accounts test fell into with "Confirm".
     check("only alice can offer to hand it over",
           await Promise.all([a, b].map((p) =>
-            p.locator("header button:has-text('Let')").isVisible())),
+            p.locator("header button:has-text('pick')").isVisible())),
           [true, false]);
 
     // Whether the message arrives at all is worth seeing on failure: a
@@ -574,7 +641,7 @@ try {
       window.__fbwg.lobby.onHandover((h) => window.__handovers.push(h));
     });
 
-    await a.click("header button:has-text('Let')");
+    await a.click("header button:has-text('pick')");
     // Alice is the one who loses it, so Alice is the one told a name; bob is
     // told it is his.
     try {
@@ -607,14 +674,122 @@ try {
           await a.evaluate(() => window.__fbwg.view.session.running), false);
 
     await pressInGame(b, "m_mainMenu.b_1_1");
-    const started = await until(() => ({
-      running: window.__fbwg.view.session.running,
-      digest: window.__fbwg.view.digest(),
-      frame: window.__fbwg.view.session.frame,
-    }), (both) => both[0].running && both[1].running &&
-                  both[0].frame === both[1].frame &&
-                  !!both[0].digest && both[0].digest === both[1].digest);
+    const started = await until(() => window.__fbwg.view.session.running,
+                                (both) => both[0] && both[1]);
     check("and bob's pick starts it for both", started !== null, true);
+    check("and they are playing it together", (await agree(40)) !== null, true);
+  }
+
+  console.log("\nand a third person can watch, once they are let in");
+  {
+    // Determinism is what makes this nearly free: the simulation is a pure
+    // function of the level and the input log, so a watcher fed the two
+    // players' three bits each per frame reaches the same world. What the test
+    // is really asking is whether the same world actually arrives.
+    // Nothing is publishable until the pair says so, so there is nothing for
+    // carol to join yet.
+    check("nothing to watch before they share it",
+          await c.locator(".panel button.watch").count(), 0);
+
+    await a.click("header button:has-text('Let friends watch')");
+    let offered = false;
+    for (let i = 0; i < 60 && !offered; i++) {
+      await c.waitForTimeout(500);
+      offered = (await c.locator(".panel button.watch").count()) > 0;
+    }
+    if (!offered) {
+      const look = (p) => p.evaluate(() => ({
+        channels: [...(window.__fbwg.lobby?.channels ?? new Map()).entries()]
+          .map(([id, ch]) => `${ch.topic.slice(0, 18)}=${ch.channel.state}`),
+        share: [...document.querySelectorAll("header button")]
+          .map((b) => b.textContent + (b.hidden ? " (hidden)" : "")),
+      }));
+      console.log("  [A] " + JSON.stringify(await look(a)));
+      console.log("  [C] " + JSON.stringify(await look(c)));
+    }
+    check("and a row appears once they do", offered, true);
+
+    await c.click(".panel button.watch");
+    await c.waitForSelector("#stage", { timeout: 20000 });
+    await c.waitForFunction(
+      "window.__fbwgWatch && window.__fbwgWatch.view.session", null,
+      { timeout: 30000 });
+    check("carol is watching, not playing",
+          await c.evaluate(() => window.__fbwgWatch.view.watching), true);
+
+    // Carol arrived in the middle of a level, so she is waiting -- which is the
+    // chosen behaviour and not a gap: catching up would mean the pair shipping
+    // their whole history to anybody who asked. So the pair finish this one and
+    // start another, which is the moment a watcher is designed to join.
+    //
+    // Bob starts it, because the scene before this one handed him the pick.
+    await pressInGame(b, "m_pauseMenu.endGameBtn");
+    await until(() => window.__fbwg.view.session.running,
+                (both) => !both[0] && !both[1]);
+    await pressInGame(b, "m_mainMenu.b_1_1");
+
+    let saw = null;
+    for (let i = 0; i < 120 && !saw; i++) {
+      const st = await c.evaluate(() => {
+        const v = window.__fbwgWatch.view;
+        return { running: v.session?.running ?? false,
+                 frame: v.session?.frame ?? -1, digest: v.digest() };
+      });
+      if (st.running && st.frame > 30 && st.digest) saw = st;
+      else await c.waitForTimeout(250);
+    }
+    check("the watcher reaches the level the pair started", saw !== null, true);
+    if (!saw) {
+      // Which half is quiet: the pair not publishing, or the watcher not
+      // hearing. The mirror counts what it actually put on the topic.
+      console.log("  [A] " + JSON.stringify(await a.evaluate(() => ({
+        sharing: window.__fbwg.view.session?.running ?? null,
+        mirrored: window.__fbwg.view.session?.transport?.sent ?? "no mirror",
+      }))));
+      console.log("  [C] " + JSON.stringify(await c.evaluate(() => ({
+        session: !!window.__fbwgWatch.view.session,
+        running: window.__fbwgWatch.view.session?.running ?? null,
+        frame: window.__fbwgWatch.view.session?.frame ?? -1,
+        banner: document.querySelector(".banner")?.textContent?.slice(0, 80),
+      }))));
+    }
+
+    if (saw) {
+      // Compared at the same frame rather than the same moment: a watcher runs
+      // a little behind because it waits for both players instead of guessing
+      // at either, so "now" is not a fair question to ask of both.
+      const at = saw.frame;
+      const theirs = await a.evaluate((f) => {
+        const s = window.__fbwg.view.session;
+        return s.log.slice(0, f).join();
+      }, at);
+      const watched = await c.evaluate((f) => {
+        const s = window.__fbwgWatch.view.session;
+        return s.log.slice(0, f).join();
+      }, at);
+      check("and every frame it ran was the frame they ran",
+            watched === theirs, true);
+      console.log(`  the watcher is on frame ${at}, digest ${saw.digest}`);
+    }
+
+    // Closing it takes the row away again.
+    await a.click("header button:has-text('Stop letting friends watch')");
+    await c.click("a[href='#/play']");
+    await c.waitForSelector("#stage", { timeout: 20000 });
+    let gone = false;
+    for (let i = 0; i < 40; i++) {
+      if (await c.locator(".panel button.watch").count() === 0) {
+        gone = true; break;
+      }
+      await c.waitForTimeout(250);
+    }
+    check("and closing it takes the row away", gone, true);
+
+    // Carol is done. Closed here rather than at the end, because everything
+    // below is about two people on the slowest path there is -- a relayed pair
+    // batching every 115 ms -- and a third browser on the same machine is load
+    // that scene was never written to carry.
+    await ctxC.close();
   }
 
   console.log("\nthe progress they see is the pair's, not each browser's");
@@ -718,7 +893,7 @@ try {
     check("and is out of the session rather than stalled in it",
           await a.evaluate(() => window.__fbwg.view.session === null), true);
     check("so she can start another game",
-          await a.locator(".panel .row button:has-text('Invite')").isEnabled(),
+          await inviteRow(a, bob.username).isEnabled(),
           true);
     await b.click("a[href='#/play']");
     await b.waitForSelector("#stage", { timeout: 20000 });
@@ -741,7 +916,7 @@ try {
                               { timeout: 40000 });
     }
 
-    await a.click(".panel .row button:has-text('Invite')");
+    await inviteRow(a, bob.username).click();
     await a.waitForSelector(".banner select");
     await a.click(".banner button:has-text('Send invite')");
     await b.waitForSelector(".banner:has-text('wants to play')", { timeout: 40000 });
@@ -762,17 +937,13 @@ try {
     await a.waitForTimeout(2500);
     await a.keyboard.up("ArrowRight");
 
-    let relayed = null;
-    for (let i = 0; i < 60; i++) {
-      const [x, y] = await Promise.all([a, b].map((p) => p.evaluate(() => ({
-        frame: window.__fbwg.view.session.frame,
-        digest: window.__fbwg.view.digest(),
-      }))));
-      if (x.frame === y.frame && x.digest && x.digest === y.digest) { relayed = x; break; }
-      await a.waitForTimeout(150);
-    }
+    // Asked of their histories, like every other one of these. A relayed pair
+    // batch every 115 ms, so the instant at which they happen to be on the same
+    // frame is even harder to catch here than on a direct link -- and no more
+    // interesting.
+    const relayed = await agree(40);
     check("and still simulate the same game over it", relayed !== null, true);
-    if (relayed) console.log(`  frame ${relayed.frame}, digest ${relayed.digest}`);
+    if (relayed) console.log(`  identical for ${relayed.frame} frames`);
     check("with no desyncs",
           await Promise.all([a, b].map((p) =>
             p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);

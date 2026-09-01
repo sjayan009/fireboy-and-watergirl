@@ -44,8 +44,16 @@ export class WatchMirror implements Transport {
   /** Messages actually put on the wire, so the cost is observable. */
   sent = 0;
 
+  /**
+   * `room` is asked for rather than handed over, because the two arrive in the
+   * wrong order. The transport has to be wrapped at the moment the session is
+   * built -- there is no wrapping it afterwards -- and joining the watch topic
+   * is a round trip that has not finished by then. Holding a getter instead of
+   * a channel means the mirror exists from the first frame and simply publishes
+   * nothing until there is somewhere to publish to.
+   */
   constructor(private readonly inner: Transport,
-              private readonly channel: WatchChannel) {}
+              private readonly room: () => WatchChannel | null) {}
 
   /** Start or stop publishing. Off until the pair says otherwise. */
   setSharing(on: boolean): void {
@@ -103,7 +111,9 @@ export class WatchMirror implements Transport {
     if (this.closed || !this.on || this.queue.length === 0) return;
     const packets = this.queue;
     this.queue = [];
+    const room = this.room();
+    if (!room) return;
     this.sent++;
-    this.channel.feed(packets);
+    room.feed(packets);
   }
 }

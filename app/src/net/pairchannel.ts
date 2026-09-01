@@ -273,6 +273,7 @@ export class PairChannel {
         if (settled) {
           if (status === "SUBSCRIBED") {
             pair.attempts = 0;
+            pair.flushHeld();
             // Re-announced, because a rejoin brings back the subscription and
             // not what we had told it about ourselves. Without this, a blip
             // leaves you invisible to a friend looking straight at your name.
@@ -289,6 +290,7 @@ export class PairChannel {
           pair.attempts = 0;
           clearTimeout(timer);
           await channel.track(pair.me);
+          pair.flushHeld();
           resolve();
         } else if (status === "CHANNEL_ERROR" || status === "CLOSED") {
           settled = true;
@@ -405,17 +407,40 @@ export class PairChannel {
     return () => this.statusHandlers.delete(fn);
   }
 
+  /**
+   * Messages sent while the subscription was not up, waiting for it to be.
+   *
+   * Capped, and the oldest go first: this exists to carry a handful of small
+   * decisions across a reconnection, not to buffer a game.
+   */
+  private held: { event: string; payload: unknown }[] = [];
+
   send(event: string, payload: unknown): void {
-    // The result is worth looking at. `send` resolves to "ok", "timed out" or
-    // "error" -- and, on a channel the server has closed, quietly falls back to
-    // the REST endpoint and still says "ok" while nobody is subscribed to
-    // receive it. Discarding that makes a message that never arrived look
-    // exactly like one that was never sent.
+    // Held rather than sent while the channel is between subscriptions. The
+    // client does not refuse a send on a channel that is only joining -- it
+    // quietly falls back to the REST endpoint and returns "ok", and REST
+    // publishes to a topic that, at that instant, nobody is subscribed to. The
+    // message is reported as delivered and is simply gone, which is the most
+    // expensive kind of failure to find: it looks exactly like a screen that
+    // ignored a message it never received.
+    if (this.live.state !== "joined") {
+      this.held.push({ event, payload });
+      if (this.held.length > 16) this.held.shift();
+      return;
+    }
+    // The result is worth looking at for the same reason.
     void this.live.send({ type: "broadcast", event, payload })
       .then((status) => {
         if (status !== "ok") console.warn(`${event} did not send: ${status}`);
       })
       .catch((e) => console.warn(`${event} did not send:`, e));
+  }
+
+  /** Say the things that were waiting for a subscription. */
+  private flushHeld(): void {
+    const waiting = this.held;
+    this.held = [];
+    for (const m of waiting) this.send(m.event, m.payload);
   }
 
   invite(i: Invite): void { this.send(INVITE, i); }
