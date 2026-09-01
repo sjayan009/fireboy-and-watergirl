@@ -36,12 +36,17 @@ let cleanup: (() => void) | null = null;
 let showing = "";
 
 export function go(path: string): void {
-  if (location.hash === "#" + path) render();
+  if (current() === path) render();
   else location.hash = path;
 }
 
 function current(): string {
-  const raw = location.hash.replace(/^#/, "");
+  // The query is not part of the route. `#/watch?t=watch:a:b` is the watch
+  // screen with an argument, and matching on the whole hash made it a path no
+  // route claimed -- so it was redirected home, which looks from the outside
+  // like a link that does nothing. Screens read their own arguments off the
+  // hash; the router only decides which screen.
+  const raw = location.hash.replace(/^#/, "").split("?")[0];
   return raw.startsWith("/") ? raw : "/";
 }
 

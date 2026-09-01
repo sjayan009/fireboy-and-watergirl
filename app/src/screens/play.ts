@@ -121,8 +121,19 @@ export function playScreen(host: HTMLElement): () => void {
   let mirror: WatchMirror | null = null;
   let watchRoom: WatchChannel | null = null;
   let sharing = false;
+  /**
+   * Said again every few seconds while the game is open to watchers.
+   *
+   * A broadcast reaches whoever is subscribed at that instant and nobody else,
+   * so announcing once means a friend who was between subscriptions -- or who
+   * simply opened the app a minute later -- never learns there is anything to
+   * watch. Repeating is how a broadcast becomes a state that can be discovered
+   * rather than an event that can be missed. One small message every five
+   * seconds, and only while somebody has actually asked to be watchable.
+   */
+  let beating: ReturnType<typeof setInterval> | null = null;
   /** Games our friends have opened to watchers, by topic. */
-  const showing = new Map<string, Showing>();
+  const showing = new Map<string, Showing & { heard: number }>();
   /**
    * An invitation in flight, in either direction.
    *
@@ -228,8 +239,17 @@ export function playScreen(host: HTMLElement): () => void {
       ? "Your friends can watch this game."
       : "This game is private again.");
 
-    // Told to everyone who could watch, on the channels we are allowed to speak
-    // on. Both players announce, so a friend of either of them hears about it.
+    announceShowing(on);
+    if (beating !== null) { clearInterval(beating); beating = null; }
+    if (on) beating = setInterval(() => announceShowing(true), 5000);
+  }
+
+  /**
+   * Told to everyone who could watch, on the channels we are allowed to speak
+   * on. Both players announce, so a friend of either of them hears about it.
+   */
+  function announceShowing(on: boolean): void {
+    if (!match) return;
     const me = auth().profile?.username ?? "";
     lobby?.announceShowing({
       topic: watchTopicFor(auth().user!.id, match.friend.id),
@@ -498,10 +518,20 @@ export function playScreen(host: HTMLElement): () => void {
       if (match && match.invite.session === x.session) setSharing(x.on);
     }));
     unsubscribe.push(l.onShowing((x) => {
-      if (x.on) showing.set(x.topic, x);
+      if (x.on) showing.set(x.topic, { ...x, heard: Date.now() });
       else showing.delete(x.topic);
       drawPanel(l.list);
     }));
+    // A pair whose tab closed mid-game never says "stopped", so a row that has
+    // not been repeated for a while is one nobody is offering any more.
+    const stale = setInterval(() => {
+      let dropped = false;
+      for (const [topic, x] of showing) {
+        if (Date.now() - x.heard > 20000) { showing.delete(topic); dropped = true; }
+      }
+      if (dropped) drawPanel(l.list);
+    }, 5000);
+    unsubscribe.push(() => clearInterval(stale));
     // Their invitation is gone: take the banner down whether or not this side
     // had got as far as pressing anything.
     unsubscribe.push(l.onCancel((session, from) => {
@@ -556,7 +586,9 @@ export function playScreen(host: HTMLElement): () => void {
           el("span", { class: "dot in_game" }),
           el("span", { class: "name" }, s.players.join(" & ")),
           el("button", {
-            class: "ghost", disabled: match !== null,
+            // A class, not just the label. "Let friends watch" is also a button
+            // with "watch" in it, and a text selector cannot tell them apart.
+            class: "ghost watch", disabled: match !== null,
             onclick: () => { location.hash = `/watch?t=${topic}`; },
           }, "Watch")));
       }
@@ -720,12 +752,15 @@ export function playScreen(host: HTMLElement): () => void {
     leave.hidden = false;
     void lobby?.setActivity("in_game");
 
-    // The inviter carries the feed. Built even when nothing is being shared:
-    // it costs a wrapper and no messages, and it means turning watching on is
-    // instant rather than a renegotiation.
+    // The inviter carries the feed. Built even when nothing is being shared and
+    // even before the watch topic has finished being joined: it costs a wrapper
+    // and no messages, it means turning watching on is instant rather than a
+    // renegotiation, and it asks for the channel each time rather than holding
+    // one, because joining that topic is a round trip that has not come back
+    // yet at the moment the session must be built.
     let transport = ready.transport;
-    if (ready.host && watchRoom) {
-      mirror = new WatchMirror(transport, watchRoom);
+    if (ready.host) {
+      mirror = new WatchMirror(transport, () => watchRoom);
       mirror.setSharing(sharing);
       transport = mirror;
     }
@@ -893,6 +928,7 @@ export function playScreen(host: HTMLElement): () => void {
     share.hidden = true;
     stalling = false;
     // The match is over, so the audience is told and the topic is let go.
+    if (beating !== null) { clearInterval(beating); beating = null; }
     if (sharing) {
       sharing = false;
       lobby?.announceShowing({
@@ -923,6 +959,7 @@ export function playScreen(host: HTMLElement): () => void {
     removeEventListener("pagehide", onHide);
     rebuilding?.abort();
     rebuilding = null;
+    if (beating !== null) { clearInterval(beating); beating = null; }
     match = null;
     mirror = null;
     void watchRoom?.close();

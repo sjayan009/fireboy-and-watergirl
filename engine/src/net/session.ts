@@ -469,7 +469,11 @@ export class NetSession {
     // Nothing to announce: a watcher was never part of the game it was
     // watching, and telling the pair that somebody stopped looking is not this
     // channel's business.
-    if (this.observer) { this.host.quit(); this.started = false; return; }
+    if (this.observer) {
+      if (this.started) this.host.quit();
+      this.started = false;
+      return;
+    }
     if (!this.started) return;
     const packet = encodeCommand({
       kind: Kind.Command, slot: this.slot, epoch: this.epoch,
@@ -608,6 +612,26 @@ export class NetSession {
     // Our own packet, echoed back -- except for an observer, which is neither
     // slot and wants both.
     if (!this.observer && p.slot === this.slot) return;
+    // A watcher who has not started yet cannot know which generation the pair
+    // are on. The epoch is a counter two peers keep in step by both applying
+    // the same Starts and Retries, and somebody who arrived in the middle has
+    // applied none of them -- so filtering by it would drop every packet
+    // forever, and a watcher joining a match already in progress would sit in
+    // front of a canvas that never changed.
+    //
+    // The Start it is waiting for carries the generation to adopt. Nothing
+    // before that is meaningful: there is no level for those frames to belong
+    // to, and `begin` clears the log anyway.
+    if (this.observer && !this.started) {
+      if (p.kind === Kind.Command && p.command === Command.Start) {
+        // Set before `begin`, which bumps it -- so this lands on the same
+        // generation the players moved to when they sent it.
+        this.epoch = p.epoch;
+        this.begin(MODES[p.a] ?? "adventure", p.b);
+      }
+      return;
+    }
+
     // A packet from a level we have already left, or from one we have not
     // started yet. Either way its frame numbers mean nothing to us: the peer's
     // redundancy will re-send whatever we miss once we are both on the same

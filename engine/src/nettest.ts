@@ -309,6 +309,21 @@ console.log("\nsomebody watching sees the same game");
   // key to press.
   const link = new Link(40, 0, 0);
   const peers = pair(link, 3);
+
+  // The pair play a level and retry it BEFORE anybody is watching, so their
+  // generation counter has moved on. That is the ordinary case -- somebody
+  // decides to watch a game that is already happening -- and it is the one that
+  // catches the mistake: the epoch is a number two peers keep in step by
+  // applying the same Starts and Retries, and a watcher has applied none of
+  // them. Filtering on it would drop every packet forever.
+  peers[0].session.requestStart("adventure", 1);
+  link.advance(STEP_MS);
+  run(link, peers, 120, scripted);
+  peers[0].session.send(Command.Retry);
+  run(link, peers, 120, scripted);
+  check("the pair have moved on before anybody looks",
+        peers[0].session.generation > 1, true);
+
   const seat = new LevelHost();
   const eyes = new NetSession({
     slot: 0, observer: true, host: seat,
@@ -320,6 +335,13 @@ console.log("\nsomebody watching sees the same game");
     },
   });
 
+  // Nothing to see until they start something: a watcher joins the next level,
+  // not the middle of this one.
+  run(link, peers, 60, scripted);
+  check("nothing to watch in the middle of a level", eyes.running, false);
+
+  peers[0].session.send(Command.Quit, 0);
+  run(link, peers, 40, scripted);
   peers[0].session.requestStart("adventure", 1);
   link.advance(STEP_MS);
   for (let i = 0; i < 600; i++) {

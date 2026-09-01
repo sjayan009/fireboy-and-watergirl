@@ -317,8 +317,6 @@ try {
     // one this lost the first time the platform was having a slow afternoon,
     // and then lost twice, because the second code was typed into a form still
     // busy with the first.
-    // Waited FOR, not waited OUT: verifying a factor is a round trip to the
-    // auth service, and a fixed pause is a bet on how fast that is today.
     // Through waitForSelector rather than by polling `errorText`, because that
     // helper auto-waits the full actionability timeout each time it finds
     // nothing -- so a loop around it does not poll for twenty seconds, it
@@ -332,6 +330,15 @@ try {
     await page.waitForSelector("text=An authenticator app is enrolled",
                                { timeout: 20000 });
     check("the right one enrols it", true, true);
+
+    // Recovery codes, taken while there is still an authenticator to lose.
+    await page.click("button:has-text('Get recovery codes')");
+    await page.waitForSelector(".codelist code", { timeout: 20000 });
+    const codes = await page.locator(".codelist code").allInnerTexts();
+    check("ten codes are shown", codes.length, 10);
+    check("and the screen says what spending one costs, before it is spent",
+          /turns two-factor OFF/i.test(await page.locator(".factors").innerText()),
+          true);
 
     await page.click("a[href='#/play']");
     await page.waitForSelector("#stage");
@@ -354,11 +361,40 @@ try {
     await page.waitForSelector("#stage", { timeout: 20000 });
     check("the code lets them through", true, true);
 
+    // ---- and the way back when the authenticator is gone -----------------
+    // Out again, and this time pretend the phone with the app on it is not in
+    // the room. The password alone gets as far as the gate and no further,
+    // which is the whole point of the gate.
+    await page.click("button:has-text('Sign out')");
+    await page.waitForSelector("input[type=password]", { timeout: 20000 });
+    await page.fill("input[type=email]", email);
+    await page.fill("input[type=password]", password);
+    await page.click("button[type=submit]");
+    await page.waitForSelector("text=Two-factor code", { timeout: 20000 });
+
+    await page.click("a:has-text('Lost your authenticator?')");
+    await page.waitForSelector("text=Use a recovery code");
+    check("the warning comes before the code, not after",
+          /turns two-factor OFF/i.test(await page.locator(".card").innerText()),
+          true);
+
+    await page.locator("form input").fill("AAAAA-AAAAA");
+    await page.click("button[type=submit]");
+    await page.waitForSelector(".error:visible", { timeout: 30000 });
+    check("a code that was never theirs is refused",
+          /not one of your recovery codes/i.test(await errorText(page)), true);
+
+    await page.locator("form input").fill(codes[0]);
+    await page.click("button[type=submit]");
+    await page.waitForSelector("#stage", { timeout: 30000 });
+    check("a real one lets them in", true, true);
+
     await page.click("a[href='#/settings']");
-    await page.waitForSelector("text=An authenticator app is enrolled");
-    await page.click("button:has-text('Turn it off')");
+    await page.waitForSelector("text=TWO-FACTOR");
+    // Which is the cost the screen warned about: they are in, and the account
+    // is back to being protected by a password alone until they say otherwise.
     await page.waitForSelector("button:has-text('Turn it on')", { timeout: 20000 });
-    check("and it can be turned off again", true, true);
+    check("and two-factor is off, exactly as it said it would be", true, true);
 
     // ---- renaming --------------------------------------------------------
     console.log("\nrenaming costs no second invite code");

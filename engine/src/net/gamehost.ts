@@ -97,5 +97,19 @@ export class GameHost implements SessionHost {
   }
 
   retry(): void { this.game.RetryGame?.(); }
-  quit(): void { this.game.EndGame?.(); }
+
+  /**
+   * Leave the level, if there is one.
+   *
+   * `EndGame` reaches straight into `m_level.windChannels` on its first line,
+   * so calling it with no level on screen throws -- and there are now callers
+   * that legitimately have none. A watcher who closes the tab before the pair
+   * has started anything is the plain example: it is leaving a game it never
+   * entered, which is a no-op and should read as one.
+   */
+  quit(): void {
+    const g = this.game;
+    if (!g.m_level || g.m_level.parent !== g) return;
+    g.EndGame?.();
+  }
 }
