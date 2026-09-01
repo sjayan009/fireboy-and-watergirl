@@ -111,10 +111,17 @@ and must remain so.
 Two things live in the Supabase dashboard and cannot be set from here: the
 **redirect allow-list** must include the deployed origin, and **custom SMTP**
 must be configured, because the built-in sender is a few messages an hour and is
-documented as being for testing. The allow-list is right -- `test:deployed`
-signs a real account in against the live origin every release, which would fail
-without it. Whether SMTP has been switched over is not something any test here
-can see, and it is worth checking before inviting anybody new.
+documented as being for testing. Both are done. The allow-list is proved on
+every release -- `test:deployed` signs a real account in against the live
+origin, which would fail without it. That an email *arrives* is still the one
+thing nothing here can check.
+
+CI needs five repository secrets: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`,
+`SUPABASE_SECRET_KEY`, `SUPABASE_DB_PASSWORD` and `SUPABASE_PROJECT_REF`. The
+first two are what the browser gets anyway; the last three are why `full` can
+reach the database tier and `deployed` can sign an account in rather than
+stopping after the headers. The secret key stored there should be one minted
+for CI and used nowhere else, so that revoking it costs nobody their afternoon.
 
 `ICE_SERVERS` is optional: a JSON array of `RTCIceServer`, for adding TURN
 without a release. Unset, a pair gets two public STUN servers and the ones whose
