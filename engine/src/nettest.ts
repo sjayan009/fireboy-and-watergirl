@@ -160,7 +160,7 @@ console.log("\n150 ms round trip, 5% packet loss, 20 ms jitter");
   link.advance(200);
   run(link, peers, 5000, scripted);
   console.log(`  ${link.sent} packets sent, ${link.dropped} dropped, ` +
-              `${peers[0].session.stalledFrames} stalls`);
+              `${peers[0].session.stalls} stalls`);
   check("both peers reached the same frame",
         peers[0].session.frame === peers[1].session.frame, true);
   check("digests match after 5000 frames",
@@ -477,6 +477,85 @@ console.log("\na corrupted peer notices, and repairs itself by replaying");
               `${peers[0].session.desyncs + peers[1].session.desyncs} report(s)`);
 }
 
+console.log("\na stall is a duration, not a tally");
+{
+  // The page waits two seconds of continuous silence before it says "waiting
+  // for your friend", so that a jittery moment does not flash a warning at
+  // somebody whose game is about to carry on perfectly well. That threshold is
+  // only a threshold if the counter it reads is the length of the CURRENT
+  // stall: as a lifetime tally it is crossed once, early -- a relayed pair
+  // crosses it in the first seconds, because batching means the session runs to
+  // the edge of its prediction window and waits on every burst -- and from then
+  // on the message tracked `stalled` exactly, which flips every frame or two.
+  // On screen that was a banner strobing at frame rate, and a page whose height
+  // changed with it.
+  const link = new Link(0, 0, 0);
+  const peers = pair(link, 3);
+  peers[0].session.requestStart("adventure", 1);
+  link.advance(STEP_MS);
+  run(link, peers, 60, scripted);
+  check("nobody is stalled on a healthy link",
+        [peers[0].session.stalled, peers[0].session.stalledFrames],
+        [false, 0]);
+
+  // One peer goes quiet: the other predicts to the edge of its window and waits.
+  for (let i = 0; i < 120; i++) {
+    peers[0].session.setLocalInput(scripted(0, i));
+    link.advance(STEP_MS);
+    peers[0].session.tick(STEP);
+  }
+  const stalled = peers[0].session.stalledFrames;
+  check("a silent peer stalls the other one", peers[0].session.stalled, true);
+  check("for as long as the silence lasts", stalled > 52, true);
+
+  // And back: the counter has to return to zero, or the threshold above is
+  // satisfied for the rest of the level.
+  run(link, peers, 120, scripted);
+  // Not "exactly zero": a lockstep peer waits a tick for its partner's packet
+  // now and then, and one such frame is what a healthy link looks like. What
+  // matters is that the count came back DOWN -- far under the threshold the
+  // page reads -- rather than staying above it for the rest of the level.
+  check("the count comes back down once the peer is heard from",
+        peers[0].session.stalledFrames < 52, true);
+  check("while the tally remembers it happened",
+        peers[0].session.stalls >= stalled, true);
+  check("and they caught each other up",
+        Math.abs(peers[0].session.frame - peers[1].session.frame) < 5, true);
+  check("and are still in step",
+        peers[0].host.hash() === peers[1].host.hash(), true);
+}
+
+console.log("\na repair after a retry stays on one generation");
+{
+  // `resync` rebuilds the level and replays the whole input log, and the log it
+  // replays holds every command the session applied. All of them are safe to
+  // apply twice except the two that rebuild the level, because `begin` and
+  // `retryLevel` each bump the epoch -- and a second bump on one side alone
+  // puts the two peers on generations that can never agree again: every later
+  // packet is filtered as stale, in both directions, with nothing left that
+  // could notice. `resetLog` clearing the command table is what makes it
+  // unreachable; this is the test that says so out loud.
+  const link = new Link(30, 0, 0);
+  const peers = pair(link, 0);
+  peers[0].session.requestStart("adventure", 1);
+  link.advance(200);
+  run(link, peers, 100, scripted);
+  peers[0].session.send(Command.Retry);
+  run(link, peers, 200, scripted);
+  const gen = peers[0].session.generation;
+  check("both peers are on the generation the retry made",
+        [gen, peers[1].session.generation], [gen, gen]);
+
+  peers[0].session.resync();
+  run(link, peers, 100, scripted);
+  check("a replay does not move either of them off it",
+        [peers[0].session.generation, peers[1].session.generation], [gen, gen]);
+  check("and they still agree",
+        peers[0].host.hash() === peers[1].host.hash(), true);
+  check("with no desyncs",
+        peers[0].session.desyncs + peers[1].session.desyncs, 0);
+}
+
 console.log("\nsolo runs through the same session, with no peer");
 {
   const link = new Link(0, 0, 0);
@@ -489,7 +568,7 @@ console.log("\nsolo runs through the same session, with no peer");
     session.setLocalInput(scripted(0, i));
     session.tick(STEP);
   }
-  check("it never stalled", session.stalledFrames, 0);
+  check("it never stalled", session.stalls, 0);
   check("and simulated the frames", session.frame > 550, true);
 }
 

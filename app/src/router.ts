@@ -33,6 +33,14 @@ const HOME: Record<Stage, string> = {
 let routes: Route[] = [];
 let host: HTMLElement;
 let cleanup: (() => void) | null = null;
+/**
+ * The whole hash of the screen on show, query and all.
+ *
+ * The ROUTE is the path alone -- `#/watch?t=…` is the watch screen -- but what
+ * is on show is the path plus its argument, and conflating the two meant a link
+ * from one game to another was a hash change the router answered by doing
+ * nothing, because it was already "showing /watch".
+ */
 let showing = "";
 
 export function go(path: string): void {
@@ -60,10 +68,11 @@ function render(): void {
 
   // Re-rendering the screen already showing would tear down a running game to
   // put the same one back.
-  if (showing === path) return;
+  const here = location.hash.replace(/^#/, "");
+  if (showing === here) return;
   cleanup?.();
   cleanup = null;
-  showing = path;
+  showing = here;
   host.replaceChildren();
   const off = route.render(host);
   if (typeof off === "function") cleanup = off;

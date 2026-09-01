@@ -3,9 +3,9 @@
  *
  * Two-factor is optional and, once enrolled, is enforced at every sign-in --
  * `auth.ts` holds the session at the `locked` stage until the code is answered.
- * There are no recovery codes: this is invite-only for a handful of people, and
- * `supabase/unenrol.mjs` is the answer to a lost authenticator. Inventing a
- * second credential store to avoid one script would be the larger risk.
+ * Recovery codes are minted here, ten at a time, shown once and stored hashed;
+ * `supabase/unenrol.mjs` remains the answer for somebody who has lost both the
+ * authenticator and the codes.
  */
 import {
   auth, changeEmail, changePassword, claimUsername, deleteAccount, enrolTotp,

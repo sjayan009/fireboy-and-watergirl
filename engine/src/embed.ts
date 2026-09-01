@@ -187,7 +187,15 @@ export class GameView {
 
     // Between levels the shell is local, so the pause tray and the boards --
     // which cannot be on screen anyway -- are nobody else's business.
-    if (!s.running) return false;
+    //
+    // Except that "cannot be on screen anyway" is an assumption, and when it
+    // broke the consequence was not small: the ported handler ran `EndGame`
+    // against a level that had already gone and `CreateMainMenu` built a
+    // second map on top of the first. Retry and quit mean nothing with no
+    // level up, so they are refused here rather than dispatched.
+    if (!s.running) {
+      return intent.kind === "retry" || intent.kind === "quit";
+    }
     switch (intent.kind) {
       case "retry": s.send(Command.Retry); return true;
       case "pause": s.send(Command.Pause); return true;
@@ -330,6 +338,11 @@ export class GameView {
    * so what they prove holds here.
    */
   join(transport: Transport, slot: Slot, o: JoinOptions = {}): NetSession {
+    // Whatever was here goes first. Reconnecting calls this again, and simply
+    // assigning over `session` and `transport` left the previous pair of them
+    // alive and unreferenced -- still holding a message handler, and for a
+    // relayed session still holding a batching timer.
+    this.dropLink();
     this.slot = slot;
     this.held.clear();
     this.canChooseLevel = o.canChooseLevel ?? false;
@@ -354,6 +367,7 @@ export class GameView {
    * has both.
    */
   observe(transport: Transport, o: JoinOptions = {}): NetSession {
+    this.dropLink();
     this.held.clear();
     this.canChooseLevel = false;
     this.watching = true;

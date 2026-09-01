@@ -20,6 +20,10 @@ import { Game, Recuento } from "./game/game.js";
 import { advanceTree, enterFrameTree, MouseEvent, SoundBus } from
   "./flash/flash.js";
 import { Intent, ShellInput } from "./game/shellinput.js";
+import { GameHost } from "./net/gamehost.js";
+import { NetSession } from "./net/session.js";
+import { NullTransport } from "./net/transport.js";
+import { Command } from "./net/protocol.js";
 
 let failures = 0;
 
@@ -184,6 +188,117 @@ console.log("\nthe buttons that change shared state, and the ones that do not");
   check("while the intro button is nobody else's business", seen, []);
   check("and simply worked", symbols(), ["IntroMenu"]);
   claim();
+}
+
+
+/*
+ * ---------------------------------------------------------------------------
+ * And now the other half of the same rule: what happens when the command the
+ * hook sent is actually APPLIED.
+ *
+ * Everything above proves the intent hook fires and swallows the click. That is
+ * exactly half the story, and for a while it was the half that was tested: the
+ * hook above returns true and stops, so the assertions read "and the board is
+ * still there, because nobody dispatched it" -- true, and silent about the peer
+ * on the other end, where the command lands.
+ *
+ * It lands on GameHost. And `Recuent` and `GameOver` hang the ONLY removal of
+ * their board off the inline click listener the hook just swallowed, so
+ * `EndGame` and `RetryGame` -- which take down the level, the timer, the tray
+ * and the mute button -- left the board on screen forever: a near-opaque
+ * `Tapper` over the map and over every level after it, and a `ShellInput`
+ * that answered "board" to every key press from then on.
+ *
+ * A solo session over a NullTransport is the whole apparatus: same GameHost,
+ * same commands, same code path both peers run.
+ * ---------------------------------------------------------------------------
+ */
+console.log("\nthe command the hook sends, applied");
+{
+  const host = new GameHost(game);
+  const session = new NetSession({
+    slot: 0, host, transport: new NullTransport(), solo: true, rollback: false,
+    delay: 0,
+  });
+  const shell = new ShellInput(game, game.stage);
+  // The hook the play screen installs, minus the network: a shared-state button
+  // becomes a command on an agreed frame instead of a local dispatch.
+  shell.onIntent((i) => {
+    if (i.kind === "start") { session.requestStart(i.mode, i.num); return true; }
+    if (!session.running) return i.kind === "retry" || i.kind === "quit";
+    if (i.kind === "retry") { session.send(Command.Retry); return true; }
+    if (i.kind === "quit") { session.send(Command.Quit, 0); return true; }
+    return false;
+  });
+
+  const press = (target: any) => { shell.pointerDown(target); shell.pointerUp(); };
+  /** Let the session run, which is what applies a command a window ahead. */
+  const run = (n: number) => { for (let i = 0; i < n; i++) session.tick(1 / 26); };
+  const boards = () =>
+    game.children.filter((c: any) => c.Rboard || c.GOboard).length;
+  const maps = () =>
+    game.children.filter((c: any) => c.symbol === "MainMenu").length;
+
+  // The block above finished on the intro menu. Back to the map, on the page's
+  // own clock -- between levels nothing is shared and the session is not
+  // running, which is exactly how the browser host drives it.
+  click(game.m_introMenu.Buttons.Starter);
+  step(20);
+  check("back on the map, with nothing running", [symbols(), session.running],
+        [["MainMenu"], false]);
+
+  press(game.m_mainMenu.b_1_1);
+  run(20);
+  check("a map node starts the level through the session",
+        [session.running, game.m_level.CurrentMode], [true, "adventure"]);
+
+  // Finish it, so the results board is the thing on screen when the button is
+  // pressed -- the case no test reached, because every other route out of a
+  // level goes through the pause tray.
+  const cl = game.m_level.myContactListener;
+  for (let i = 0; i < 140; i++) { cl.finish1 = true; cl.finish2 = true; run(1); }
+  run(45);
+  check("finishing it puts the results board up", boards(), 1);
+
+  const results = game.children.filter((c: any) => c.Rboard).pop();
+  press(results.Rboard.ToMenuBtn);
+  run(30);
+  check("continue leaves the level", session.running, false);
+  check("and takes the board with it", boards(), 0);
+  check("onto one map, not two", [symbols(), maps()], [["MainMenu"], 1]);
+
+  // The stale board used to answer every key press for the rest of the evening,
+  // because `screen()` finds a board before it finds the map.
+  check("so the map, not a board, owns the keyboard",
+        shell.selection.startsWith("node "), true);
+
+  // The other board, and the other command.
+  press(game.m_mainMenu.b_1_1);
+  run(20);
+  game.m_level.myContactListener.deadFire = true;
+  run(80);
+  check("dying puts the game-over board up", boards(), 1);
+
+  const over = game.children.filter((c: any) => c.GOboard).pop();
+  const died = game.m_level;
+  press(over.GOboard.RetryBtn);
+  run(30);
+  check("retry rebuilds the level", game.m_level !== died, true);
+  check("and that board is gone too", boards(), 0);
+  check("with the level running, not a board over it",
+        [session.running, boards()], [true, 0]);
+
+  // And a level started while a board is somehow still up -- the third caller,
+  // and the one a watcher joining mid-match goes through.
+  const stray: any = new (Recuento as any)();
+  game.addChild(stray);
+  host.start("adventure", 1);
+  check("starting a level sweeps a board away as well", boards(), 0);
+
+  session.depart();
+  run(2);
+  check("and leaving for good ends on a clean map",
+        [symbols(), boards()], [["MainMenu"], 0]);
 }
 
 console.log("\n" + (failures === 0 ? "SHELL TEST PASSED"

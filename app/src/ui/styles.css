@@ -28,6 +28,19 @@
  */
 [hidden] { display: none !important; }
 
+/*
+ * The scrollbar gutter is reserved whether or not there is a scrollbar, and
+ * that is a correctness fix rather than a polish one.
+ *
+ * `.screen` sets `aspect-ratio`, so below about a 950px viewport the stage's
+ * HEIGHT is a function of the page's width -- and without a reserved gutter the
+ * width is a function of whether the scrollbar is showing. Showing it made the
+ * stage shorter, which made the content fit, which took the scrollbar away,
+ * which made the stage taller, which did not fit. There was nothing to damp the
+ * loop and it ran for as long as anything kept the layout dirty.
+ */
+html { scrollbar-gutter: stable; }
+
 html, body {
   margin: 0;
   min-height: 100%;
@@ -165,6 +178,7 @@ button:disabled { cursor: default; opacity: 0.6; }
 .bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   font-size: 13px;
 }
@@ -255,6 +269,9 @@ button:disabled { cursor: default; opacity: 0.6; }
   font-size: 15px;
   letter-spacing: 1px;
 }
+
+.factors, .codes { display: grid; gap: 8px; }
+.factors button, .codes button { justify-self: start; }
 
 .check { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .check input { width: 16px; height: 16px; }

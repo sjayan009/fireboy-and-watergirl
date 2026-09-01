@@ -289,6 +289,74 @@ try {
   }, path);
 
   /**
+   * The same press, but arrived at the way a real mouse arrives at it: through
+   * the renderer's hit test at the point the button is actually drawn.
+   *
+   * The helper above takes an object path, which is precise and is also why the
+   * suite could not see a screen that had been left on top of everything else:
+   * a results board covering the map is not a thing an object path notices, and
+   * every button in this file was pressed through one. This asks the renderer
+   * what is under the button's own centre and refuses if the answer is
+   * something else -- which is the assertion, not the click.
+   */
+  const clickInGame = (page, path) => page.evaluate((where) => {
+    const v = window.__fbwg.view;
+    const want = where.split(".").reduce((o, k) => o && o[k], v.game);
+    if (!want) throw new Error("no such button: " + where);
+    if (!v.sprites) throw new Error("the art has not loaded");
+    // Where the renderer says that button is, in stage coordinates.
+    const box = v.sprites.buttonBoxes(v.game).find((h) => h.node === want);
+    if (!box) throw new Error("that button is not on screen: " + where);
+    const [x, y] = box.centre;
+    const hit = v.sprites.hitTest(v.game, x, y);
+    if (hit !== want) {
+      throw new Error(`something else is over ${where}: ` +
+                      `${(hit && hit.name) || hit}`);
+    }
+    v.shell.pointerDown(hit);
+    v.shell.pointerUp();
+  }, path);
+
+  /** What the game has on screen, for the assertions about leftovers. */
+  const onScreen = (page) => page.evaluate(() => ({
+    symbols: window.__fbwg.view.game.children
+      .map((c) => c.symbol).filter(Boolean),
+    boards: window.__fbwg.view.game.children
+      .filter((c) => c.Rboard || c.GOboard).length,
+    maps: window.__fbwg.view.game.children
+      .filter((c) => c.symbol === "MainMenu").length,
+  }));
+
+  /**
+   * Finish the level both of them are in.
+   *
+   * Standing the two characters on their doors is what the engine's own shell
+   * test does: the doors open over 22 frames and then `level.Update` spawns the
+   * stairs whose frame 35 calls `Recuent()`. Set on BOTH pages, because the two
+   * simulations are separate and neither is told anything by the other except
+   * three bits a frame.
+   */
+  const finishLevel = async () => {
+    for (const p of [a, b]) {
+      await p.evaluate(() => {
+        const v = window.__fbwg.view;
+        v.__finishing = setInterval(() => {
+          const cl = v.game.m_level && v.game.m_level.myContactListener;
+          if (cl) { cl.finish1 = true; cl.finish2 = true; }
+        }, 10);
+      });
+    }
+    const board = await until(
+      () => window.__fbwg.view.game.children
+        .some((c) => c.Rboard || c.GOboard),
+      (both) => both[0] && both[1], 200);
+    for (const p of [a, b]) {
+      await p.evaluate(() => clearInterval(window.__fbwg.view.__finishing));
+    }
+    return board;
+  };
+
+  /**
    * Are the two of them playing the same game?
    *
    * Asked of their HISTORIES, not of their present. Comparing two live pages at
@@ -678,6 +746,75 @@ try {
                                 (both) => both[0] && both[1]);
     check("and bob's pick starts it for both", started !== null, true);
     check("and they are playing it together", (await agree(40)) !== null, true);
+  }
+
+  console.log("\nfinishing a level leaves nothing behind, and then it is bob's pick");
+  {
+    // The case the whole suite used to walk around. Every other route out of a
+    // level here goes through the pause tray's End Game, and no board is ever
+    // on screen when the command is applied -- so the fact that `EndGame` and
+    // `RetryGame` do not remove one, and that the only code which did was the
+    // click listener the intent hook now swallows, was invisible. What it looks
+    // like in front of a person is a near-opaque results screen sitting over
+    // the map and over every level after it.
+    await pressInGame(b, "m_pauseMenu.endGameBtn");
+    await until(() => window.__fbwg.view.session.running,
+                (both) => !both[0] && !both[1]);
+    // Bob holds the pick from the block above.
+    await pressInGame(b, "m_mainMenu.b_1_1");
+    const playing = await until(() => window.__fbwg.view.session.running,
+                                (both) => both[0] && both[1]);
+    check("they are in a level to finish", playing !== null, true);
+
+    const board = await finishLevel();
+    check("both of them see the results board", board !== null, true);
+
+    check("and it is the results board, not the death screen",
+          await a.evaluate(() => window.__fbwg.view.game.children
+            .some((c) => c.Rboard)), true);
+
+    // Either of them may press it; it travels as a command and lands on both.
+    await a.evaluate(() => {
+      const v = window.__fbwg.view;
+      const board = v.game.children.filter((c) => c.Rboard).pop();
+      v.shell.pointerDown(board.Rboard.ToMenuBtn);
+      v.shell.pointerUp();
+    });
+
+    const clean = await until(
+      () => ({
+        running: window.__fbwg.view.session.running,
+        boards: window.__fbwg.view.game.children
+          .filter((c) => c.Rboard || c.GOboard).length,
+        maps: window.__fbwg.view.game.children
+          .filter((c) => c.symbol === "MainMenu").length,
+      }),
+      (both) => both.every((x) => !x.running && x.boards === 0));
+    check("continue takes the board down on BOTH machines", clean !== null,
+          true);
+    if (clean) {
+      check("and leaves one map, not two", [clean[0].maps, clean[1].maps],
+            [1, 1]);
+    } else {
+      for (const [tag, p] of [["A", a], ["B", b]]) {
+        console.log(`  [${tag}] ` + JSON.stringify(await onScreen(p)));
+      }
+    }
+
+    // Which is the thing an object path could never see: with a board left up,
+    // this throws rather than quietly pressing through it.
+    await clickInGame(b, "m_mainMenu.b_1_1");
+    const next = await until(() => ({
+      running: window.__fbwg.view.session.running,
+      boards: window.__fbwg.view.game.children
+        .filter((c) => c.Rboard || c.GOboard).length,
+    }), (both) => both.every((x) => x.running));
+    check("and bob's next pick starts a level with nothing over it",
+          next && [next[0].boards, next[1].boards], [0, 0]);
+    check("in step, as ever", (await agree(40)) !== null, true);
+    check("with no desyncs",
+          await Promise.all([a, b].map((p) =>
+            p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
   }
 
   console.log("\nand a third person can watch, once they are let in");
