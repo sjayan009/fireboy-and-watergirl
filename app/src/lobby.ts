@@ -430,7 +430,7 @@ export class Lobby {
       // side is not yet listening to, and lose it.
       o.onProgress?.("connecting…");
       const link = await Promise.race([
-        this.link(channel, true, o.signal), refused,
+        this.link(channel, true, o.signal, invite.relay), refused,
       ]);
 
       try {
@@ -506,7 +506,7 @@ export class Lobby {
 
       o.onProgress?.("connecting…");
       const link = await Promise.race([
-        this.link(channel, false, o.signal), refused,
+        this.link(channel, false, o.signal, invite.relay), refused,
       ]);
 
       if (o.signal?.aborted) {
@@ -536,10 +536,10 @@ export class Lobby {
    * on it gets the game but not video.
    */
   private async link(channel: PairChannel, caller: boolean,
-                     signal?: AbortSignal) {
+                     signal?: AbortSignal, relayOnly?: boolean) {
     const rendezvous = new RealtimeTransport(channel);
     const link = await connect(rendezvous, caller,
-                               { iceServers: STUN, signal });
+                               { iceServers: STUN, signal, relayOnly });
     if (link.reason) console.info("using the relay path:", link.reason);
     return { transport: link.transport, kind: link.kind };
   }

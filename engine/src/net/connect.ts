@@ -34,9 +34,30 @@ export async function connect(
   rendezvous: Transport, caller: boolean,
   opts: {
     timeoutMs?: number; iceServers?: RTCIceServer[]; signal?: AbortSignal;
+    /**
+     * Do not try for a peer connection at all.
+     *
+     * Set when this pair already fell back once. Asking again costs the whole
+     * timeout -- eight seconds during which `connectWebRTC` owns the
+     * rendezvous's message handler, so the relay cannot carry the game either
+     * -- to reach the answer it reached last time. A NAT that refuses does not
+     * usually change its mind between one level and the next.
+     *
+     * BOTH peers must pass it or neither should. A one-sided skip is worse
+     * than asking: this side would relay immediately while the other sat out
+     * its timeout with the transport blocked. It travels on the invitation
+     * precisely so there is nothing to agree.
+     */
+    relayOnly?: boolean;
   } = {},
 ): Promise<Connection> {
   if (opts.signal?.aborted) throw new Error("cancelled");
+  if (opts.relayOnly) {
+    return {
+      transport: rendezvous, kind: "relay",
+      reason: "the last link was a relay",
+    };
+  }
   if (typeof RTCPeerConnection === "undefined") {
     return { transport: rendezvous, kind: "relay", reason: "no WebRTC here" };
   }
