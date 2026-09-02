@@ -49,11 +49,25 @@ export interface ByteChannel {
 /**
  * How long packets may wait before going out, in milliseconds.
  *
- * Three frames at 26 Hz. Larger would save more messages and cost more
- * prediction; smaller spends the month's allowance faster for latency the
- * rollback session was going to hide anyway.
+ * Six frames at 26 Hz, and the single biggest lever on what a relayed pair
+ * costs: doubling it halves the message rate, which is what decides how many
+ * games this project can host at once. Fifty games with one in seven relaying
+ * is about 260 messages a second at 115 ms and about 130 at 230.
+ *
+ * It is bounded, and not by taste. A peer stalls once the other's input is
+ * delayed by more than the rollback window can reach back through, and that
+ * delay is this number plus one-way latency. The window is
+ * `maxRollback * 38.5 ms`, so at the netcode's old window of ten frames --
+ * 385 ms -- this value would have started stalling pairs at 310 ms round trip,
+ * which for a relayed pair paying a server hop each way is an ordinary evening
+ * rather than a bad one. The window went to fourteen frames in the same change
+ * for exactly that reason; see `maxRollback` in the session.
+ *
+ * Do NOT make sends change-triggered instead. Lockstep needs the peer's input
+ * for every frame or `ready` stalls, so packets have to flow whether or not
+ * anybody moved. This is the only lever here, and it moves with the window.
  */
-const FLUSH_MS = 115;
+const FLUSH_MS = 230;
 
 export class RealtimeTransport implements Transport {
   private queue: string[] = [];

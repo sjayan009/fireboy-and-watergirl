@@ -292,15 +292,32 @@ export class Lobby {
   }
 
   /**
-   * Tell everybody we could be watched by.
+   * Tell everybody we could be watched by, who is in a position to hear it.
    *
-   * Every accepted friend of OURS, because those are the channels we are
-   * allowed to speak on -- and between the two players that covers exactly the
-   * set the watch topic's policy admits. A friend of both hears it twice and
-   * shows one row, which is what the session id is for.
+   * Our own accepted friends, because those are the channels we are allowed to
+   * speak on -- and between the two players that covers exactly the set the
+   * watch topic's policy admits. A friend of both hears it twice and shows one
+   * row, which is what the session id is for.
+   *
+   * `repeat` is the beat rather than the news, and only the beat is filtered
+   * to friends who are online. That split is the whole difference between this
+   * scaling and not. Turning sharing on or off happens twice a match and is
+   * worth telling everyone -- including somebody whose presence has not
+   * reached us yet, who would otherwise wait a whole beat for a row. The
+   * repetition is the part that runs for the life of the match at one message
+   * per friend per beat whether or not anybody is there: `players x friends`,
+   * growing with the friend graph rather than with the number of games being
+   * played, and four hundred messages a second at a hundred players with ten
+   * friends each, against a limit of a hundred.
+   *
+   * Nothing is lost by leaving the absent out of the beat: a broadcast reaches
+   * whoever is subscribed at that instant, so an offline friend was never
+   * going to hear it, and they are told the moment they are worth telling.
    */
-  announceShowing(s: Showing): void {
-    for (const channel of this.channels.values()) channel.showing(s);
+  announceShowing(s: Showing, repeat = false): void {
+    for (const [id, channel] of this.channels) {
+      if (!repeat || this.activity.get(id)) channel.showing(s);
+    }
   }
 
   /** Say that somebody else picks the levels now. */
@@ -430,7 +447,7 @@ export class Lobby {
       // side is not yet listening to, and lose it.
       o.onProgress?.("connecting…");
       const link = await Promise.race([
-        this.link(channel, true, o.signal), refused,
+        this.link(channel, true, o.signal, invite.relay), refused,
       ]);
 
       try {
@@ -506,7 +523,7 @@ export class Lobby {
 
       o.onProgress?.("connecting…");
       const link = await Promise.race([
-        this.link(channel, false, o.signal), refused,
+        this.link(channel, false, o.signal, invite.relay), refused,
       ]);
 
       if (o.signal?.aborted) {
@@ -536,10 +553,10 @@ export class Lobby {
    * on it gets the game but not video.
    */
   private async link(channel: PairChannel, caller: boolean,
-                     signal?: AbortSignal) {
+                     signal?: AbortSignal, relayOnly?: boolean) {
     const rendezvous = new RealtimeTransport(channel);
     const link = await connect(rendezvous, caller,
-                               { iceServers: STUN, signal });
+                               { iceServers: STUN, signal, relayOnly });
     if (link.reason) console.info("using the relay path:", link.reason);
     return { transport: link.transport, kind: link.kind };
   }

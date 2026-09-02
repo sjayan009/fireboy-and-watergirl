@@ -15,6 +15,26 @@ There is no Supabase CLI or Docker on this machine, so `migrate.mjs` connects
 straight to Postgres and applies the files itself. The files are plain SQL, so
 `supabase db push` would do the same thing if the CLI is installed later.
 
+## A migration must survive the release before it
+
+CI applies migrations now — `full` before its tests, `deployed` before it waits
+for the new build to be live. Until then nothing did, which is how
+`0013_open_signup` came to sit unapplied for days: the only tests that could
+have noticed handed `claim_username` an invite code, so they never asked the
+question the migration answers.
+
+Applying them automatically buys that back and introduces one rule in its place.
+**Vercel builds on push and the workflow starts on the same push, so the two
+race.** `deployed` migrates before it waits, which is the best ordering
+available, but it cannot stop a build finishing first — so for a few seconds
+either release may be talking to either schema.
+
+So a migration has to be compatible with the release **before** it as well as
+the one it ships with: add before you read, widen before you narrow, and split
+anything that removes or tightens across two releases. `0013` is the shape to
+copy — it stopped *requiring* an invite code while still accepting one, so the
+old page kept working against the new function for as long as it was live.
+
 ## The schema
 
 | | |
