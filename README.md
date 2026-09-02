@@ -58,10 +58,22 @@ npm run invite -- --uses 5 --days 30 --note "for the group chat"
 npm run invite -- --list
 ```
 
-Two-factor has no recovery codes, deliberately: ten single-use secrets to mint,
-hash, show once and redeem is a new security-sensitive surface in an app whose
-auth story is otherwise "Supabase does it", and everyone here can reach whoever
-holds the secret key. That person runs:
+Two-factor has ten single-use recovery codes, minted and hashed in the database
+and shown exactly once. This paragraph used to say the opposite -- that they
+were deliberately not worth a new security-sensitive surface, because everyone
+here could reach whoever holds the secret key. `0012_recovery_codes` decided
+otherwise, on the grounds that "ask the person with the secret key" is a fine
+answer for a handful of friends and a bad one at three in the morning.
+
+One thing they cannot do, and both the screen and the migration say so:
+redeeming a code turns two-factor **off** rather than letting one session past
+it. Supabase models the second factor as an assurance level and a session
+reaches `aal2` only by answering a challenge, so "let me in just this once" is
+not something the platform can express. Recovery means unenrolling and setting
+it up again.
+
+Somebody who has lost both the authenticator and the codes still needs whoever
+holds the secret key, and that person runs:
 
 ```bash
 npm run unenrol -- --user someone

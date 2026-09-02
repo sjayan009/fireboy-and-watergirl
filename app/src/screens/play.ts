@@ -25,6 +25,7 @@
  * looking at, this banner -- and never travels.
  */
 import { GameView, STAGE_W, STAGE_H } from "@engine/embed.js";
+import type { Transport } from "@engine/net/transport.js";
 import { LocalSave, setSaveStore } from "@engine/game/save.js";
 import { pairProgress } from "../pairsave.js";
 import type { Invite, Showing } from "../net/pairchannel.js";
@@ -102,6 +103,15 @@ export function playScreen(host: HTMLElement): () => void {
   const name = auth().profile?.username ?? "";
 
   let linkKind = "";
+  /**
+   * The transport this match is riding, kept only so its cost can be read.
+   *
+   * `RealtimeTransport.sent` counts messages actually put on the wire, and a
+   * relayed pair's message rate is the thing that decides how many games this
+   * project can host at once -- so it is worth a number rather than an
+   * estimate. Shown in development only; see `describe`.
+   */
+  let link: (Transport & { readonly sent?: number }) | null = null;
   let lobby: Lobby | null = null;
   /** Who we are paired with, for as long as the session lasts. */
   let partner: FriendState | null = null;
@@ -148,9 +158,18 @@ export function playScreen(host: HTMLElement): () => void {
    * so announcing once means a friend who was between subscriptions -- or who
    * simply opened the app a minute later -- never learns there is anything to
    * watch. Repeating is how a broadcast becomes a state that can be discovered
-   * rather than an event that can be missed. One small message every five
-   * seconds, and only while somebody has actually asked to be watchable.
+   * rather than an event that can be missed, and only while somebody has
+   * actually asked to be watchable.
+   *
+   * Every twenty seconds rather than every five, and to online friends only
+   * (see `Lobby.announceShowing`). Those two together take this from the most
+   * expensive thing the app does -- it was one message per friend per beat,
+   * for the whole match, growing with the friend graph rather than with the
+   * number of games -- to something that costs about what it is worth. What it
+   * buys is a row that can take twenty seconds to appear for somebody who
+   * opened their friends list mid-match, which nobody is timing.
    */
+  const SHOWING_MS = 20000;
   let beating: ReturnType<typeof setInterval> | null = null;
   /** Games our friends have opened to watchers, by topic. */
   const showing = new Map<string, Showing & { heard: number }>();
@@ -208,7 +227,23 @@ export function playScreen(host: HTMLElement): () => void {
     if (!s.running) return `with ${who} · ${linkKind} · choosing a level`;
     return `${view.slot === 0 ? "Fireboy" : "Watergirl"} · ${linkKind} · ` +
       (s.stalled ? "waiting for the other player" : "in step") +
-      (s.desyncs ? ` · ${s.desyncs} desync(s)` : "");
+      (s.desyncs ? ` · ${s.desyncs} desync(s)` : "") + cost();
+  }
+
+  /**
+   * What this match has cost the server, in development only.
+   *
+   * A relayed pair's message rate is what decides how many games can be played
+   * at once -- the free tier allows a hundred a second across the whole project
+   * -- and until now every figure about it was arithmetic on `FLUSH_MS`.
+   * `RealtimeTransport` has been counting the real number since it was written;
+   * this is the first thing to read it. A direct pair has no counter and
+   * nothing is shown, which is itself the point: they cost nothing.
+   */
+  function cost(): string {
+    if (!import.meta.env.DEV) return "";
+    const sent = link?.sent;
+    return typeof sent === "number" ? ` · ${sent} msgs` : "";
   }
 
   mute.addEventListener("click", () => {
@@ -272,21 +307,27 @@ export function playScreen(host: HTMLElement): () => void {
 
     announceShowing(on);
     if (beating !== null) { clearInterval(beating); beating = null; }
-    if (on) beating = setInterval(() => announceShowing(true), 5000);
+    if (on) {
+      beating = setInterval(() => announceShowing(true, match, true), SHOWING_MS);
+    }
   }
 
   /**
    * Told to everyone who could watch, on the channels we are allowed to speak
    * on. Both players announce, so a friend of either of them hears about it.
+   *
+   * `repeat` marks the beat rather than the news, and it is what
+   * `Lobby.announceShowing` narrows to friends who are actually online. See
+   * there for why the two are not the same message.
    */
-  function announceShowing(on: boolean, m = match): void {
+  function announceShowing(on: boolean, m = match, repeat = false): void {
     if (!m) return;
     const me = auth().profile?.username ?? "";
     lobby?.announceShowing({
       topic: watchTopicFor(auth().user!.id, m.friend.id),
       players: [me, m.friend.username],
       on,
-    });
+    }, repeat);
   }
 
   /**
@@ -587,13 +628,21 @@ export function playScreen(host: HTMLElement): () => void {
     }));
     // A pair whose tab closed mid-game never says "stopped", so a row that has
     // not been repeated for a while is one nobody is offering any more.
+    //
+    // Derived from the beat rather than written down, because the two used to
+    // be the same twenty seconds by coincidence of the beat being five: a row
+    // now expires exactly as the beat that would have renewed it arrives, and
+    // whether it survives is a race. Two and a half beats tolerates a missed
+    // one -- which a broadcast is entitled to be -- and still takes a
+    // disappeared pair off the list inside a minute.
+    const STALE_MS = SHOWING_MS * 2.5;
     const stale = setInterval(() => {
       let dropped = false;
       for (const [topic, x] of showing) {
-        if (Date.now() - x.heard > 20000) { showing.delete(topic); dropped = true; }
+        if (Date.now() - x.heard > STALE_MS) { showing.delete(topic); dropped = true; }
       }
       if (dropped) drawPanel(l.list);
-    }, 5000);
+    }, SHOWING_MS / 2);
     unsubscribe.push(() => clearInterval(stale));
     // Their invitation is gone: take the banner down whether or not this side
     // had got as far as pressing anything.
@@ -832,6 +881,11 @@ export function playScreen(host: HTMLElement): () => void {
     // one, because joining that topic is a round trip that has not come back
     // yet at the moment the session must be built.
     let transport = ready.transport;
+    // Held only to be counted. `RealtimeTransport` has kept a tally of the
+    // messages it actually put on the wire since it was written and nothing
+    // has ever read it, so every number about what a relayed pair costs has
+    // been a model. See `describe`.
+    link = transport;
     if (ready.host) {
       mirror = new WatchMirror(transport, () => watchRoom);
       mirror.setSharing(sharing);
@@ -1019,6 +1073,7 @@ export function playScreen(host: HTMLElement): () => void {
     progress.release();
     partner = null;
     linkKind = "";
+    link = null;
     leave.hidden = true;
     hand.hidden = true;
     share.hidden = true;
