@@ -47,6 +47,16 @@ jobs:
             echo "SUPABASE_PROJECT_REF=$SUPABASE_PROJECT_REF"
           } > .env.local
 
+      # Nothing applied the migrations. `migrate.mjs` was run by hand, which is
+      # another way of saying it was run when somebody remembered -- and
+      # `0013_open_signup` sat unapplied for days while the tests that would
+      # have noticed passed an invite code and never asked the question.
+      #
+      # It refuses to re-run a file it has already applied, so on almost every
+      # night this prints thirteen skips and costs a second.
+      - name: the database is the schema the tests expect
+        run: npm run db:migrate
+
       - name: everything
         run: npm run test:all
 

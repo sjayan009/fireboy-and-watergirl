@@ -106,7 +106,15 @@ export interface SessionOptions {
   rollback?: boolean;
   /** Frames of input delay. 0 under rollback; 3 at 26 Hz is about 115 ms. */
   delay?: number;
-  /** How far back a correction may reach. Beyond this the session waits. */
+  /**
+   * How far back a correction may reach. Beyond this the session waits.
+   *
+   * Also, and less obviously, how much delay the link is allowed to have
+   * before every frame is a stall: a peer runs ahead of what the other has
+   * confirmed by exactly the delay on their input, so this window times the
+   * frame time is the worst round trip a pair can play through. Must stay
+   * under `HISTORY`.
+   */
   maxRollback?: number;
   /**
    * How far the snapshot may fall behind the settled frontier before it is
@@ -358,7 +366,17 @@ export class NetSession {
     // diverge from the game it is watching whenever somebody was already
     // holding a key when the level began.
     this.delay = o.delay ?? (this.rollbackOn || this.observer ? 0 : 3);
-    this.maxRollback = o.maxRollback ?? 10;
+    // Fourteen frames, 539 ms. It was ten, which was chosen against a direct
+    // peer connection and is too tight for a relayed pair: a peer stalls once
+    // the other's input is delayed by more than this window, and a relayed
+    // pair's delay is the batching interval plus a server hop each way. At ten
+    // frames, batching at 230 ms started stalling pairs from 310 ms round trip.
+    //
+    // The ceiling is HISTORY. Every input packet repeats the last sixteen
+    // frames, so a peer allowed to run further ahead of `confirmed` than that
+    // could leave a hole no single packet can fill. Fourteen keeps two frames
+    // of margin, and costs 0.04 ms per extra frame re-simulated.
+    this.maxRollback = o.maxRollback ?? 14;
     this.timeStep = o.timeStep ?? 1 / 26;
     this.hashEvery = o.hashEvery ?? 8;
     this.solo = o.solo ?? false;

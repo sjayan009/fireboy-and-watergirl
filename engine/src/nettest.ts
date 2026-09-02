@@ -576,7 +576,12 @@ console.log("\na stall is not paid back as a fast-forward");
     return {
       host,
       session: new NetSession({
+        // Pinned rather than taking the default: what is under test is the
+        // clamp on the backlog, and the window is a number that moves for
+        // reasons of its own -- it went from ten to fourteen when the relay's
+        // batching doubled. A test of one should not fail for the other.
         slot, host, transport: link.endpoint(slot), rollback: true,
+        maxRollback: 10,
       }),
     };
   };

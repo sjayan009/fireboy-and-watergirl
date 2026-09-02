@@ -47,13 +47,29 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          # Only `migrate.mjs` needs these two, and only since the step below
+          # existed. They reach the database directly rather than through the
+          # API, which is why they are a different pair of secrets.
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           umask 077
           {
             echo "SUPABASE_URL=$SUPABASE_URL"
             echo "SUPABASE_PUBLISHABLE_KEY=$SUPABASE_PUBLISHABLE_KEY"
             echo "SUPABASE_SECRET_KEY=$SUPABASE_SECRET_KEY"
+            echo "SUPABASE_DB_PASSWORD=$SUPABASE_DB_PASSWORD"
+            echo "SUPABASE_PROJECT_REF=$SUPABASE_PROJECT_REF"
           } > .env.local
+
+      # BEFORE the wait, deliberately. Vercel builds on push and this workflow
+      # starts on the same push, so the two race: the new code can be answering
+      # on the live origin before this job has applied the migration it wants.
+      # Going first shortens that window to nothing it can control -- and is
+      # why a migration must stay compatible with the release BEFORE it. See
+      # supabase/README.md.
+      - name: the database is the schema the deployment expects
+        run: npm run db:migrate
 
       - name: wait for this commit to be the one that is live
         env:
