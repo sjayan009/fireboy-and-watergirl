@@ -911,9 +911,15 @@ export function playScreen(host: HTMLElement): () => void {
       if (abort.signal.aborted || !match) break;
       notice(`Lost the connection to ${them}. Reconnecting…`);
       try {
-        const ready = await lobby!.resume(match.friend.id, match.invite, {
-          signal: abort.signal,
-        });
+        // Carrying whether the last link was a relay, so neither side spends
+        // eight seconds asking a NAT the question it already refused -- and
+        // spends them with the transport blocked by the handshake, which for
+        // a relayed pair is the game's own channel. Both peers read this one
+        // invitation, so the two of them cannot disagree about it.
+        const ready = await lobby!.resume(
+          match.friend.id,
+          { ...match.invite, relay: linkKind === "relay" },
+          { signal: abort.signal });
         rebuilding = null;
         begin(ready, match.invite);
         return;

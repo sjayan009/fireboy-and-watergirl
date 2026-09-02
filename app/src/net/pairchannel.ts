@@ -46,6 +46,17 @@ export interface Invite {
   num: number;
   fireboy: string;
   from: string;
+  /**
+   * The last link this pair had was a relay, so do not try for another peer
+   * connection.
+   *
+   * Only ever set on a RESUME, and it is on the invitation rather than agreed
+   * separately because both peers read this same object -- the one that offers
+   * and the one that answers -- so there is nothing for them to disagree
+   * about. A fresh invitation never carries it, which is what gives a pair who
+   * have since moved networks their peer connection back.
+   */
+  relay?: boolean;
 }
 
 /** Events on the wire. Kept short: they are typed on every message. */
