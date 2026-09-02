@@ -192,6 +192,16 @@ const COMMAND_RESENDS = 12;
  */
 const OUTBOX_MAX = 64;
 
+/**
+ * How much of a backlog a stall is allowed to leave behind, in frames.
+ *
+ * Eight is a third of a second: enough that a peer which lost a packet or two
+ * catches up in the tick after they arrive rather than dawdling, and far short
+ * of the sixty a tick is allowed to run, which is what a stall of any real
+ * length used to hand it. See the clamp in `tick`.
+ */
+const CATCHUP_FRAMES = 8;
+
 export class NetSession {
   readonly slot: Slot;
   private readonly other: Slot;
@@ -877,6 +887,25 @@ export class NetSession {
         this.stalled = true;
         this.stalledFrames++;
         this.stalls++;
+        // Time spent WAITING is not time the game owes.
+        //
+        // Every tick of a stall added its `dt` to the clock and then returned
+        // without spending any of it, so a four-second silence left four
+        // seconds in `acc` -- and the tick that finally had the input spent
+        // the whole sixty-frame budget at once, and the one after it the
+        // rest. What that looks like from the other side of the screen is the
+        // other player standing still and then crossing the level in a single
+        // frame, which is how this was reported: a jump of frames, and then
+        // the connection going.
+        //
+        // Neither peer owes those seconds. A stall is symmetric -- the one
+        // that is ahead cannot run either, because it is already as far ahead
+        // as a correction can reach back -- so the honest thing on the way out
+        // is to resume, not to fast-forward through a wait that both of them
+        // sat through. What is left is enough to absorb an ordinary hiccup and
+        // not enough to teleport anybody.
+        const catchup = this.timeStep * CATCHUP_FRAMES;
+        if (this.acc > catchup) this.acc = catchup;
         return;
       }
       this.stalled = false;
