@@ -1180,6 +1180,55 @@ try {
     check("with no desyncs",
           await Promise.all([a, b].map((p) =>
             p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
+
+    // And now the sequence that actually broke, which is not a hostile network
+    // at all -- it is two people getting on with it.
+    //
+    // Realtime allows a client FIVE presence calls per channel per thirty
+    // seconds, and the sixth does not fail: the server logs
+    // ClientPresenceRateLimitReached and closes the channel. A pair spends
+    // that budget by playing, because every level says "in a game" when it
+    // starts and "in the lobby" when it ends -- and for a relayed pair the
+    // channel that dies is the game link itself. Three levels was enough.
+    //
+    // Level one each time, and as fast as the two of them can be driven, so
+    // the transitions land inside one window rather than being spread out by
+    // a person actually reading the map.
+    const started = Date.now();
+    let churn = true;
+    for (let i = 1; i <= 4 && churn; i++) {
+      await pressInGame(b, "m_pauseMenu.endGameBtn");
+      const off = await until(
+        () => window.__fbwg.view.session?.running ?? null,
+        (both) => both.every((r) => r === false));
+      await clickInGame(a, "m_mainMenu.b_1_1");
+      const on = await until(
+        () => window.__fbwg.view.session?.running ?? null,
+        (both) => both.every((r) => r === true));
+      if (off === null || on === null) {
+        churn = false;
+        check(`transition ${i} of 4 completed`, { off, on }, "both");
+      }
+    }
+    check("four level transitions in a row, on the relay", churn, true);
+    console.log(`  took ${((Date.now() - started) / 1000).toFixed(1)}s` +
+                " -- the budget window is 30s");
+
+    // The channel is the thing under test. If it went, both of these say so:
+    // the session is dropped and the header says what it is doing about it.
+    check("both still hold a session",
+          await Promise.all([a, b].map((p) =>
+            p.evaluate(() => window.__fbwg.view.session !== null))),
+          [true, true]);
+    const saying = await Promise.all([a, b].map((p) =>
+      p.locator(".status").innerText()));
+    check("and neither is reconnecting",
+          saying.map((t) => /reconnect/i.test(t)), [false, false]);
+    check("still relayed, still in step",
+          saying.every((t) => /relay/.test(t)), true);
+    check("and still no desyncs",
+          await Promise.all([a, b].map((p) =>
+            p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
   }
 
 } catch (err) {

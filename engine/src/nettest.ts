@@ -556,6 +556,84 @@ console.log("\na repair after a retry stays on one generation");
         peers[0].session.desyncs + peers[1].session.desyncs, 0);
 }
 
+console.log("\na stall is not paid back as a fast-forward");
+{
+  // The bug this is here for was reported as "a jump of frames, and then the
+  // connection is lost". Every tick of a stall added its `dt` to the clock and
+  // returned without spending any of it, so ten seconds of silence left ten
+  // seconds in the accumulator -- and the tick that finally had the input ran
+  // frames until its budget or the input ran out, and the tick after it did it
+  // again. To the other player that is a character standing still and then
+  // crossing the level in a blink.
+  // Rollback, because that is what the game ships and it is what makes the
+  // burst big: a peer may run ten frames ahead of what the other has
+  // confirmed, so a tick with a backlog to spend buys ten frames rather than
+  // one. Under lockstep the input delay bounds it to the delay and the bug
+  // cannot show.
+  const link = new Link(0, 0, 0);
+  const make = (slot: Slot): Peer => {
+    const host = new LevelHost();
+    return {
+      host,
+      session: new NetSession({
+        // Pinned rather than taking the default: what is under test is the
+        // clamp on the backlog, and the window is a number that moves for
+        // reasons of its own -- it went from ten to fourteen when the relay's
+        // batching doubled. A test of one should not fail for the other.
+        slot, host, transport: link.endpoint(slot), rollback: true,
+        maxRollback: 10,
+      }),
+    };
+  };
+  const peers: [Peer, Peer] = [make(0), make(1)];
+
+  peers[0].session.requestStart("adventure", 1);
+  link.advance(200);
+  run(link, peers, 60, scripted);
+  const before = peers[0].session.frame;
+
+  // The link stops delivering. Both peers keep being ticked -- two browsers go
+  // on painting whatever the network is doing -- so both predict as far as a
+  // correction can reach and then stall, spending ten seconds of wall time
+  // doing it.
+  const WAITED = 260;
+  for (let i = 0; i < WAITED; i++) {
+    for (const s of [0, 1] as Slot[]) {
+      peers[s].session.setLocalInput(scripted(s, before + i));
+    }
+    peers[0].session.tick(STEP);
+    peers[1].session.tick(STEP);
+  }
+  check("both stalled rather than guessing on",
+        [peers[0].session.stalled, peers[1].session.stalled], [true, true]);
+  const waited = peers[0].session.frame - before;
+  check("and neither ran further than a correction could reach",
+        waited <= 10, true);
+
+  // Everything either of them said arrives at once, which is what a channel
+  // coming back looks like. From here the pair should resume at the speed the
+  // game runs at, not replay the ten seconds they sat through.
+  link.advance(WAITED * STEP_MS);
+  const TICKS = 30;
+  const resumed = peers[0].session.frame;
+  for (let i = 0; i < TICKS; i++) {
+    for (const s of [0, 1] as Slot[]) peers[s].session.setLocalInput(0);
+    link.advance(STEP_MS);
+    peers[0].session.tick(STEP);
+    peers[1].session.tick(STEP);
+  }
+  const ran = peers[0].session.frame - resumed;
+  console.log(`       ${ran} frames over ${TICKS} ticks after it came back`);
+  // One frame per tick is the game running. The allowance on top is
+  // CATCHUP_FRAMES, which is there so an ordinary hiccup still catches up
+  // promptly; without the clamp this is several times TICKS.
+  check("it resumes rather than fast-forwards", ran <= TICKS + 10, true);
+  check("and they agree on what did run",
+        peers[0].host.hash() === peers[1].host.hash(), true);
+  check("with no desyncs",
+        peers[0].session.desyncs + peers[1].session.desyncs, 0);
+}
+
 console.log("\nsolo runs through the same session, with no peer");
 {
   const link = new Link(0, 0, 0);

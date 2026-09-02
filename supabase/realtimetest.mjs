@@ -182,6 +182,57 @@ try {
   check("bob receives alice's invite", payload?.num, 1);
   check("carrying the role assignment", payload?.fireboy, alice.id);
 
+  console.log("\npresence has a budget, and spending it closes the channel");
+  {
+    // The number `PRESENCE_MS` in `app/src/net/pairchannel.ts` exists for:
+    // Realtime allows a client five presence calls per channel per thirty
+    // seconds, and the sixth does not merely fail. The server logs
+    // `ClientPresenceRateLimitReached: :client_rate_limit_exceeded` and then
+    // `shutdown_response`, which arrives here as CLOSED -- and everything the
+    // pair has rides on that channel: presence, invitations, the level
+    // handover, and for a relayed pair the game itself.
+    //
+    // It is asserted rather than assumed because a pair spends that budget
+    // just by playing. Two announcements per level -- "in a game" when one
+    // starts, "in the lobby" when it ends -- is five inside half a minute if
+    // the levels are short, which is where this was found: three levels, and
+    // then a pair who could not stop reconnecting.
+    const client = createClient(URL_, PUB);
+    await client.realtime.setAuth(alice.token);
+    const closed = await new Promise((resolve) => {
+      const channel = client.channel(pair, {
+        config: { private: true, presence: { key: alice.id } },
+      });
+      let settled = false;
+      const finish = (verdict) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(verdict);
+        try { client.removeAllChannels(); } catch { /* already gone */ }
+      };
+      const timer = setTimeout(() => finish(false), 20000);
+      let spent = false;
+      channel.subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          if (spent) return;
+          spent = true;
+          // Not awaited, one at a time: the rejected call is the one that
+          // takes the channel down, so awaiting it would be waiting on a
+          // reply from a channel that is already going.
+          for (let i = 0; i < 8; i++) {
+            void channel.track({
+              userId: alice.id, username: an, activity: "online",
+            }).catch(() => { /* the point of the test */ });
+          }
+          return;
+        }
+        if (status === "CHANNEL_ERROR" || status === "CLOSED") finish(true);
+      });
+    });
+    check("eight presence calls at once takes it down", closed, true);
+  }
+
   console.log("\nwatching is a second topic, with a wider door");
   {
     // The pair topic stays exactly as private as the checks above found it.
