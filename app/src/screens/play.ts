@@ -26,14 +26,14 @@
  */
 import { GameView, STAGE_W, STAGE_H } from "@engine/embed.js";
 import type { Transport } from "@engine/net/transport.js";
-import { LocalSave, setSaveStore } from "@engine/game/save.js";
-import { pairProgress } from "../pairsave.js";
+import { LocalSave } from "@engine/game/save.js";
+import { drainOutbox, pairProgress } from "../pairsave.js";
 import type { Invite, Showing } from "../net/pairchannel.js";
 import { WatchChannel, watchTopicFor } from "../net/watchchannel.js";
 import { WatchMirror } from "../net/watch.js";
 import { auth, signOut } from "../auth.js";
 import { supabase } from "../supabase.js";
-import { clear, el } from "../ui/dom.js";
+import { clear, el, on } from "../ui/dom.js";
 import { FriendState, getLobby, Lobby, Ready } from "../lobby.js";
 
 const MUTE_KEY = "fbwg.muted";
@@ -75,19 +75,37 @@ const RECOVERED_FRAMES = 26;
 export function playScreen(host: HTMLElement): () => void {
   const canvas = el("canvas", {
     id: "stage", width: STAGE_W, height: STAGE_H, tabindex: "0",
+    // The game is pixels. Its menus, its map, its results board and its two
+    // characters exist only on this canvas, so none of them are in the
+    // accessibility tree -- and a focusable element with no name is a stop on
+    // the tab order that says nothing about itself. Naming it and pointing at
+    // the key list is not an accessible game; it is the difference between
+    // "graphic, The game" and an unlabelled focus ring. A real alternative
+    // interface would have to mirror the shell in semantic HTML, which is a
+    // design job rather than an attribute.
+    role: "application",
+    "aria-label": "Fireboy and Watergirl, played on a canvas",
+    "aria-describedby": "play-keys",
   });
 
   let muted = false;
   try { muted = localStorage.getItem(MUTE_KEY) === "1"; } catch { muted = false; }
 
-  // Installed BEFORE the Game is built: its constructor calls `openSave` once
-  // and holds the result forever, so a store handed over afterwards would never
-  // be seen. Alone it is this browser's localStorage; in a pair session it
-  // becomes the pair's shared map and then hands the solo one back.
+  // Handed to the view rather than installed globally: `Game`'s constructor
+  // calls `openSave` once and holds the result forever, so the store has to
+  // exist before the view -- but a module global that one screen sets and never
+  // puts back is what used to make WATCHING write into somebody else's save.
+  // Alone this is the browser's localStorage; in a pair session it becomes the
+  // pair's shared map and then hands the solo one back.
   const progress = pairProgress(new LocalSave("FBCookie"));
-  setSaveStore(() => progress.store);
 
-  const status = el("span", { class: "status" }, "solo");
+  // A live region: the connection state changes on the network's schedule
+  // rather than on the reader's, so a stall, a reconnection or a friend leaving
+  // has to announce itself or it is invisible to anybody not watching the top
+  // of the screen. Polite, because none of it is urgent enough to interrupt.
+  const status = el("span", {
+    class: "status", role: "status", "aria-live": "polite",
+  }, "solo");
   const mute = el("button", { class: "ghost" }, muted ? "Unmute" : "Mute");
   const leave = el("button", { class: "ghost" }, "Leave game");
   leave.hidden = true;
@@ -95,7 +113,11 @@ export function playScreen(host: HTMLElement): () => void {
   hand.hidden = true;
   const share = el("button", { class: "ghost" }, "Let friends watch");
   share.hidden = true;
-  const banner = el("div", { class: "banner" });
+  // The banner carries the things somebody has to answer -- an invitation, a
+  // lost connection -- so it is assertive where the status line is polite.
+  const banner = el("div", {
+    class: "banner", role: "alert", "aria-live": "assertive",
+  });
   banner.hidden = true;
   const panel = el("div", { class: "panel" });
   const times = el("div", { class: "panel" });
@@ -188,8 +210,20 @@ export function playScreen(host: HTMLElement): () => void {
   /** Whether presence has been told a level is running. */
   let inGame = false;
 
+  /**
+   * Whether this screen has already been torn down.
+   *
+   * `getLobby()` is a round trip, and navigating away inside it used to leave
+   * the teardown running over an empty list while every handler below landed
+   * afterwards -- holding a detached DOM and redrawing panels nobody could see,
+   * for as long as the tab stayed open.
+   */
+  let gone = false;
+
   const view = new GameView({
     canvas,
+    assets: __ASSETS__,
+    save: progress.store,
     onFrame: () => {
       const next = describe();
       if (next !== lastStatus) { status.textContent = next; lastStatus = next; }
@@ -204,7 +238,7 @@ export function playScreen(host: HTMLElement): () => void {
       const playing = match !== null && (view.session?.running ?? false);
       if (playing !== inGame) {
         inGame = playing;
-        if (playing) void lobby?.setActivity("in_game");
+        if (playing) lobby?.setActivity("in_game");
       }
       showHand();
       showShare();
@@ -393,7 +427,7 @@ export function playScreen(host: HTMLElement): () => void {
       }, "Sign out")),
     banner,
     el("div", { class: "screen" }, canvas),
-    el("p", { class: "keys" },
+    el("p", { class: "keys", id: "play-keys" },
       "Fireboy: arrow keys. Watergirl: W, A, D. P pauses, R retries."),
     panel, times, board));
 
@@ -405,7 +439,7 @@ export function playScreen(host: HTMLElement): () => void {
   // handing every page a handle on the running game for no reason.
   if (import.meta.env.DEV) {
     (window as unknown as Record<string, unknown>).__fbwg = {
-      view, progress, get lobby() { return lobby; },
+      view, progress, drainOutbox, get lobby() { return lobby; },
     };
   }
 
@@ -506,6 +540,25 @@ export function playScreen(host: HTMLElement): () => void {
     times.append(el("p", { class: "note" },
       `${done} of 32 finished` +
       (progress.shared ? ", together" : ", on this browser")));
+
+    // A save that is not being saved used to look exactly like one that was.
+    // `localStorage.setItem` throws on a full quota and in some private modes,
+    // and both the solo store and the pair store swallowed it -- so somebody
+    // could finish half the map in a private window and lose all of it without
+    // a single word on screen.
+    const trouble = progress.shared ? progress.lastError : progress.storageError;
+    if (trouble) {
+      times.append(el("p", { class: "error", role: "alert" },
+        progress.shared
+          ? `The last result could not be saved: ${trouble}. It will be sent ` +
+            "again when the connection comes back."
+          : `This browser is not storing progress: ${trouble}. A private ` +
+            "window or a full quota will do that."));
+    } else if (progress.waiting > 0) {
+      times.append(el("p", { class: "note" },
+        `${progress.waiting} result${progress.waiting === 1 ? "" : "s"} still ` +
+        "waiting to be sent. They will go when the connection allows."));
+    }
     times.append(...rows);
   }
 
@@ -522,6 +575,15 @@ export function playScreen(host: HTMLElement): () => void {
   let boardMode = "adventure";
   let boardNum = 1;
   let boardOpen = false;
+  /**
+   * Which selection the board is drawing for.
+   *
+   * Both pickers call the same async draw, and the RPC has no cancellation --
+   * so choosing level 3 and then level 4 while the network is slow could resolve
+   * in either order, and the loser used to append its rows under the winner's
+   * heading. The rank and the times looked exactly like level 4's.
+   */
+  let boardGeneration = 0;
 
   /** The map node for a level, from the table the game itself indexes by. */
   function nodeOf(mode: string, num: number): number {
@@ -532,6 +594,7 @@ export function playScreen(host: HTMLElement): () => void {
   }
 
   async function drawBoard(): Promise<void> {
+    const generation = ++boardGeneration;
     clear(board);
     const toggle = el("button", {
       class: "ghost small",
@@ -564,7 +627,13 @@ export function playScreen(host: HTMLElement): () => void {
       board.append(el("p", { class: "note" }, "No such level."));
       return;
     }
+    const loading = el("p", { class: "note" }, "Loading…");
+    board.append(loading);
     const { data, error } = await supabase.rpc("leaderboard", { p_node: node });
+    // Anything that resolves after a newer selection has started belongs to a
+    // heading that is no longer on screen.
+    if (generation !== boardGeneration || gone) return;
+    loading.remove();
     if (error) {
       board.append(el("p", { class: "note" }, error.message));
       return;
@@ -596,22 +665,19 @@ export function playScreen(host: HTMLElement): () => void {
   // outlives this screen, so an invitation still arrives while you are looking
   // at your friends list.
   let unsubscribe: (() => void)[] = [];
-  /**
-   * Whether this screen has already been torn down.
-   *
-   * `getLobby()` is a round trip, and navigating away inside it used to leave
-   * the teardown running over an empty list while every handler below landed
-   * afterwards -- holding a detached DOM and redrawing panels nobody could see,
-   * for as long as the tab stayed open.
-   */
-  let gone = false;
 
   getLobby().then(async (l) => {
     if (gone) return;
     lobby = l;
+    // Anything a previous session could not finish saying. A pair result that
+    // was still in the debounce timer when the tab closed, or whose request
+    // failed, is written down rather than lost -- and this is the next
+    // authenticated moment at which it can be sent. Monotonic on the server, so
+    // replaying one that was in fact delivered changes nothing.
+    void drainOutbox();
     // The list may be stale if a friendship was accepted on another screen.
     await l.refresh();
-    void l.setActivity("in_lobby");
+    l.setActivity("in_lobby");
     unsubscribe.push(l.onChange((friends) => drawPanel(friends)));
     unsubscribe.push(l.onInvite((invite, from) => showInvite(invite, from)));
     unsubscribe.push(l.onResume((invite) => void showResume(invite)));
@@ -649,7 +715,7 @@ export function playScreen(host: HTMLElement): () => void {
     unsubscribe.push(l.onCancel((session, from) => {
       if (!pending || pending.session !== session) return;
       pending = null;
-      progress.release();
+      void progress.release();
       notice(`${from.username} called that off.`);
     }));
     // The `await` above is another place this screen can have gone, and by
@@ -738,7 +804,7 @@ export function playScreen(host: HTMLElement): () => void {
     const stop = el("button", { class: "ghost" }, "Cancel");
     stop.addEventListener("click", () => {
       if (pending) { pending.abort.abort(); pending = null; }
-      progress.release();
+      void progress.release();
       banner.hidden = true;
       drawPanel(lobby?.list ?? []);
     });
@@ -750,7 +816,7 @@ export function playScreen(host: HTMLElement): () => void {
       el("span", {}, `Invite ${friend.username}:`), mode, num, roles, go, say,
       stop);
 
-    go.addEventListener("click", async () => {
+    on(go, "click", async () => {
       go.disabled = true;
       const abort = new AbortController();
       // The session id belongs to the lobby, which mints it. Nothing here needs
@@ -770,7 +836,7 @@ export function playScreen(host: HTMLElement): () => void {
         begin(ready, ready.invite);
       } catch (e) {
         pending = null;
-        progress.release();
+        void progress.release();
         say.textContent = (e as Error).message;
         go.disabled = false;
         drawPanel(lobby?.list ?? []);
@@ -805,7 +871,7 @@ export function playScreen(host: HTMLElement): () => void {
       lobby?.decline(invite);
       abort.abort();
       pending = null;
-      progress.release();
+      void progress.release();
       banner.hidden = true;
       drawPanel(lobby?.list ?? []);
     });
@@ -819,7 +885,7 @@ export function playScreen(host: HTMLElement): () => void {
         `You would be ${mine ? "Fireboy" : "Watergirl"}.`),
       yes, say, no);
 
-    yes.addEventListener("click", async () => {
+    on(yes, "click", async () => {
       yes.disabled = true;
       no.textContent = "Cancel";
       try {
@@ -838,7 +904,7 @@ export function playScreen(host: HTMLElement): () => void {
         begin(ready, invite);
       } catch (e) {
         pending = null;
-        progress.release();
+        void progress.release();
         say.textContent = (e as Error).message;
         yes.disabled = false;
         no.textContent = "Not now";
@@ -853,8 +919,20 @@ export function playScreen(host: HTMLElement): () => void {
     // the level's, and joining it again on every Start would be a subscription
     // churned for nothing.
     if (!watchRoom && ready.host) {
+      // Joining is a round trip, and the match can end inside one -- somebody
+      // leaves, the screen is navigated away from. A channel that arrives after
+      // that has nobody holding it, so it is closed here rather than assigned
+      // to a field the teardown has already read.
+      const forSession = invite.session;
       void WatchChannel.open(watchTopicFor(auth().user!.id, ready.friend.id))
-        .then((w) => { watchRoom = w; showShare(); })
+        .then((w) => {
+          if (gone || match?.invite.session !== forSession) {
+            void w.close();
+            return;
+          }
+          watchRoom = w;
+          showShare();
+        })
         .catch((e) => console.warn("could not open the watch topic:", e));
     }
     linkKind = ready.kind === "webrtc" ? "direct" : "relay";
@@ -872,7 +950,7 @@ export function playScreen(host: HTMLElement): () => void {
     noticeText = "";
     stalling = false;
     leave.hidden = false;
-    void lobby?.setActivity("in_game");
+    lobby?.setActivity("in_game");
 
     // The inviter carries the feed. Built even when nothing is being shared and
     // even before the watch topic has finished being joined: it costs a wrapper
@@ -1032,7 +1110,7 @@ export function playScreen(host: HTMLElement): () => void {
    * the session for both because there is nobody left to play with.
    */
   function quit(bySlot: number, forGood: boolean): void {
-    void lobby?.setActivity("in_lobby");
+    lobby?.setActivity("in_lobby");
     // Between levels, not out of the match. Whichever of them starts the next
     // one puts both back to "in a game"; see `onFrame`.
     inGame = false;
@@ -1070,7 +1148,7 @@ export function playScreen(host: HTMLElement): () => void {
     rebuilding?.abort();
     rebuilding = null;
     view.leave();
-    progress.release();
+    void progress.release();
     partner = null;
     linkKind = "";
     link = null;
@@ -1087,7 +1165,7 @@ export function playScreen(host: HTMLElement): () => void {
     mirror = null;
     void watchRoom?.close();
     watchRoom = null;
-    void lobby?.setActivity("in_lobby");
+    lobby?.setActivity("in_lobby");
     notice(why);
     drawPanel(lobby?.list ?? []);
     // The pair's map has just been handed back for this browser's own.
@@ -1097,7 +1175,18 @@ export function playScreen(host: HTMLElement): () => void {
   // A tab that goes away without saying so leaves the other person waiting on
   // input that is never coming. This is the last chance to tell them, and it is
   // one small packet on a channel that is still open.
-  const onHide = () => { rebuilding?.abort(); if (view.session) view.leave(); };
+  // A tab that goes away without saying so leaves TWO things unfinished: the
+  // other player waiting on input that is never coming, and whatever the pair
+  // earned in the last second and a half sitting in a debounce timer. The Quit
+  // is one small packet on a channel that is still open; the beacon is a
+  // `keepalive` request the browser is allowed to finish after this document
+  // has gone. Neither is guaranteed, which is why the result is also written to
+  // a durable outbox -- see `pairsave.ts`.
+  const onHide = () => {
+    rebuilding?.abort();
+    progress.beacon();
+    if (view.session) view.leave();
+  };
   addEventListener("pagehide", onHide);
 
   // Tearing the view down matters: it owns a requestAnimationFrame loop, window
@@ -1126,10 +1215,10 @@ export function playScreen(host: HTMLElement): () => void {
     if (pending) { pending.abort.abort(); pending = null; }
     // Release before destroy: it sends whatever the pair earned and puts the
     // solo progress back, and `view.destroy()` flushes what it finds.
-    progress.release();
+    void progress.release();
     view.destroy();
     for (const off of unsubscribe) off();
     unsubscribe = [];
-    void lobby?.setActivity("online");
+    lobby?.setActivity("online");
   };
 }

@@ -6,7 +6,7 @@
  * which part failed.
  */
 import {
-  auth, claimUsername, redeemRecoveryCode, resendVerification,
+  auth, claimUsername, redeemRecoveryCode, resendVerification, retryAuth,
   sendPasswordReset, setPassword, signIn, signOut, signUp, listFactors,
   verifyTotp,
 } from "../auth.js";
@@ -173,7 +173,7 @@ function recoveryScreen(host: HTMLElement): void {
   });
 
   host.append(card("Use a recovery code",
-    note("One of the ten you were given when you turned two-factor on. " +
+    note("One of the ten you were shown when you turned two-factor on. " +
          "Each works once."),
     note("Using one turns two-factor OFF for this account. You can turn it " +
          "on again from Settings straight afterwards, and you should."),
@@ -217,6 +217,46 @@ export function usernameScreen(host: HTMLElement): void {
                             inputOf(code).value.trim().toUpperCase());
         rerender();
         go("/play");
+      },
+      footer: el("p", { class: "note" },
+        el("a", { href: "#", onclick: async (e: Event) => {
+          e.preventDefault();
+          await signOut();
+        } }, "Sign out")),
+    })));
+}
+
+/**
+ * The app could not find out where this account stands.
+ *
+ * Deliberately a dead end with two ways out rather than a guess. Both of the
+ * questions the boot sequence asks -- is a second factor owed, is there a
+ * profile -- used to answer their own failures with the permissive option: an
+ * assurance-level lookup that errored meant "no second factor needed", and a
+ * profile query that errored meant "no profile". The first let an outage walk
+ * an enrolled account past its own code prompt. The second sent an established
+ * player to the username form, where the only way forward is an invite code
+ * they used months ago.
+ *
+ * So a failure is now its own state, and this is what it looks like: what went
+ * wrong, a button to ask again, and the way out of an account that will not
+ * load.
+ */
+export function troubleScreen(host: HTMLElement): void {
+  const why = auth().problem ?? "Something went wrong while signing you in.";
+
+  host.append(card("Just a moment",
+    note(why),
+    note("Nothing is wrong with your account as far as we can tell -- this is " +
+         "the app being unable to ask. It is worth trying again."),
+    form({
+      submit: "Try again",
+      children: [],
+      onSubmit: async () => {
+        const next = await retryAuth();
+        if (next.stage === "unavailable") {
+          throw new Error(next.problem ?? "Still no answer. Try again shortly.");
+        }
       },
       footer: el("p", { class: "note" },
         el("a", { href: "#", onclick: async (e: Event) => {

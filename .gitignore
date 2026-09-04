@@ -23,3 +23,9 @@ screenshot_*.png
 
 # A second copy of the SWF, for the Ruffle preview.
 preview/
+
+# Python bytecode. Interpreter, version and platform derived output rather than
+# reviewable source, and it was tracked -- six .pyc files that could sit stale
+# beside a changed .py with nothing to say which was authoritative.
+__pycache__/
+*.py[cod]

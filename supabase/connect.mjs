@@ -7,13 +7,35 @@
  *
  * Session mode (port 5432) rather than transaction mode (6543), because
  * migrations run DDL and transaction pooling does not support it.
+ *
+ * ## The certificate is checked
+ *
+ * Every candidate used to connect with `rejectUnauthorized: false`, which is
+ * encryption without authentication: the traffic could not be read by a passive
+ * listener and could be terminated by anybody who could get in the path, who
+ * would then be handed the database password and would be answering the
+ * migrations. That is not a theoretical difference on a connection whose whole
+ * purpose is privileged schema change.
+ *
+ * Supabase does not use a public CA for Postgres -- the chain is
+ * `Supabase Root 2021 CA` -> `Supabase Intermediate 2021 CA` -> the host -- so
+ * the system trust store rejects it and there is nothing to fall back to. The
+ * root is pinned instead, in `supabase/certs/prod-ca-2021.crt`, which is the
+ * certificate Supabase publishes for exactly this. `servername` is set so the
+ * hostname is checked as well as the chain; a valid certificate for the wrong
+ * host is as bad as an invalid one.
+ *
+ * SUPABASE_DB_CA points somewhere else, for a self-hosted Postgres or a rotated
+ * root. There is deliberately no way to turn verification off.
  */
 import pg from "pg";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = resolve(HERE, "..");
+const CA = resolve(HERE, "certs/prod-ca-2021.crt");
 
 export function env() {
   const out = {};
@@ -35,12 +57,17 @@ function candidates(e) {
   const ref = e.SUPABASE_PROJECT_REF;
   const pw = encodeURIComponent(e.SUPABASE_DB_PASSWORD);
   const out = [
-    { name: "direct", url: `postgresql://postgres:${pw}@db.${ref}.supabase.co:5432/postgres` },
+    {
+      name: "direct",
+      host: `db.${ref}.supabase.co`,
+      url: `postgresql://postgres:${pw}@db.${ref}.supabase.co:5432/postgres`,
+    },
   ];
   for (const r of REGIONS) {
     for (const host of [`aws-0-${r}`, `aws-1-${r}`]) {
       out.push({
         name: `pooler ${host}`,
+        host: `${host}.pooler.supabase.com`,
         url: `postgresql://postgres.${ref}:${pw}@${host}.pooler.supabase.com:5432/postgres`,
       });
     }
@@ -48,13 +75,31 @@ function candidates(e) {
   return out;
 }
 
+/** The root the chain has to lead back to. Read once, and required. */
+function rootCertificate() {
+  const path = process.env.SUPABASE_DB_CA ?? CA;
+  try {
+    return readFileSync(path, "utf8");
+  } catch (e) {
+    throw new Error(
+      `no CA certificate to verify the database against at ${path}. ` +
+      "Supabase publishes it as prod-ca-2021.crt (dashboard: Project " +
+      "Settings -> Database -> SSL Configuration); point SUPABASE_DB_CA at a " +
+      `different one if this project uses another. (${e.message})`);
+  }
+}
+
 export async function open({ quiet = false } = {}) {
   const e = env();
+  const ca = rootCertificate();
   let lastErr;
   for (const c of candidates(e)) {
     const client = new pg.Client({
       connectionString: c.url,
-      ssl: { rejectUnauthorized: false },
+      // The chain AND the name. `servername` matters because the connection
+      // string's host is what we resolved, and a certificate is only evidence
+      // about the name it was issued for.
+      ssl: { ca, rejectUnauthorized: true, servername: c.host },
       connectionTimeoutMillis: 6000,
       statement_timeout: 120000,
     });

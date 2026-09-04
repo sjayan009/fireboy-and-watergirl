@@ -52,11 +52,22 @@ export async function listFriends(): Promise<Friend[]> {
   if (!rows || rows.length === 0) return [];
 
   const ids = rows.map((r) => (r.user_a === me ? r.user_b : r.user_a));
-  const { data: profiles } = await supabase
-    .from("profiles")
-    .select("id, username")
-    .in("id", ids);
-  const names = new Map((profiles ?? []).map((p) => [p.id, p.username]));
+  const names = new Map<string, string>();
+  // Batched, because `in(...)` becomes a query string and a long enough one is
+  // refused by the server rather than truncated. A hundred friends is not a
+  // number this project expects, and "not expected" is how a URL length limit
+  // gets found in production rather than here.
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data: profiles, error: err } = await supabase
+      .from("profiles")
+      .select("id, username")
+      .in("id", ids.slice(i, i + 100));
+    // A failure here is a failure to name people, not a failure to find them.
+    // It used to be dropped, and the list rendered a screen of "(unknown)"
+    // that looked like data rather than like an outage.
+    fail(err);
+    for (const p of profiles ?? []) names.set(p.id, p.username);
+  }
 
   return rows.map((r) => {
     const id = r.user_a === me ? r.user_b : r.user_a;
@@ -72,12 +83,21 @@ export async function listFriends(): Promise<Friend[]> {
   }).sort((a, b) => a.username.localeCompare(b.username));
 }
 
+/**
+ * Look somebody up by the name they told you.
+ *
+ * Throws rather than returning null on a failure. `maybeSingle` reports no rows
+ * without an error, so an error here is a real one -- and answering it with
+ * "no such user" told somebody their friend does not exist because the network
+ * blinked.
+ */
 export async function findByUsername(username: string): Promise<Profile | null> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("profiles")
     .select("id, username, display_name, avatar_url")
     .ilike("username", username)
     .maybeSingle();
+  fail(error);
   return (data as Profile) ?? null;
 }
 
@@ -100,15 +120,12 @@ export async function accept(theirId: string): Promise<void> {
  * unfriending, and worth saying out loud in the UI before doing it.
  */
 export async function remove(theirId: string): Promise<void> {
-  const me = auth().user?.id;
-  if (!me) return;
-  const lo = me < theirId ? me : theirId;
-  const hi = me < theirId ? theirId : me;
-  const { error } = await supabase
-    .from("friendships")
-    .delete()
-    .eq("user_a", lo)
-    .eq("user_b", hi);
+  // Through the function, like every other transition. 0015 took the direct
+  // INSERT and UPDATE verbs away because the policies were broader than the
+  // rules; DELETE stayed, and this is here so that every change to a friendship
+  // has one named entry point and the one that destroys shared progress can say
+  // what it destroys.
+  const { error } = await supabase.rpc("remove_friend", { their_id: theirId });
   fail(error);
 }
 

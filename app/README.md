@@ -4,7 +4,7 @@ A static single-page app: accounts, the invite gate, and the game.
 
 ```bash
 npm run dev      # from the repo root; builds the engine, then serves on :5174
-npm run build    # engine, app, and the 42 MB of extracted assets into app/dist
+npm run build    # engine, app, and the extracted assets into the REPO ROOT dist/
 npm run invite   # mint an invite code (see below)
 ```
 
@@ -39,9 +39,15 @@ show a screen the current stage is not standing in front of:
 | `nameless` | verified, but no profile -- needs a username and an invite code |
 | `in` | has a profile, and can play |
 
-Every one of these is also true in the database. An account with no profile
-cannot be found, cannot be befriended, and so cannot reach a row of anybody
-else's data -- which is what makes the invite gate real rather than cosmetic.
+Every one of these is also true in the database, and since migration `0013` that
+is enforced rather than argued. An account with no profile is refused by every
+policy and every function -- it cannot even read the user directory, which is
+where an attacker used to get the id they needed. A session that has not
+answered an enrolled second factor is refused the same way, so the `locked`
+screen is a convenience and not the boundary.
+
+The one gate that is NOT in the database is the download. The bundle and the
+extracted art are public static files; see the note in the root README.
 
 ## The invite gate
 

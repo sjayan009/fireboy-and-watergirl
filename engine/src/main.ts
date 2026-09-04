@@ -15,7 +15,7 @@
  */
 import { Game, level, tickClock, resetClock } from "./game/game.js";
 import {
-  Event, advanceTree, enterFrameTree, SoundBus, KeyboardEvent, Keyboard,
+  Event, advanceTree, enterFrameTree, SoundBus, Keyboard,
 } from "./flash/flash.js";
 import { draw as drawDebug } from "./render/debugdraw.js";
 import { SpriteRenderer } from "./render/sprites.js";
