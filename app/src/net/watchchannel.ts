@@ -21,7 +21,7 @@
  */
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "../supabase.js";
-import { decode } from "./pairchannel.js";
+import { packetsIn } from "./pairchannel.js";
 
 const BYTES = "b";
 
@@ -46,24 +46,50 @@ export class WatchChannel {
    * A refusal is `CHANNEL_ERROR`, not a thrown error -- so for a watcher who is
    * friends with neither player it has to become one here, or they would sit in
    * front of a canvas waiting for a game they are never going to be shown.
+   *
+   * ## Every way out of here gives the channel back
+   *
+   * It used to reject and leave the Supabase channel it had just allocated
+   * subscribed to the client. The caller catches the error and drops the
+   * object, so `close()` -- the only thing that called `removeChannel` -- had
+   * become unreachable: every refusal and every timeout leaked a channel for
+   * the life of the tab, and the Realtime client has a limit on those.
+   *
+   * `signal` is the other half. Opening is a round trip and the user can leave
+   * during it; without a way to say so, the completion handler attached a live
+   * channel and a live session to a screen that had already been destroyed.
    */
-  static open(topic: string): Promise<WatchChannel> {
+  static open(topic: string, signal?: AbortSignal): Promise<WatchChannel> {
     const channel = supabase.channel(topic, { config: { private: true } });
     const watch = new WatchChannel(topic, channel);
 
     channel.on("broadcast", { event: BYTES }, ({ payload }) => {
-      for (const b64 of (payload as { p: string[] }).p ?? []) {
-        const bytes = decode(b64);
+      for (const bytes of packetsIn(payload)) {
         for (const fn of watch.byteHandlers) fn(bytes);
       }
     });
 
     return new Promise((resolve, reject) => {
+      /** Give the channel back, whichever way this ends badly. */
+      const abandon = (why: Error) => {
+        watch.settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        void supabase.removeChannel(channel).catch(() => { /* already gone */ });
+        reject(why);
+      };
+      const onAbort = () => {
+        if (watch.settled) return;
+        abandon(new Error("cancelled"));
+      };
       const timer = setTimeout(() => {
         if (watch.settled) return;
-        watch.settled = true;
-        reject(new Error("could not join that game"));
+        abandon(new Error("could not join that game"));
       }, 15000);
+
+      if (signal?.aborted) { abandon(new Error("cancelled")); return; }
+      signal?.addEventListener("abort", onAbort);
+
       channel.subscribe((status) => {
         if (watch.settled) {
           // Whatever the connection does afterwards. A watcher whose channel
@@ -75,11 +101,17 @@ export class WatchChannel {
         if (status === "SUBSCRIBED") {
           watch.settled = true;
           clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
+          // Subscribed a moment after the screen went. Nothing is going to
+          // close this but us.
+          if (signal?.aborted) {
+            void supabase.removeChannel(channel).catch(() => {});
+            reject(new Error("cancelled"));
+            return;
+          }
           resolve(watch);
         } else if (status === "CHANNEL_ERROR" || status === "CLOSED") {
-          watch.settled = true;
-          clearTimeout(timer);
-          reject(new Error("that game is not yours to watch"));
+          abandon(new Error("that game is not yours to watch"));
         }
       });
     });
@@ -111,7 +143,11 @@ export class WatchChannel {
     return () => this.byteHandlers.delete(fn);
   }
 
+  private closed = false;
+
   async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
     this.byteHandlers.clear();
     this.statusHandlers.clear();
     await supabase.removeChannel(this.channel);

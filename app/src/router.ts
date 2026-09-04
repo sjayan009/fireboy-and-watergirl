@@ -28,6 +28,11 @@ const HOME: Record<Stage, string> = {
   locked: "/unlock",
   nameless: "/username",
   in: "/play",
+  // Not a gate somebody passes through: it is where the app goes when it could
+  // not find out which gate they are at. Failing to a screen that says so is
+  // the whole point -- the alternative, and what used to happen, was failing to
+  // whichever answer the error happened to look like.
+  unavailable: "/trouble",
 };
 
 let routes: Route[] = [];

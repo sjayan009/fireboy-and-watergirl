@@ -28,7 +28,6 @@ const URL_ = `http://localhost:${PORT}/`;
 
 const e = env();
 const API = e.SUPABASE_URL;
-const PUB = e.SUPABASE_PUBLISHABLE_KEY;
 const SECRET = e.SUPABASE_SECRET_KEY;
 
 let failures = 0;
@@ -213,17 +212,18 @@ try {
   await c.waitForSelector("text=Request sent", { timeout: 30000 });
 
   // Alice is already looking at her friends list -- the block above left her
-  // there -- so there is no link to click, only a request to answer. Reloaded,
-  // and reloaded again if need be, because that screen draws once and does not
-  // listen: a request arriving while somebody has the list open does not show
-  // up until they come back to it. Worth knowing, and not worth fixing here.
-  let asked = false;
-  for (let i = 0; i < 6 && !asked; i++) {
-    await a.reload({ waitUntil: "load" });
-    asked = await a.locator("button:has-text('Accept')")
-      .waitFor({ timeout: 5000 }).then(() => true).catch(() => false);
-  }
-  check("alice is asked", asked, true);
+  // there -- and she is NOT reloaded. That is the assertion.
+  //
+  // This used to be a loop that reloaded her page up to six times, waiting for
+  // the request to appear, with a comment saying the screen draws once and does
+  // not listen and that it was "not worth fixing here". It was worth fixing
+  // there: a friend request that is invisible until you navigate away and back
+  // is indistinguishable from one that was never sent, and a test that reloads
+  // around it is a test that has agreed not to notice. The screen polls while
+  // it is visible now, so this waits for the row rather than for a reload.
+  const asked = await a.locator("button:has-text('Accept')")
+    .waitFor({ timeout: 40000 }).then(() => true).catch(() => false);
+  check("alice is asked, on the page she was already looking at", asked, true);
   await a.click("button:has-text('Accept')");
 
   // Friends with alice and not with bob, deliberately: the watch policy admits
@@ -463,7 +463,7 @@ try {
 
   /** Poll both pages with one evaluate each until they agree with `want`. */
   const until = async (read, want, tries = 60, gap = 150) => {
-    let last = null;
+    let last;
     for (let i = 0; i < tries; i++) {
       last = await Promise.all([a, b].map((p) => p.evaluate(read)));
       if (want(last)) return last;
@@ -913,7 +913,7 @@ try {
     if (!offered) {
       const look = (p) => p.evaluate(() => ({
         channels: [...(window.__fbwg.lobby?.channels ?? new Map()).entries()]
-          .map(([id, ch]) => `${ch.topic.slice(0, 18)}=${ch.channel.state}`),
+          .map(([, ch]) => `${ch.topic.slice(0, 18)}=${ch.channel.state}`),
         share: [...document.querySelectorAll("header button")]
           .map((b) => b.textContent + (b.hidden ? " (hidden)" : "")),
       }));
@@ -1077,6 +1077,7 @@ try {
   check("and a worse one from the other peer changes nothing",
         await stored(),
         [[1, 3, 25, "00:25"], [2, 0, null, null], [3, 0, null, null]]);
+
   console.log("\nand one of them walking off mid-game says so");
   {
     // The block above deliberately stopped both loops to let a save settle, and
@@ -1229,6 +1230,68 @@ try {
     check("and still no desyncs",
           await Promise.all([a, b].map((p) =>
             p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
+  }
+
+  // ---- a result that has to survive the page --------------------------------
+  //
+  // Writes are debounced a second and a half so that a medal awarded on a frame
+  // the rollback takes back is taken back with it. That delay is also exactly
+  // as long as it takes somebody who has just finished a level to click
+  // "Friends" -- and `release()` used to start the final request without
+  // awaiting it, clear the friend identity in the next statement, and return.
+  // Route teardown then destroyed the view and the browser cancelled the
+  // request. The screen had shown the medal; nothing anywhere had recorded it.
+  //
+  // Two halves, tested separately, because they fail in different ways.
+  console.log("\na result written and abandoned still arrives");
+  {
+    // One: navigate away INSIDE the settle window. `release` has to capture
+    // the pair and send before it hands the solo progress back.
+    await a.evaluate(() => {
+      const cookie = window.__fbwg.view.game.The_cookie;
+      cookie.data.stats[2] = 3;
+      cookie.data.times[2] = 31;
+      cookie.data.timesString[2] = "00:31";
+      cookie.flush();
+    });
+    // No wait at all: straight off the screen, well inside the 1500 ms timer.
+    await a.click("a[href='#/friends']");
+    await a.waitForSelector("text=Send a request", { timeout: 20000 });
+    await a.waitForTimeout(3000);
+    const after = await stored();
+    check("leaving the screen immediately still records it",
+          after.find((r) => r[0] === 3), [3, 3, 31, "00:31"]);
+
+    // Two: the request never happened at all. An entry left in the outbox --
+    // which is what a cancelled request, a failed one, or a closed tab leaves
+    // behind -- is replayed by the next authenticated session rather than lost.
+    const friendId = await a.evaluate(() => window.__fbwg.progress.shared);
+    check("and the screen has handed the pair's map back", friendId, false);
+
+    await a.evaluate((them) => {
+      const stats = new Array(32).fill(-1);
+      const times = new Array(32).fill(0);
+      const strs = new Array(32).fill("");
+      stats[4] = 3; times[4] = 44; strs[4] = "IGNORED";
+      localStorage.setItem("fbwg.pairoutbox", JSON.stringify({
+        [them]: { stats, times, timesString: strs, at: Date.now() },
+      }));
+    }, bob.id);
+    check("there is something waiting to be sent",
+          await a.evaluate(() => Object.keys(
+            JSON.parse(localStorage.getItem("fbwg.pairoutbox") ?? "{}")).length),
+          1);
+
+    await a.click("a[href='#/play']");
+    await a.waitForSelector("#stage", { timeout: 20000 });
+    await a.waitForTimeout(4000);
+    const replayed = await stored();
+    check("the next session sends it",
+          replayed.find((r) => r[0] === 5), [5, 3, 44, "00:44"]);
+    check("with the label the SERVER derived, not the one it was handed",
+          replayed.find((r) => r[0] === 5)?.[3], "00:44");
+    check("and the outbox is empty again",
+          await a.evaluate(() => localStorage.getItem("fbwg.pairoutbox")), null);
   }
 
 } catch (err) {

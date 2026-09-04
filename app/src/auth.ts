@@ -1,19 +1,34 @@
 /**
  * Who is signed in, and how far through the door they are.
  *
- * Getting in has four gates, and the app has to know which one somebody is
+ * Getting in has five gates, and the app has to know which one somebody is
  * standing at before it can show them anything:
  *
- *   out        no session at all
- *   unverified signed up, but the email link has not been followed
- *   locked     signed in, but a second factor is enrolled and unanswered
- *   nameless   verified, but no profile -- needs a username and an invite code
- *   in         has a profile, and can play
+ *   out         no session at all
+ *   unverified  signed up, but the email link has not been followed
+ *   locked      signed in, but a second factor is enrolled and unanswered
+ *   nameless    verified, but no profile -- needs a username and an invite code
+ *   in          has a profile, and can play
+ *   unavailable the answer could not be obtained at all
  *
  * The gates are UI, not security. Every one of them is also enforced in the
- * database: a user with no profile cannot be found by anybody, cannot be
- * befriended, and so cannot reach a single row of anyone else's data. What is
- * here decides what to draw, not what is allowed.
+ * database, and since migration 0013 that is true of the second factor as well:
+ * a session at `aal1` on an account with a verified factor is refused by every
+ * policy and every function, so bypassing this file reaches nothing. What is
+ * here decides what to draw.
+ *
+ * ## Why "unavailable" is a stage
+ *
+ * Because every failure used to be reported as a benign answer. A failed
+ * assurance-level lookup returned `false`, meaning "no second factor is owed",
+ * so a Supabase incident let an enrolled account past the code prompt. A failed
+ * profile query returned `null`, meaning "no profile", so the same incident
+ * sent an established player to the username form with an invite code they no
+ * longer had. Both are the wrong direction to fail in, and both were
+ * indistinguishable from the truth.
+ *
+ * So the two questions the boot sequence asks now have three answers each, and
+ * the third one is a screen that says so and offers to try again.
  */
 import { supabase } from "./supabase.js";
 import type { Session, User } from "@supabase/supabase-js";
@@ -25,13 +40,16 @@ export interface Profile {
   avatar_url: string | null;
 }
 
-export type Stage = "out" | "unverified" | "locked" | "nameless" | "in";
+export type Stage =
+  "out" | "unverified" | "locked" | "nameless" | "in" | "unavailable";
 
 export interface AuthState {
   session: Session | null;
   user: User | null;
   profile: Profile | null;
   stage: Stage;
+  /** Why the stage is `unavailable`, for the screen that says so. */
+  problem?: string;
 }
 
 let state: AuthState = { session: null, user: null, profile: null, stage: "out" };
@@ -50,47 +68,103 @@ function publish(next: AuthState): void {
 }
 
 /**
+ * Which refresh is the current one.
+ *
+ * `onAuthStateChange` fires for SIGNED_IN, TOKEN_REFRESHED, USER_UPDATED and
+ * SIGNED_OUT, and each one starts an async refresh that makes two round trips
+ * before it publishes. Nothing sequenced them, so a slow SIGNED_IN could land
+ * after a fast SIGNED_OUT and redraw the previous account's screens -- on a
+ * shared machine, in front of the next person. Every refresh now carries the
+ * number it was started with and publishes only if it is still the newest.
+ */
+let generation = 0;
+
+type Answer<T> = { ok: true; value: T } | { ok: false; why: string };
+
+/**
  * Whether a second factor is enrolled and still owed.
  *
  * Supabase models this as assurance levels: `aal1` is a password, `aal2` is a
  * password plus a factor. If the next level is above the current one, there is
  * a factor enrolled that this session has not answered.
+ *
+ * An error is an error rather than a `false`. See the note at the top.
  */
-async function needsSecondFactor(): Promise<boolean> {
-  const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-  if (error || !data) return false;
-  return data.nextLevel === "aal2" && data.currentLevel !== "aal2";
+async function needsSecondFactor(): Promise<Answer<boolean>> {
+  try {
+    const { data, error } =
+      await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (error) return { ok: false, why: error.message };
+    if (!data) return { ok: false, why: "no answer about your second factor" };
+    return {
+      ok: true,
+      value: data.nextLevel === "aal2" && data.currentLevel !== "aal2",
+    };
+  } catch (e) {
+    return { ok: false, why: (e as Error).message };
+  }
 }
 
-async function fetchProfile(id: string): Promise<Profile | null> {
-  const { data } = await supabase
+async function fetchProfile(id: string): Promise<Answer<Profile | null>> {
+  const { data, error } = await supabase
     .from("profiles")
     .select("id, username, display_name, avatar_url")
     .eq("id", id)
     .maybeSingle();
-  return (data as Profile) ?? null;
+  // `maybeSingle` returns no error for no rows, so an error here is a real
+  // one -- a failed request, or a policy that refused. "Refused" is not "you
+  // have no profile", and sending somebody to the username form on the strength
+  // of it costs them an invite code.
+  if (error) return { ok: false, why: error.message };
+  return { ok: true, value: (data as Profile) ?? null };
 }
 
 /** Work out which gate the current session is standing at. */
 export async function refresh(session: Session | null): Promise<AuthState> {
-  if (!session?.user) {
-    publish({ session: null, user: null, profile: null, stage: "out" });
+  const mine = ++generation;
+  /** Publish, unless a newer refresh has started while this one was waiting. */
+  const settle = (next: AuthState): AuthState => {
+    if (mine !== generation) return state;
+    publish(next);
     return state;
+  };
+
+  if (!session?.user) {
+    return settle({ session: null, user: null, profile: null, stage: "out" });
   }
   const user = session.user;
   if (!user.email_confirmed_at) {
-    publish({ session, user, profile: null, stage: "unverified" });
-    return state;
+    return settle({ session, user, profile: null, stage: "unverified" });
   }
-  if (await needsSecondFactor()) {
-    publish({ session, user, profile: null, stage: "locked" });
-    return state;
+
+  const second = await needsSecondFactor();
+  if (!second.ok) {
+    return settle({
+      session, user, profile: null, stage: "unavailable",
+      problem: `Could not check this account's two-factor settings: ${second.why}`,
+    });
   }
+  if (second.value) {
+    return settle({ session, user, profile: null, stage: "locked" });
+  }
+
   const profile = await fetchProfile(user.id);
-  publish({
-    session, user, profile, stage: profile ? "in" : "nameless",
+  if (!profile.ok) {
+    return settle({
+      session, user, profile: null, stage: "unavailable",
+      problem: `Could not load your profile: ${profile.why}`,
+    });
+  }
+  return settle({
+    session, user, profile: profile.value,
+    stage: profile.value ? "in" : "nameless",
   });
-  return state;
+}
+
+/** Ask again, with whatever session the client currently holds. */
+export async function retryAuth(): Promise<AuthState> {
+  const { data } = await supabase.auth.getSession();
+  return refresh(data.session);
 }
 
 /**
