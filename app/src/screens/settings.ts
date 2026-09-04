@@ -13,7 +13,7 @@ import {
   verifyTotp,
 } from "../auth.js";
 import { supabase } from "../supabase.js";
-import { card, el, field, form, inputOf, note } from "../ui/dom.js";
+import { card, el, field, form, inputOf, note, on } from "../ui/dom.js";
 
 export function settingsScreen(host: HTMLElement): void {
   const profile = auth().profile;
@@ -75,18 +75,38 @@ function boardSection(): HTMLElement {
   const said = note("Saved.");
   said.hidden = true;
 
+  // Disabled until the current value is known. Reading the box before the
+  // answer arrives showed "listed" to somebody who had opted out, and a click
+  // on that box would have written the false default straight back.
+  box.disabled = true;
   void supabase.from("profiles")
     .select("hide_from_leaderboard")
     .eq("id", auth().user?.id ?? "")
     .maybeSingle()
-    .then(({ data }) => { box.checked = !!data?.hide_from_leaderboard; });
+    .then(({ data, error }) => {
+      if (error) {
+        said.textContent = `Could not read this setting: ${error.message}`;
+        said.hidden = false;
+        return;
+      }
+      box.checked = !!data?.hide_from_leaderboard;
+      box.disabled = false;
+    });
 
-  box.addEventListener("change", async () => {
+  on(box, "change", async () => {
     said.hidden = true;
     const { error } = await supabase.from("profiles")
       .update({ hide_from_leaderboard: box.checked })
       .eq("id", auth().user?.id ?? "");
-    if (error) { box.checked = !box.checked; return; }
+    if (error) {
+      // Put the box back AND say why. Silently reverting it looks like a
+      // checkbox that does not work.
+      box.checked = !box.checked;
+      said.textContent = `That did not save: ${error.message}`;
+      said.hidden = false;
+      return;
+    }
+    said.textContent = "Saved.";
     said.hidden = false;
   });
 
@@ -243,7 +263,7 @@ function recoverySection(codes: HTMLElement): HTMLElement {
   };
   void count();
 
-  mint.addEventListener("click", async () => {
+  on(mint, "click", async () => {
     mint.disabled = true;
     try {
       const fresh = await generateRecoveryCodes();
@@ -276,12 +296,72 @@ async function drawEnrolment(host: HTMLElement): Promise<void> {
     el("img", { class: "qr", src: qr, alt: "Two-factor QR code",
                 width: "180", height: "180" }),
     note("Or enter the key by hand: ", el("code", {}, secret)),
+    note("You will be given ten recovery codes on the next step. They are the " +
+         "only way back in if you lose the authenticator."),
     form({
       submit: "Confirm",
       children: [code],
       onSubmit: async () => {
         await verifyTotp(factorId, inputOf(code).value.trim());
-        await drawFactors(host);
+        // The session is `aal2` now, and only now, which is what
+        // `generate_recovery_codes` requires since 0014 -- and the only moment
+        // in the whole flow where the codes can be both issued and shown.
+        await drawFirstCodes(host);
       },
     }));
+}
+
+/**
+ * The step that used to be missing.
+ *
+ * Enrolment finished by returning to the factor list, and recovery codes were a
+ * separate button somebody had to notice and press. The recovery screen then
+ * told people to enter "one of the ten you were given when you turned
+ * two-factor on", which for anybody who took the ordinary path was simply not
+ * true: no codes had ever been issued, and a lost authenticator meant asking
+ * whoever holds the secret key.
+ *
+ * So it is not a step any more, it is the SAME step. The codes are minted the
+ * moment the factor is verified, shown once, and the flow does not continue
+ * until somebody says they have written them down.
+ */
+async function drawFirstCodes(host: HTMLElement): Promise<void> {
+  let fresh: string[];
+  try {
+    fresh = await generateRecoveryCodes();
+  } catch (e) {
+    // The factor is on and this failed, which is the one state worth being
+    // loud about: two-factor is protecting the account and there is no way
+    // past it.
+    host.replaceChildren(
+      note("Two-factor is on, but the recovery codes could not be created: " +
+           (e as Error).message),
+      note("Get them from Settings before you sign out. Without one, a lost " +
+           "authenticator means asking whoever runs this to let you back in."),
+      el("button", {
+        class: "ghost",
+        onclick: () => void drawFactors(host),
+      }, "Back"));
+    return;
+  }
+
+  const acknowledged = el("input", { type: "checkbox" });
+  const done = el("button", { class: "primary", disabled: true },
+                  "I have written them down");
+  acknowledged.addEventListener("change", () => {
+    done.disabled = !acknowledged.checked;
+  });
+  done.addEventListener("click", () => void drawFactors(host));
+
+  host.replaceChildren(
+    note("Two-factor is on. These are your ten recovery codes."),
+    note("Write them down or save them somewhere else now. They are stored " +
+         "hashed, so this is the only time they can be shown."),
+    note("Each one works once, and using one turns two-factor OFF -- you turn " +
+         "it on again afterwards."),
+    el("ol", { class: "codelist" },
+      ...fresh.map((c) => el("li", {}, el("code", {}, c)))),
+    el("label", { class: "check" }, acknowledged,
+      el("span", {}, "I have saved these somewhere I can get to them")),
+    done);
 }

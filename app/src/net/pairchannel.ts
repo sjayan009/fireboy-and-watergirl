@@ -185,6 +185,167 @@ export function topicFor(a: string, b: string): string {
   return `pair:${a < b ? a : b}:${a < b ? b : a}`;
 }
 
+// ---- what arrives on the wire -------------------------------------------
+//
+// Everything below this line exists because the peer on the other end of an
+// accepted friendship is AUTHORIZED, not TRUSTED. The two are easy to conflate
+// on a private channel, and the payloads used to be type-cast straight into the
+// handlers: `payload as Invite`, `(payload as { p: string[] }).p ?? []`. A
+// friend running a modified client -- or anyone who first forged a friendship,
+// which until 0015 was a single POST -- could send `p` as a string and have the
+// packet loop iterate its characters, send invalid base64 and have `atob` throw
+// out of the Realtime callback, send a hundred thousand packets in one message,
+// or send a level number the game has no data for and watch the level
+// constructor dereference it.
+//
+// So every event is now parsed rather than cast: a shape that does not fit is
+// dropped, and what reaches a handler is an object this file built out of
+// values it checked.
+
+/** The three modes and how many levels each has. */
+const MODES: Record<string, number> = { adventure: 17, puzzle: 9, speed: 6 };
+
+/** As many packets as one message may carry. A relayed game sends 9-18. */
+const MAX_BATCH = 64;
+
+/**
+ * The longest a single base64 packet may be.
+ *
+ * A game packet is 34 bytes -- 48 characters -- and a first draft of this cap
+ * said 512 on exactly that reasoning. It was wrong, and wrong in a way worth
+ * writing down: this channel does not only carry game packets. The WebRTC
+ * handshake runs over it too, as `SIGNAL`-prefixed JSON, and an SDP offer is
+ * several kilobytes. A 512-character cap therefore dropped every offer and
+ * every answer, silently, and the only symptom was that every pair "fell back"
+ * to the relay after eight seconds -- which is a working game, played the
+ * expensive way, with nothing in the log to say why.
+ *
+ * `webrtc.ts` refuses a signalling message over 64 KB, so this is that in
+ * base64 with room to spare.
+ */
+const MAX_PACKET_CHARS = 128 * 1024;
+
+/**
+ * And the budget for a whole message, so the two caps cannot be multiplied.
+ *
+ * Sixty-four packets of a hundred and twenty-eight kilobytes would be eight
+ * megabytes of work for one broadcast. Realtime has a message size limit of its
+ * own well below this; the point of stating it here is that the limit is ours
+ * rather than a property of somebody else's default.
+ */
+const MAX_MESSAGE_CHARS = 512 * 1024;
+/** Enough malformed messages to be a decision rather than a glitch. */
+const BAD_LIMIT = 200;
+
+const isUuid = (v: unknown): v is string =>
+  typeof v === "string" &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
+const isText = (v: unknown, max: number): v is string =>
+  typeof v === "string" && v.length > 0 && v.length <= max;
+
+const isSession = (v: unknown): v is string => isText(v, 64);
+
+/**
+ * The packets in a byte message, dropping anything that is not one.
+ *
+ * Capped before it is decoded, not after: the cost of a hostile message has to
+ * be bounded by the message rather than by what it claims about itself.
+ */
+export function packetsIn(payload: unknown): Uint8Array[] {
+  const list = (payload as { p?: unknown } | null)?.p;
+  if (!Array.isArray(list)) return [];
+  const out: Uint8Array[] = [];
+  let spent = 0;
+  for (const b64 of list.slice(0, MAX_BATCH)) {
+    if (typeof b64 !== "string" || b64.length > MAX_PACKET_CHARS) continue;
+    spent += b64.length;
+    if (spent > MAX_MESSAGE_CHARS) break;
+    try {
+      out.push(decode(b64));
+    } catch {
+      // Not base64. `atob` throws, and it used to throw here, inside a
+      // Realtime callback, where there was nothing to catch it.
+    }
+  }
+  return out;
+}
+
+function asInvite(payload: unknown): Invite | null {
+  const p = payload as Record<string, unknown> | null;
+  if (!p || typeof p !== "object") return null;
+  if (!isSession(p.session) || !isUuid(p.fireboy) || !isUuid(p.from)) return null;
+  const levels = typeof p.mode === "string" ? MODES[p.mode] : undefined;
+  if (levels === undefined) return null;
+  const num = p.num;
+  if (typeof num !== "number" || !Number.isInteger(num) ||
+      num < 1 || num > levels) {
+    return null;
+  }
+  // Rebuilt rather than passed through, so nothing the sender added travels
+  // any further than this function.
+  return {
+    session: p.session, mode: p.mode as string, num,
+    fireboy: p.fireboy, from: p.from,
+    ...(p.relay === true ? { relay: true } : {}),
+  };
+}
+
+function asReply(payload: unknown): InviteReply | null {
+  const p = payload as Record<string, unknown> | null;
+  if (!p || typeof p !== "object") return null;
+  if (!isSession(p.session) || typeof p.accepted !== "boolean") return null;
+  return { session: p.session, accepted: p.accepted, ready: p.ready === true };
+}
+
+function asCancel(payload: unknown): InviteCancel | null {
+  const p = payload as Record<string, unknown> | null;
+  if (!p || typeof p !== "object") return null;
+  if (!isSession(p.session) || !isUuid(p.from)) return null;
+  return { session: p.session, from: p.from };
+}
+
+function asHandover(payload: unknown): Handover | null {
+  const p = payload as Record<string, unknown> | null;
+  if (!p || typeof p !== "object") return null;
+  if (!isSession(p.session) || !isUuid(p.chooser)) return null;
+  return { session: p.session, chooser: p.chooser };
+}
+
+function asSharing(payload: unknown): Sharing | null {
+  const p = payload as Record<string, unknown> | null;
+  if (!p || typeof p !== "object") return null;
+  if (!isSession(p.session) || typeof p.on !== "boolean") return null;
+  return { session: p.session, on: p.on };
+}
+
+function asShowing(payload: unknown): Showing | null {
+  const p = payload as Record<string, unknown> | null;
+  if (!p || typeof p !== "object") return null;
+  // The topic becomes a channel this client subscribes to, so its shape is
+  // load-bearing rather than cosmetic.
+  if (typeof p.topic !== "string" ||
+      !/^watch:[0-9a-f-]{36}:[0-9a-f-]{36}$/i.test(p.topic)) {
+    return null;
+  }
+  const players = p.players;
+  if (!Array.isArray(players) || players.length !== 2) return null;
+  if (!players.every((n) => isText(n, 20))) return null;
+  if (typeof p.on !== "boolean") return null;
+  return { topic: p.topic, players: [players[0], players[1]], on: p.on };
+}
+
+function asPresence(entry: unknown): Presence | null {
+  const p = entry as Record<string, unknown> | null;
+  if (!p || typeof p !== "object") return null;
+  if (!isUuid(p.userId) || !isText(p.username, 20)) return null;
+  const activity = p.activity;
+  if (activity !== "online" && activity !== "in_lobby" && activity !== "in_game") {
+    return null;
+  }
+  return { userId: p.userId, username: p.username, activity };
+}
+
 export class PairChannel {
   private constructor(
     readonly topic: string,
@@ -204,6 +365,33 @@ export class PairChannel {
    */
   get channel(): RealtimeChannel { return this.live; }
 
+  /**
+   * How many messages from this peer made no sense.
+   *
+   * Counted rather than acted on immediately, and the circuit breaker below is
+   * deliberately one-sided: it stops this client SPENDING work on the peer, and
+   * does not take the channel down. Closing on hostile input would hand a
+   * malicious friend a way to end your session -- and, since the channel also
+   * carries presence, to take you offline to everybody -- which is a worse
+   * outcome than ignoring them.
+   */
+  private bad = 0;
+
+  /** Note a message that did not parse. */
+  rubbish(event: string): void {
+    this.bad++;
+    if (this.bad === BAD_LIMIT) {
+      console.warn(`ignoring further malformed messages on ${this.topic} ` +
+                   `(last was a ${event})`);
+    }
+  }
+
+  /** Whether this peer has spent its credibility. */
+  tooMuchRubbish(): boolean { return this.bad >= BAD_LIMIT; }
+
+  /** For tests: how many messages have been dropped. */
+  get malformed(): number { return this.bad; }
+
   private inviteHandlers = new Set<(i: Invite) => void>();
   private resumeHandlers = new Set<(i: Invite) => void>();
   private replyHandlers = new Set<(r: InviteReply) => void>();
@@ -222,7 +410,8 @@ export class PairChannel {
    * turned into one here or a caller would sit waiting on a channel that is
    * never coming up.
    */
-  static open(friendId: string, me: Presence): Promise<PairChannel> {
+  static open(friendId: string, me: Presence,
+              signal?: AbortSignal): Promise<PairChannel> {
     const topic = topicFor(me.userId, friendId);
     const pair = new PairChannel(
       topic,
@@ -230,7 +419,23 @@ export class PairChannel {
         config: { private: true, presence: { key: me.userId } },
       }),
       me);
-    return pair.join(true).then(() => pair);
+    // Every way this can fail has to give the channel back. `join(true)`
+    // rejects on a refusal and on a fifteen-second timeout, and the callers all
+    // catch and drop the object -- so `close()`, the only thing that called
+    // `removeChannel`, had become unreachable on exactly the paths that
+    // allocate a channel and never use it. A lobby retrying a friend whose
+    // channel will not come up leaked one per attempt.
+    return pair.join(true).then(() => {
+      // Subscribed after the caller gave up. Nothing else holds this.
+      if (signal?.aborted) {
+        void pair.close();
+        throw new Error("cancelled");
+      }
+      return pair;
+    }, async (e) => {
+      await pair.close().catch(() => { /* never joined */ });
+      throw e;
+    });
   }
 
   /** Whether `close` has been called, so a rejoin knows to stop trying. */
@@ -281,35 +486,42 @@ export class PairChannel {
     /** Which subscription this is, so a discarded one can be ignored. */
     const generation = ++this.generation;
 
-    channel.on("broadcast", { event: INVITE }, ({ payload }) => {
-      for (const fn of pair.inviteHandlers) fn(payload as Invite);
-    });
+    /** Parse, then deliver -- or count it against the peer and drop it. */
+    const on = <T>(event: string, parse: (p: unknown) => T | null,
+                   handlers: () => Set<(v: T) => void>) => {
+      channel.on("broadcast", { event }, ({ payload }) => {
+        if (pair.tooMuchRubbish()) return;
+        const value = parse(payload);
+        if (value === null) { pair.rubbish(event); return; }
+        for (const fn of handlers()) fn(value);
+      });
+    };
+
+    on(INVITE, asInvite, () => pair.inviteHandlers);
     // Deliberately an Invite, and deliberately a different event. It carries
     // exactly the same five things -- who, which level, who is Fireboy -- but
     // it must not raise a banner asking a question that was answered before the
     // connection dropped.
-    channel.on("broadcast", { event: RESUME }, ({ payload }) => {
-      for (const fn of pair.resumeHandlers) fn(payload as Invite);
-    });
-    channel.on("broadcast", { event: REPLY }, ({ payload }) => {
-      for (const fn of pair.replyHandlers) fn(payload as InviteReply);
-    });
-    channel.on("broadcast", { event: CANCEL }, ({ payload }) => {
-      for (const fn of pair.cancelHandlers) fn(payload as InviteCancel);
-    });
-    channel.on("broadcast", { event: HANDOVER }, ({ payload }) => {
-      for (const fn of pair.handoverHandlers) fn(payload as Handover);
-    });
-    channel.on("broadcast", { event: SHARING }, ({ payload }) => {
-      for (const fn of pair.sharingHandlers) fn(payload as Sharing);
-    });
-    channel.on("broadcast", { event: SHOWING }, ({ payload }) => {
-      for (const fn of pair.showingHandlers) fn(payload as Showing);
-    });
+    on(RESUME, asInvite, () => pair.resumeHandlers);
+    on(REPLY, asReply, () => pair.replyHandlers);
+    on(CANCEL, asCancel, () => pair.cancelHandlers);
+    on(HANDOVER, asHandover, () => pair.handoverHandlers);
+    on(SHARING, asSharing, () => pair.sharingHandlers);
+    on(SHOWING, asShowing, () => pair.showingHandlers);
     channel.on("broadcast", { event: BYTES }, ({ payload }) => {
-      // One message can carry several packets; see RealtimeTransport.
-      for (const b64 of (payload as { p: string[] }).p ?? []) {
-        const bytes = decode(b64);
+      // One message can carry several packets; see RealtimeTransport. The batch
+      // is capped and each entry is decoded inside a catch, so a malformed
+      // message costs a bounded amount of work and nothing else.
+      if (pair.tooMuchRubbish()) return;
+      // Counted against the peer only when the message was not the right SHAPE.
+      // An empty batch is pointless rather than malformed, and counting it
+      // would let a peer trip the circuit breaker with a message this client
+      // has no complaint about.
+      if (!Array.isArray((payload as { p?: unknown } | null)?.p)) {
+        pair.rubbish(BYTES);
+        return;
+      }
+      for (const bytes of packetsIn(payload)) {
         for (const fn of pair.byteHandlers) fn(bytes);
       }
     });
@@ -330,7 +542,13 @@ export class PairChannel {
       const state = channel.presenceState<Presence>();
       const all: Presence[] = [];
       for (const entries of Object.values(state)) {
-        for (const p of entries) all.push(p as unknown as Presence);
+        for (const p of entries) {
+          // Presence is whatever the other client tracked, so it is peer input
+          // like everything else. An entry that is not one is dropped rather
+          // than shown as a friend called `[object Object]`.
+          const one = asPresence(p);
+          if (one) all.push(one);
+        }
       }
       for (const fn of pair.presenceHandlers) fn(all);
     };
@@ -462,7 +680,7 @@ export class PairChannel {
    * the server, because the only callers are a screen saying what it is doing
    * and none of them can act on the answer.
    */
-  async setActivity(activity: Activity): Promise<void> {
+  setActivity(activity: Activity): void {
     if (this.activity === activity) return;
     this.activity = activity;
     this.announce();
@@ -638,8 +856,14 @@ export class PairChannel {
     this.send(BYTES, { p: packets });
   }
 
-  /** Awaitable: leaving is a message to the server, not a local flag. */
+  /**
+   * Awaitable: leaving is a message to the server, not a local flag.
+   *
+   * Idempotent, because it is now reached from the failure paths of `open` as
+   * well as from the lobby, and both can happen for one channel.
+   */
   async close(): Promise<void> {
+    if (this.closing) return;
     this.closing = true;
     if (this.rejoinTimer !== null) clearTimeout(this.rejoinTimer);
     this.rejoinTimer = null;

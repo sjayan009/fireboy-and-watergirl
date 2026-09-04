@@ -13,11 +13,17 @@
  * -- starting from wherever they are now -- would simulate a world that never
  * existed and call it their game.
  *
- * Nothing here touches the watcher's own save. `pairProgress` is deliberately
- * not involved: the medals on screen are the pair's, and adopting them would
- * write somebody else's progress into this browser.
+ * Nothing here touches the watcher's own save, and now there is a mechanism
+ * behind that sentence rather than only an intention. The view is handed a
+ * `MemorySave`: the medals and times on screen are the pair's, `Recuent` writes
+ * them the moment a watched level ends, and the store it writes them into goes
+ * when this screen does. Before, the view inherited whatever the module-global
+ * save factory was last set to -- this browser's own progress on a fresh load,
+ * and the PAIR's after a visit to play -- so watching a friend finish a level
+ * unlocked it for the watcher.
  */
 import { GameView, STAGE_W, STAGE_H } from "@engine/embed.js";
+import { MemorySave } from "@engine/game/save.js";
 import { WatchChannel } from "../net/watchchannel.js";
 import { RealtimeTransport } from "../net/realtime.js";
 import { auth, signOut } from "../auth.js";
@@ -28,20 +34,38 @@ const MUTE_KEY = "fbwg.muted";
 export function watchScreen(host: HTMLElement): () => void {
   const canvas = el("canvas", {
     id: "stage", width: STAGE_W, height: STAGE_H, tabindex: "0",
+    // The game is pixels: none of its menus, results or characters exist in the
+    // accessibility tree, and an unnamed focusable canvas is a dead end for
+    // anybody arriving by keyboard or screen reader. A name and a description
+    // do not make it playable -- that needs a real alternative interface -- but
+    // they do say what this thing is and that it wants no input.
+    role: "img",
+    "aria-label": "The game being watched",
+    "aria-describedby": "watch-keys",
   });
 
   let muted = false;
   try { muted = localStorage.getItem(MUTE_KEY) === "1"; } catch { muted = false; }
 
-  const status = el("span", { class: "status" }, "joining…");
+  // A live region, so a watcher who cannot see the canvas still hears the game
+  // start, stall and end. `polite` rather than `assertive`: it changes on its
+  // own schedule and never needs to interrupt.
+  const status = el("span", {
+    class: "status", role: "status", "aria-live": "polite",
+  }, "joining…");
   const mute = el("button", { class: "ghost" }, muted ? "Unmute" : "Mute");
-  const banner = el("div", { class: "banner" });
+  const banner = el("div", {
+    class: "banner", role: "status", "aria-live": "polite",
+  });
   banner.hidden = true;
   const name = auth().profile?.username ?? "";
 
   let lastStatus = "";
   const view = new GameView({
     canvas,
+    assets: __ASSETS__,
+    // Watching writes nowhere. See the note at the top of this file.
+    save: new MemorySave(),
     onFrame: () => {
       const next = describe();
       if (next !== lastStatus) { status.textContent = next; lastStatus = next; }
@@ -77,7 +101,7 @@ export function watchScreen(host: HTMLElement): () => void {
       }, "Sign out")),
     banner,
     el("div", { class: "screen" }, canvas),
-    el("p", { class: "keys" },
+    el("p", { class: "keys", id: "watch-keys" },
       "You are watching. The controls belong to the two people playing.")));
 
   if (import.meta.env.DEV) {
@@ -94,11 +118,23 @@ export function watchScreen(host: HTMLElement): () => void {
   const topic = new URLSearchParams(location.hash.split("?")[1] ?? "").get("t");
 
   let room: WatchChannel | null = null;
+  /**
+   * Cancels the join, and everything that would have followed it.
+   *
+   * Joining a Realtime topic is a round trip, and leaving during one used to
+   * mean the cleanup below ran while `room` was still null -- so it closed
+   * nothing -- and then the completion handler attached a live channel and a
+   * live session to a view that had already been destroyed. The signal now
+   * reaches `WatchChannel.open`, which gives its channel back rather than
+   * leaving it subscribed with nobody holding it.
+   */
+  const leaving = new AbortController();
 
   if (!topic) {
     say("No game to watch. Pick one from your friends list.");
   } else {
-    WatchChannel.open(topic).then((w) => {
+    WatchChannel.open(topic, leaving.signal).then((w) => {
+      if (leaving.signal.aborted) { void w.close(); return; }
       room = w;
       // The same transport the relayed pairs use, over a different topic. It
       // only ever needed a channel it could read bytes from, write bytes to and
@@ -116,11 +152,13 @@ export function watchScreen(host: HTMLElement): () => void {
       say("Connected. Waiting for them to start a level.");
       canvas.focus();
     }).catch((e) => {
+      if (leaving.signal.aborted) return;
       say(`Could not watch that game: ${(e as Error).message}`);
     });
   }
 
   return () => {
+    leaving.abort();
     view.leave();
     view.destroy();
     void room?.close();

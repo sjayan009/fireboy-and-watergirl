@@ -99,6 +99,21 @@ function iceServers(): RTCIceServer[] {
   }
 }
 
+/**
+ * How many friends' channels this client will hold at once.
+ *
+ * One private topic per accepted friendship is what makes presence and
+ * invitations possible without a shared lobby channel that would tell every
+ * account who else is online. It is also O(friends) persistent subscriptions
+ * per user, which is fine for the population this project has and is not a
+ * design that scales -- so the cap is here, visible, rather than discovered as
+ * a Realtime connection limit in front of somebody.
+ */
+const MAX_CHANNELS = 50;
+
+/** How many channels are opened at the same time. See `refresh`. */
+const OPEN_LANES = 6;
+
 export class Lobby {
   private channels = new Map<string, PairChannel>();
   private activity = new Map<string, Activity>();
@@ -156,22 +171,56 @@ export class Lobby {
       ...f, activity: this.activity.get(f.id) ?? null,
     }));
 
-    const wanted = new Set(
-      list.filter((f) => f.status === "accepted").map((f) => f.id));
+    const accepted = list.filter((f) => f.status === "accepted");
+    if (accepted.length > MAX_CHANNELS) {
+      // Not a limit anybody in an invite-only project will meet, and a limit
+      // all the same: one Realtime channel per friend is a design that stops
+      // working at some number, and finding out which number in production is
+      // worse than choosing one here. The friends beyond it are still in the
+      // list -- they simply read as offline and cannot be invited from this
+      // side, which is a degraded lobby rather than no lobby.
+      console.warn(`${accepted.length} accepted friends; keeping channels for ` +
+                   `the first ${MAX_CHANNELS}`);
+    }
+    const wanted = new Set(accepted.slice(0, MAX_CHANNELS).map((f) => f.id));
 
     for (const [id, channel] of this.channels) {
-      if (!wanted.has(id)) { channel.close(); this.channels.delete(id); }
+      if (!wanted.has(id)) { void channel.close(); this.channels.delete(id); }
     }
-    for (const id of wanted) {
-      if (this.channels.has(id)) continue;
-      try {
-        this.channels.set(id, await this.openChannel(id));
-      } catch (e) {
-        // A channel that will not open is not a reason to have no lobby: the
-        // friend simply reads as offline until it does.
-        console.warn("could not open the channel for a friend:", e);
-      }
-    }
+
+    /**
+     * Opened a few at a time rather than one after another.
+     *
+     * Each `open` waits up to fifteen seconds before giving up, and they used
+     * to run in a `for` loop -- so a partial Realtime outage cost fifteen
+     * seconds PER FRIEND before the lobby was usable, in series, with nothing
+     * on screen. Twenty friends and a bad afternoon is five minutes of a blank
+     * list.
+     *
+     * Bounded rather than unbounded, because the far end has a connection
+     * limit of its own and answering an outage by opening forty sockets at once
+     * is the response most likely to prolong it.
+     */
+    const missing = [...wanted].filter((id) => !this.channels.has(id));
+    let next = 0;
+    await Promise.all(Array.from(
+      { length: Math.min(OPEN_LANES, missing.length) }, async () => {
+        for (;;) {
+          const i = next++;
+          if (i >= missing.length) return;
+          const id = missing[i];
+          try {
+            this.channels.set(id, await this.openChannel(id));
+            // Said as they arrive, so the list fills in rather than appearing
+            // all at once at the end.
+            this.announce();
+          } catch (e) {
+            // A channel that will not open is not a reason to have no lobby:
+            // the friend simply reads as offline until it does.
+            console.warn("could not open the channel for a friend:", e);
+          }
+        }
+      }));
     this.announce();
   }
 
@@ -331,9 +380,18 @@ export class Lobby {
     return () => this.cancelHandlers.delete(fn);
   }
 
-  async setActivity(activity: Activity): Promise<void> {
+  /**
+   * Say what this account is doing, on every channel it holds.
+   *
+   * Not awaited per channel, and no longer pretending to be: `PairChannel`
+   * records the intention and spaces the actual presence calls out against the
+   * server's budget, so there was never anything to wait for -- an `await` in
+   * this loop only made the caller's `void lobby.setActivity(...)` look like it
+   * meant something.
+   */
+  setActivity(activity: Activity): void {
     this.me.activity = activity;
-    for (const c of this.channels.values()) await c.setActivity(activity);
+    for (const c of this.channels.values()) c.setActivity(activity);
   }
 
   // ---- starting a game ----------------------------------------------------
@@ -595,6 +653,19 @@ let current: Promise<Lobby> | null = null;
 
 export function getLobby(): Promise<Lobby> {
   if (!current) current = Lobby.open();
+  return current;
+}
+
+/**
+ * The lobby if there is one, and nothing if there is not.
+ *
+ * The friends screen uses this to tell an existing lobby that the friend list
+ * has changed -- a newly accepted friendship needs a channel, and the lobby
+ * only re-reads the list when something asks it to. It must not CREATE one:
+ * opening a lobby subscribes a channel per friend and announces presence, which
+ * is not what looking at a list should do.
+ */
+export function peekLobby(): Promise<Lobby> | null {
   return current;
 }
 
