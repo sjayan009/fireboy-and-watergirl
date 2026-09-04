@@ -55,7 +55,7 @@ async function api(user, path, init = {}) {
     },
   });
   const text = await r.text();
-  let body = null;
+  let body;
   try { body = text ? JSON.parse(text) : null; } catch { body = text; }
   return { status: r.status, body };
 }
@@ -129,6 +129,47 @@ try {
           [state.uses, state.max_uses], [1, 1]);
   }
 
+  console.log("\none person, one code, sixteen requests at once");
+  {
+    // The race that actually happened, and it is not two people. One client
+    // sending the same call several times -- a double click, a retry, a flaky
+    // connection -- had every request pass `select exists (... from profiles)`
+    // before any of them had inserted the profile, and each then incremented
+    // the counter. Eight parallel calls consumed THREE uses of one code and
+    // created one profile; the redemption ledger said one and the counter said
+    // three, so the accounting was wrong in a way nothing would ever notice.
+    const u = await makeUser("barrier");
+    const code = await makeCode(10);
+    const wanted = `bar${stamp % 100000}`;
+    const all = await Promise.all(Array.from({ length: 16 }, () =>
+      rpc(u, "claim_username", { new_username: wanted, invite_code: code })));
+
+    // Every one of them is a legitimate retry of the same intention, so every
+    // one of them should succeed. Idempotent, not merely serialized.
+    check("all sixteen are answered the same way",
+          all.filter((r) => r.status < 400).length, 16);
+    check("and all sixteen say the same name",
+          new Set(all.map((r) => r.body?.username)).size, 1);
+
+    const row = await admin(
+      `/rest/v1/invite_codes?code=eq.${code}&select=uses`);
+    check("the code counted exactly one use", (await row.json())[0].uses, 1);
+
+    const red = await admin(
+      `/rest/v1/invite_redemptions?user_id=eq.${u.id}&select=code`);
+    check("against exactly one redemption", (await red.json()).length, 1);
+
+    const holders = await api(u, `/profiles?username=eq.${wanted}&select=id`);
+    check("and there is one profile", holders.body?.length ?? 0, 1);
+
+    // And the rule that was never written down: an account redeems once.
+    const second = await makeCode(5);
+    await rpc(u, "claim_username", { new_username: wanted, invite_code: second });
+    const spare = await admin(`/rest/v1/invite_codes?code=eq.${second}&select=uses`);
+    check("a second code is not spent by somebody already through the gate",
+          (await spare.json())[0].uses, 0);
+  }
+
   console.log("\nan expired code is no code at all");
   {
     const u = await makeUser("expired");
@@ -171,7 +212,12 @@ try {
                   `${String(secs % 60).padStart(2, "0")}`;
         // What the answer has to be, whatever order these arrive in.
         best.medal[n] = Math.max(best.medal[n], medal);
-        if (best.time[n] === 0 || secs < best.time[n]) best.time[n] = secs;
+        // A medal of 0 is a node reached and not finished, so it carries no
+        // time at all -- 0016 drops one rather than putting an unplayed level
+        // on the board with whatever seconds happened to be in the array.
+        if (medal > 0 && (best.time[n] === 0 || secs < best.time[n])) {
+          best.time[n] = secs;
+        }
       }
       maps.push({ stats, times, strs, from: i % 2 === 0 ? a : b, other: i % 2 === 0 ? b : a });
     }
@@ -246,10 +292,13 @@ try {
       ["request_friend", { their_username: "anybody" }],
       ["accept_friend", { their_id: users[0].id }],
       ["sync_progress", { their_id: users[0].id, p_stats: new Array(32).fill(3),
-                          p_times: new Array(32).fill(1),
-                          p_times_str: new Array(32).fill("00:01") }],
-      ["record_progress", { their_id: users[0].id, p_node: 1, p_medal: 3,
-                            p_time_s: 1, p_time_str: "00:01" }],
+                          p_times: new Array(32).fill(30),
+                          p_times_str: new Array(32).fill("00:30") }],
+      ["remove_friend", { their_id: users[0].id }],
+      ["block_friend", { their_id: users[0].id }],
+      ["delete_me", {}],
+      ["generate_recovery_codes", {}],
+      ["redeem_recovery_code", { code: "AAAAA-AAAAA" }],
     ];
     const allowed = [];
     for (const [fn, args] of writes) {
