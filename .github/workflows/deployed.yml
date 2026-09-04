@@ -15,26 +15,35 @@
 # fails, which is a green check for a deployment that never happened.
 name: deployed
 
+# One at a time, and never cancel one halfway: a run that is interrupted while
+# polling tells you nothing, and two runs racing would each be waiting for a
+# different commit to be the live one.
+#
+# The group is shared with `full`, because both of them apply migrations and a
+# migration runner is not a thing to have two of. `migrate.mjs` takes a
+# PostgreSQL advisory lock as well -- the two are not redundant: the lock is
+# what makes a manual run from a terminal safe, and this is what stops two CI
+# jobs queueing behind each other for twenty minutes.
+concurrency:
+  group: fbwg-database
+  cancel-in-progress: false
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# One at a time, and never cancel one halfway: a run that is interrupted while
-# polling tells you nothing, and two runs racing would each be waiting for a
-# different commit to be the live one.
-concurrency:
-  group: deployed
-  cancel-in-progress: false
+permissions:
+  contents: read
 
 jobs:
   live:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
           node-version: 22
           cache: npm
@@ -62,11 +71,29 @@ jobs:
             echo "SUPABASE_PROJECT_REF=$SUPABASE_PROJECT_REF"
           } > .env.local
 
-      # BEFORE the wait, deliberately. Vercel builds on push and this workflow
-      # starts on the same push, so the two race: the new code can be answering
-      # on the live origin before this job has applied the migration it wants.
-      # Going first shortens that window to nothing it can control -- and is
-      # why a migration must stay compatible with the release BEFORE it. See
+      # Before the migration, and that ordering is the point. The schema step
+      # used to run first and unconditionally, so a commit whose application
+      # could not even be BUILT still changed the database -- leaving forward
+      # schema in front of the previous release for as long as it took somebody
+      # to notice. Vercel builds the same commit from the same lockfile, so a
+      # build that fails here is a build that is going to fail there.
+      #
+      # It does not make the two atomic. Nothing available here can: Vercel
+      # deploys on its own schedule and this job cannot hold it. What it removes
+      # is the case where the migration is applied for a release that was never
+      # going to exist. The expand-contract rule in supabase/README.md is what
+      # covers the rest.
+      - name: the release builds at all
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: npm run build && npm run check
+
+      # Then the schema. Vercel builds on push and this workflow starts on the
+      # same push, so the two race: the new code can be answering on the live
+      # origin before this job has applied the migration it wants. Going before
+      # the wait shortens that window to nothing it can control -- and is why a
+      # migration must stay compatible with the release BEFORE it. See
       # supabase/README.md.
       - name: the database is the schema the deployment expects
         run: npm run db:migrate

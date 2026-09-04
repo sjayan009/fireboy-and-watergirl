@@ -51,7 +51,20 @@ Sign-up needs an invite code, email verification is required, and two-factor is
 optional. The gate is not on sign-up — it cannot be, that is Supabase Auth
 running in a browser — but on `claim_username`, which redeems the code and
 creates the profile in one statement. An account with no profile cannot be
-found, befriended, or reach a row of anybody else's data.
+found, befriended, or reach a row of anybody else's data: migration `0013` makes
+that true by requiring a profile in every policy and every function, where it
+had previously been an argument about what a profile is used for. It was not
+true before that — `profiles` was readable by any signed-in account, which was
+the id an attacker needed.
+
+**The gate is on the DATA, not on the download.** The bundle and the extracted
+art are static files on a CDN and anybody who has the URL can fetch them; the
+`X-Robots-Tag` header affects indexing and not access. Two-factor is likewise
+enforced in the database rather than only on the screen that asks for the code —
+a session that has not answered its own factor is refused by every policy — but
+neither of those restricts who can download the game. If that matters, it has to
+be a deployment-level control (Vercel's protection, or an authenticated asset
+route), and there is not one today.
 
 ```bash
 npm run invite -- --uses 5 --days 30 --note "for the group chat"
@@ -141,6 +154,14 @@ NAT refuses to be discovered relay over their own Realtime channel instead.
 
 ## A note on the art
 
-This ships art extracted from a commercial game. The repository is private, the
-app is invite-gated, and the deployment asks not to be indexed. Worth revisiting
-before it goes anywhere public.
+This ships art extracted from a commercial game. The repository is private and
+the deployment asks not to be indexed — but "asks not to be indexed" is a
+request to crawlers, and the invite gate decides who can have an ACCOUNT rather
+than who can fetch a file. The bundle, the sprites and the audio are public
+static objects to anyone who knows the URL, which is the honest description of
+what is deployed today.
+
+Production source maps are off, so the source is no longer served alongside
+them. Restricting the assets themselves needs a deployment-level control that
+does not exist here yet. Worth settling before this goes anywhere more public
+than it already is.
