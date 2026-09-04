@@ -180,6 +180,32 @@ export interface SessionOptions {
 export const MODES = ["adventure", "puzzle", "speed"];
 
 /**
+ * How many levels each mode has, in the same order.
+ *
+ * A `Command.Start` carries a mode index and a level number, and both used to
+ * be taken on trust: the mode fell back to adventure for any index the array
+ * did not have, and the level number went straight into `host.start`, which
+ * builds a level out of data indexed by it. A packet is eleven bytes and its
+ * checksum is two, so a peer running a modified client can produce a perfectly
+ * well-formed Start for adventure 240 -- and what happens next is a level
+ * constructor dereferencing a file that does not exist, inside the frame loop,
+ * on the OTHER player's machine.
+ *
+ * `decode` already refuses packets that are the wrong shape. This is the same
+ * job one layer up: refusing packets that are the right shape and impossible.
+ */
+export const MODE_LEVELS = [17, 9, 6];
+
+/** Whether a Start command names a level that exists. */
+export function startsSomething(modeIndex: number, num: number): boolean {
+  if (!Number.isInteger(modeIndex) || modeIndex < 0 ||
+      modeIndex >= MODES.length) {
+    return false;
+  }
+  return Number.isInteger(num) && num >= 1 && num <= MODE_LEVELS[modeIndex];
+}
+
+/**
  * How many further times a command is sent after the first.
  *
  * Enough to survive a run of losses on a link bad enough to be worth playing
@@ -711,10 +737,11 @@ export class NetSession {
     // to, and `begin` clears the log anyway.
     if (this.observer && !this.started) {
       if (p.kind === Kind.Command && p.command === Command.Start) {
+        if (!startsSomething(p.a, p.b)) return;
         // Set before `begin`, which bumps it -- so this lands on the same
         // generation the players moved to when they sent it.
         this.epoch = p.epoch;
-        this.begin(MODES[p.a] ?? "adventure", p.b);
+        this.begin(MODES[p.a], p.b);
       }
       return;
     }
@@ -753,7 +780,11 @@ export class NetSession {
     }
 
     if (p.command === Command.Start) {
-      if (!this.started) this.begin(MODES[p.a] ?? "adventure", p.b);
+      // A level the peer named and this build does not have. Dropping it leaves
+      // the session where it was rather than constructing a level out of
+      // whatever is at that index.
+      if (!startsSomething(p.a, p.b)) return;
+      if (!this.started) this.begin(MODES[p.a], p.b);
       return;
     }
     // A peer that has gone. See `depart`: this one is deliberately not
@@ -1020,7 +1051,9 @@ export class NetSession {
         this.started = false;
         this.onQuit?.((a === 1 ? 1 : 0) as Slot, b === 1);
         break;
-      case Command.Start: this.begin(MODES[a] ?? "adventure", b); break;
+      case Command.Start:
+        if (startsSomething(a, b)) this.begin(MODES[a], b);
+        break;
     }
   }
 

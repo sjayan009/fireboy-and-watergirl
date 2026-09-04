@@ -9,9 +9,28 @@
 import {
   accept, block, listFriends, remove, request, unblock, Friend,
 } from "../friends.js";
+import { peekLobby } from "../lobby.js";
 import { card, el, field, form, inputOf, note } from "../ui/dom.js";
 
-export function friendsScreen(host: HTMLElement): void {
+/**
+ * How often the list asks again while it is on screen.
+ *
+ * The screen used to be a snapshot taken on entry that redrew only after the
+ * local user's own actions, so a request arriving while you sat looking at the
+ * page was invisible until you navigated away and back. The two-person browser
+ * test encoded the workaround -- it reloads in a loop waiting for the other
+ * account's request to appear -- which is the sort of thing a test does when
+ * the product is wrong and nobody has said so.
+ *
+ * Polling rather than a Postgres-changes subscription, and that is a
+ * deliberately unambitious choice: `friendships` is not in the Realtime
+ * publication, adding it would put every row change on a socket, and the whole
+ * question here is "has anything happened to my handful of rows". One small
+ * query every twelve seconds, only while the tab is visible, answers it.
+ */
+const POLL_MS = 12000;
+
+export function friendsScreen(host: HTMLElement): () => void {
   const name = field("Their username", {
     required: true, minlength: 3, maxlength: 20, autocomplete: "off",
   });
@@ -29,6 +48,12 @@ export function friendsScreen(host: HTMLElement): void {
     try {
       await fn();
       await draw();
+      // A friendship that just changed state changes which channels the lobby
+      // should hold. It re-reads the list only when asked, so accepting a
+      // request here used to leave the two of you unable to see each other
+      // until something else -- usually opening the play screen -- refreshed
+      // it.
+      void peekLobby()?.then((l) => l.refresh()).catch(() => { /* it will */ });
     } catch (err) {
       trouble.textContent = (err as Error).message;
       trouble.hidden = false;
@@ -65,14 +90,28 @@ export function friendsScreen(host: HTMLElement): void {
     sections.blocked,
     el("p", { class: "note" }, el("a", { href: "#/play" }, "Back to the game"))));
 
+  /**
+   * Whether this screen is still on show.
+   *
+   * `draw` is async and is now also started by a timer, so a redraw can be in
+   * flight when the route changes -- and writing into a detached DOM is at best
+   * wasted work and at worst a stale list appearing on the next screen.
+   */
+  let gone = false;
+  /** So two refreshes cannot interleave and render each other's rows. */
+  let drawing = 0;
+
   async function draw(): Promise<void> {
+    const mine = ++drawing;
     let all: Friend[];
     try {
       all = await listFriends();
     } catch (e) {
+      if (gone || mine !== drawing) return;
       current.replaceChildren(note((e as Error).message));
       return;
     }
+    if (gone || mine !== drawing) return;
 
     const rows = (list: Friend[], actions: (f: Friend) => Node[]) =>
       list.map((f) => el("div", { class: "row" },
@@ -138,4 +177,26 @@ export function friendsScreen(host: HTMLElement): void {
   }
 
   void draw();
+
+  // Whatever the other person did while this was open. Coalesced with the
+  // ordinary redraw -- `draw` is idempotent and guards its own ordering -- and
+  // paused while the tab is hidden, because a list nobody is looking at does
+  // not need to be current.
+  const tick = setInterval(() => {
+    if (document.visibilityState === "visible") void draw();
+  }, POLL_MS);
+  // And at once on coming back, so returning to the tab is not a twelve-second
+  // wait for news that is already a minute old.
+  const onWake = () => {
+    if (document.visibilityState === "visible") void draw();
+  };
+  document.addEventListener("visibilitychange", onWake);
+  addEventListener("focus", onWake);
+
+  return () => {
+    gone = true;
+    clearInterval(tick);
+    document.removeEventListener("visibilitychange", onWake);
+    removeEventListener("focus", onWake);
+  };
 }

@@ -10,3 +10,12 @@ declare const __SUPABASE_KEY__: string;
  * Replaced at build time, so nothing about it reaches the browser as a lookup.
  */
 declare const __ICE_SERVERS__: string;
+
+/**
+ * Where the extracted art and audio are fetched from.
+ *
+ * A bare path in development and a path with a release marker on the query in a
+ * build, so that the one-year `immutable` cache policy the deployment applies
+ * to that subtree is a promise the build can keep. See `app/scripts/release.mjs`.
+ */
+declare const __ASSETS__: string;

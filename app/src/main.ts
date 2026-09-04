@@ -8,8 +8,8 @@ import "./ui/styles.css";
 import { startAuth } from "./auth.js";
 import { startRouter, Route } from "./router.js";
 import {
-  loginScreen, passwordScreen, resetScreen, signUpScreen, unlockScreen,
-  usernameScreen, verifyScreen,
+  loginScreen, passwordScreen, resetScreen, signUpScreen, troubleScreen,
+  unlockScreen, usernameScreen, verifyScreen,
 } from "./screens/accounts.js";
 import { playScreen } from "./screens/play.js";
 import { watchScreen } from "./screens/watch.js";
@@ -29,6 +29,7 @@ const routes: Route[] = [
   { path: "/friends", stages: ["in"], render: friendsScreen },
   { path: "/watch", stages: ["in"], render: watchScreen },
   { path: "/settings", stages: ["in"], render: settingsScreen },
+  { path: "/trouble", stages: ["unavailable"], render: troubleScreen },
 ];
 
 const host = document.getElementById("app")!;

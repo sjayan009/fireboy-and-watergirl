@@ -15,6 +15,7 @@
  * responded, not by inspecting the maths.
  */
 import { spawn } from "node:child_process";
+import { connect as netConnect } from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { env } from "../../supabase/connect.mjs";
@@ -109,6 +110,45 @@ try {
 const server = await startVite();
 
 try {
+  // The dev server's own file handler, before any browser is involved.
+  //
+  // `vite.config.ts` serves `extracted/` straight off disk in development, and
+  // its containment used to be `file.startsWith(ROOT)` -- a string prefix, and
+  // against the REPOSITORY rather than against `extracted/`. So
+  // `/extracted/..\.env.local` was "inside the root", was allowed, and returned
+  // the file holding the Supabase secret key and the database password. Vite
+  // binds to loopback, which narrows who could ask; it does not narrow it to
+  // nobody, and a page in another tab is a local origin.
+  //
+  // Written onto a socket rather than through `fetch`, because a WHATWG URL
+  // turns a backslash into a forward slash before anything is sent -- so a
+  // `fetch` version of this test proves that `fetch` normalises and nothing
+  // about the server.
+  console.log("the dev server maps nothing outside extracted/");
+  {
+    const raw = (target) => new Promise((done) => {
+      const socket = netConnect(PORT, "localhost", () => {
+        const CRLF = "\r\n";
+        socket.write(`GET ${target} HTTP/1.1${CRLF}` +
+                     `Host: localhost:${PORT}${CRLF}` +
+                     `Connection: close${CRLF}${CRLF}`);
+      });
+      const chunks = [];
+      socket.on("data", (c) => chunks.push(c));
+      socket.on("error", () => done(0));
+      socket.on("close", () => done(Number(
+        Buffer.concat(chunks).toString("latin1").split(" ")[1] ?? 0)));
+    });
+    for (const attack of ["/extracted/..%5C.env.local",
+                          "/extracted/..\\.env.local",
+                          "/extracted/../.env.local",
+                          "/extracted/%2e%2e/.env.local"]) {
+      check(`refused ${attack}`, (await raw(attack)) >= 400, true);
+    }
+    check("and a real asset is still served",
+          await raw("/extracted/assets/sprites.json"), 200);
+  }
+
   const user = await makeReadyUser("a");
 
   for (const engine of ["chromium", "firefox", "webkit"]) {
@@ -201,6 +241,43 @@ try {
         check(`at ${width}px the pointer finds PLAY`,
               [overNothing, await cursor()], ["default", "pointer"]);
       }
+
+      // What somebody arriving by keyboard or screen reader is handed.
+      //
+      // The game is pixels: its menus, its map, its results board and its two
+      // characters exist only on the canvas, so none of them are in the
+      // accessibility tree and no attribute can put them there. What CAN be
+      // fixed is the part around it, and it was not -- a focusable canvas with
+      // no name is a stop on the tab order that says nothing about itself, and
+      // the connection status was a bare `span` rewritten by the network, so a
+      // stall, a disconnection or a friend leaving was announced to nobody.
+      //
+      // This asserts the part an attribute can carry. A genuinely playable
+      // alternative interface is a design job and is not claimed here.
+      const shell = await page.evaluate(() => {
+        const canvas = document.getElementById("stage");
+        const status = document.querySelector(".status");
+        const described = canvas?.getAttribute("aria-describedby");
+        return {
+          canvasNamed: (canvas?.getAttribute("aria-label") ?? "").length > 3,
+          canvasRole: canvas?.getAttribute("role"),
+          // The description has to point at something that exists, or the
+          // reader announces nothing where the key list should be.
+          describedByReal: !!described && !!document.getElementById(described),
+          statusLive: status?.getAttribute("aria-live"),
+          // Every control in the bar has to say what it is; an icon-only or
+          // empty button is a button nobody can choose.
+          unnamedButtons: [...document.querySelectorAll("header button, header a")]
+            .filter((el) => !(el.textContent ?? "").trim() &&
+                            !el.getAttribute("aria-label")).length,
+        };
+      });
+      check("the canvas has a name", shell.canvasNamed, true);
+      check("and a role", shell.canvasRole, "application");
+      check("and its description points at something real",
+            shell.describedByReal, true);
+      check("the connection status announces itself", shell.statusLive, "polite");
+      check("and every control in the bar is named", shell.unnamedButtons, 0);
 
       check("and no page errors anywhere", problems, []);
       await ctx.close();

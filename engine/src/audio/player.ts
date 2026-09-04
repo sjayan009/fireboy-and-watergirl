@@ -19,6 +19,7 @@
  * the player touches the keyboard.
  */
 import { SoundBus, SoundItem, SoundControl } from "../flash/flash.js";
+import { assetUrl } from "../asseturl.js";
 
 interface Loop { src: AudioBufferSourceNode; gain: GainNode; }
 
@@ -33,19 +34,52 @@ export class AudioPlayer {
   private master = 1;
   /** Loops asked for while the buffer was still decoding. */
   private pendingLoops = new Map<string, number>();
+  /**
+   * One-shot sources that have not finished yet.
+   *
+   * `stopLoops` was the only teardown and it names what it does: a footstep or
+   * a splash started a frame before the view was destroyed went on playing into
+   * a context nobody could reach any more.
+   */
+  private oneShots = new Set<AudioBufferSourceNode>();
 
   muted = false;
 
   private constructor(private index: Record<string, string>,
                       private base: string) {}
 
+  /**
+   * The two gesture listeners, so they can be taken off again.
+   *
+   * `{ once: true }` removes the one that FIRED and leaves the other, which is
+   * a leak on its own -- and neither was removed when the view went. A page
+   * that opened and left play three times had three dead players listening for
+   * the next click, and that click built three AudioContexts. Browsers allow
+   * somewhere in the low tens of them per document, after which every later one
+   * throws and the game is silent for the rest of the session.
+   */
+  private wake: (() => void) | null = null;
+  private gone = false;
+
   static async load(base: string): Promise<AudioPlayer> {
-    const res = await fetch(`${base}/sounds.json`, { cache: "force-cache" });
+    const res = await fetch(assetUrl(base, "sounds.json"),
+                            { cache: "force-cache" });
     const player = new AudioPlayer(await res.json(), base);
-    const wake = () => player.resume();
-    addEventListener("keydown", wake, { once: true });
-    addEventListener("pointerdown", wake, { once: true });
+    const wake = () => {
+      player.removeWake();
+      player.resume();
+    };
+    player.wake = wake;
+    addEventListener("keydown", wake);
+    addEventListener("pointerdown", wake);
     return player;
+  }
+
+  private removeWake(): void {
+    if (!this.wake) return;
+    removeEventListener("keydown", this.wake);
+    removeEventListener("pointerdown", this.wake);
+    this.wake = null;
   }
 
   get ready(): boolean { return this.ctx !== null && this.ctx.state === "running"; }
@@ -53,6 +87,7 @@ export class AudioPlayer {
   get playingLoops(): number { return this.loops.size; }
 
   resume(): void {
+    if (this.gone) return;
     if (!this.ctx) {
       const Ctor = (globalThis as any).AudioContext ??
                    (globalThis as any).webkitAudioContext;
@@ -77,7 +112,7 @@ export class AudioPlayer {
     // `extracted/` ships, or a path, meaning a build picked a smaller original
     // for this sound. Reading it out of the value keeps the choice in the data.
     const where = file.includes("/") ? file : `sounds_wav/${file}`;
-    fetch(`${this.base}/${where}`)
+    fetch(assetUrl(this.base, where))
       .then((r) => r.arrayBuffer())
       .then((b) => this.ctx!.decodeAudioData(b))
       .then((buf) => { this.buffers.set(symbol, buf); })
@@ -146,6 +181,7 @@ export class AudioPlayer {
   }
 
   private play(symbol: string, loops: number): void {
+    if (this.gone) return;
     const looping = loops > 1;
     const buf = this.buffer(symbol);
     if (!buf) {
@@ -174,6 +210,11 @@ export class AudioPlayer {
       };
     } else {
       src.connect(this.gain);
+      this.oneShots.add(src);
+      src.onended = () => {
+        this.oneShots.delete(src);
+        try { src.disconnect(); } catch { /* already detached */ }
+      };
     }
     src.start();
   }
@@ -201,5 +242,37 @@ export class AudioPlayer {
     if (m === this.muted) return;
     this.muted = m;
     this.applyMaster();
+  }
+
+  /**
+   * Give back everything this player owns.
+   *
+   * The counterpart `load` never had. Every one-shot source is stopped as well
+   * as every loop -- a one-shot outlives the view that started it -- the graph
+   * is disconnected, the gesture listeners come off, and the context is closed.
+   * Closing is what actually frees the audio hardware: a suspended context
+   * still counts against the per-document limit.
+   *
+   * Idempotent, because a view can be destroyed by a navigation and a
+   * `pagehide` in the same instant, and `AudioContext.close()` on a closed
+   * context throws.
+   */
+  dispose(): void {
+    if (this.gone) return;
+    this.gone = true;
+    this.removeWake();
+    this.stopLoops();
+    for (const src of this.oneShots) {
+      try { src.stop(); } catch { /* already finished */ }
+      try { src.disconnect(); } catch { /* already detached */ }
+    }
+    this.oneShots.clear();
+    try { this.gain?.disconnect(); } catch { /* already detached */ }
+    this.gain = null;
+    this.buffers.clear();
+    this.pendingLoops.clear();
+    const ctx = this.ctx;
+    this.ctx = null;
+    if (ctx && ctx.state !== "closed") void ctx.close().catch(() => {});
   }
 }

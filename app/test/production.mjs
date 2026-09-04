@@ -20,6 +20,7 @@ import { existsSync } from "node:fs";
 import { extname, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { env } from "../../supabase/connect.mjs";
+import { resolveUnder } from "../../safepath.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = resolve(HERE, "../../dist");
@@ -52,12 +53,22 @@ const TYPES = {
   ".map": "application/json",
 };
 
-/** Static files, and index.html for anything else -- as a CDN would. */
+/**
+ * Static files, and index.html for anything else -- as a CDN would.
+ *
+ * The mapping goes through `safepath.mjs` like the other two servers in this
+ * repository. It had the same hole they did: a `/`-only filter for `..`
+ * followed by `path.join`, which on Windows honours `\` as a separator too, so
+ * `..%5C` walked out of `dist/` while this test was running. It is a test
+ * server on a developer's machine and that is exactly the machine with the
+ * credentials on it.
+ *
+ * Bound to loopback explicitly, for the same reason.
+ */
 const server = createServer(async (req, res) => {
-  const url = decodeURIComponent((req.url || "/").split("?")[0]);
-  const rel = url.split("/").filter((s) => s && s !== "..").join("/");
-  let file = join(DIST, rel);
-  if (!rel || !existsSync(file)) file = join(DIST, "index.html");
+  let file = resolveUnder(DIST, req.url);
+  if (file === null) { res.writeHead(400); res.end("no"); return; }
+  if (file === DIST || !existsSync(file)) file = join(DIST, "index.html");
   try {
     const body = await readFile(file);
     res.writeHead(200, { "content-type": TYPES[extname(file)] ?? "application/octet-stream" });
@@ -67,7 +78,7 @@ const server = createServer(async (req, res) => {
     res.end("not found");
   }
 });
-await new Promise((ok) => server.listen(PORT, ok));
+await new Promise((ok) => server.listen(PORT, "127.0.0.1", ok));
 
 const admin = (path, init = {}) => fetch(`${API}${path}`, {
   ...init,

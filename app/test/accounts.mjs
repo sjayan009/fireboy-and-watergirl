@@ -327,18 +327,34 @@ try {
 
     await enrol.locator("input").fill(totp(secret));
     await enrol.locator("button").click();
-    await page.waitForSelector("text=An authenticator app is enrolled",
-                               { timeout: 20000 });
-    check("the right one enrols it", true, true);
 
-    // Recovery codes, taken while there is still an authenticator to lose.
-    await page.click("button:has-text('Get recovery codes')");
-    await page.waitForSelector(".codelist code", { timeout: 20000 });
+    // The recovery codes, WITHOUT asking for them.
+    //
+    // This used to click a separate "Get recovery codes" button after
+    // enrolment finished, which meant the test proved the button worked and
+    // said nothing about the product: enrolling and walking away left an
+    // account with two-factor on and no way back, while the recovery screen
+    // told people to enter "one of the ten you were given when you turned
+    // two-factor on". Nobody had been given ten of anything. So the assertion
+    // is now that the codes arrive on their own, as part of turning it on.
+    await page.waitForSelector(".codelist code", { timeout: 30000 });
     const codes = await page.locator(".codelist code").allInnerTexts();
-    check("ten codes are shown", codes.length, 10);
-    check("and the screen says what spending one costs, before it is spent",
+    check("ten codes are shown without being asked for", codes.length, 10);
+    check("and they are shaped to be read aloud",
+          codes.every((c) => /^[A-Z2-9]{5}-[A-Z2-9]{5}$/.test(c.trim())), true);
+    check("the screen says what spending one costs, before it is spent",
           /turns two-factor OFF/i.test(await page.locator(".factors").innerText()),
           true);
+
+    // And the flow does not continue until somebody says they have them.
+    const carryOn = page.locator("button:has-text('I have written them down')");
+    check("carrying on is refused until they are acknowledged",
+          await carryOn.isDisabled(), true);
+    await page.locator(".factors input[type=checkbox]").check();
+    await carryOn.click();
+    await page.waitForSelector("text=An authenticator app is enrolled",
+                               { timeout: 20000 });
+    check("the right code enrols it", true, true);
 
     await page.click("a[href='#/play']");
     await page.waitForSelector("#stage");

@@ -23,12 +23,12 @@ const DEFAULT_ICE: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
 ];
 
-interface Signal {
+export interface Signal {
   sdp?: RTCSessionDescriptionInit;
   ice?: RTCIceCandidateInit;
 }
 
-function encodeSignal(s: Signal): Uint8Array {
+export function encodeSignal(s: Signal): Uint8Array {
   const body = new TextEncoder().encode(JSON.stringify(s));
   const out = new Uint8Array(body.length + 1);
   out[0] = SIGNAL;
@@ -36,13 +36,75 @@ function encodeSignal(s: Signal): Uint8Array {
   return out;
 }
 
-function decodeSignal(d: Uint8Array): Signal | null {
+/**
+ * How many candidates may wait for a remote description.
+ *
+ * A real negotiation produces single figures. The queue had no bound and is
+ * filled from the signalling channel, which for two people is the pair's own
+ * Realtime topic -- so a peer who never sends an answer and keeps sending
+ * candidates grew an array in the other browser for as long as it cared to.
+ * Fifty is far above any honest handshake and far below anything that matters.
+ */
+const MAX_PENDING_ICE = 50;
+
+/** The longest an SDP or a candidate may be. Real ones are a few kilobytes. */
+const MAX_SIGNAL_CHARS = 64 * 1024;
+
+/**
+ * A signalling message, or null.
+ *
+ * The shape is checked rather than assumed. The message arrives from the peer
+ * over a channel they are authorized to publish on, and `setRemoteDescription`
+ * and `addIceCandidate` are the two places where what they say becomes an
+ * argument to a browser API: a non-object, a missing `type`, or an SDP the size
+ * of a video file all used to be handed straight over.
+ */
+export function decodeSignal(d: Uint8Array): Signal | null {
   if (d.length < 2 || d[0] !== SIGNAL) return null;
+  if (d.length > MAX_SIGNAL_CHARS) return null;
+  let parsed: unknown;
   try {
-    return JSON.parse(new TextDecoder().decode(d.subarray(1)));
+    parsed = JSON.parse(new TextDecoder().decode(d.subarray(1)));
   } catch {
     return null;
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const s = parsed as Record<string, unknown>;
+
+  if (s.sdp !== undefined) {
+    const sdp = s.sdp as Record<string, unknown> | null;
+    if (!sdp || typeof sdp !== "object") return null;
+    const type = sdp.type;
+    if (type !== "offer" && type !== "answer" && type !== "pranswer" &&
+        type !== "rollback") {
+      return null;
+    }
+    if (sdp.sdp !== undefined &&
+        (typeof sdp.sdp !== "string" || sdp.sdp.length > MAX_SIGNAL_CHARS)) {
+      return null;
+    }
+    return { sdp: { type, sdp: sdp.sdp as string | undefined } };
+  }
+
+  if (s.ice !== undefined) {
+    const ice = s.ice as Record<string, unknown> | null;
+    if (!ice || typeof ice !== "object") return null;
+    if (typeof ice.candidate !== "string" ||
+        ice.candidate.length > MAX_SIGNAL_CHARS) {
+      return null;
+    }
+    return {
+      ice: {
+        candidate: ice.candidate,
+        sdpMid: typeof ice.sdpMid === "string" ? ice.sdpMid : undefined,
+        sdpMLineIndex: typeof ice.sdpMLineIndex === "number"
+          ? ice.sdpMLineIndex : undefined,
+        usernameFragment: typeof ice.usernameFragment === "string"
+          ? ice.usernameFragment : undefined,
+      },
+    };
+  }
+  return null;
 }
 
 class DataChannelTransport implements Transport {
@@ -189,6 +251,23 @@ export function connectWebRTC(
       }
     };
 
+    /**
+     * Give up, with a reason, from inside an async task.
+     *
+     * Both negotiation tasks below are async and neither used to have a
+     * terminal `catch`. An invalid offer, a browser that refuses
+     * `createOffer`, an SDP the peer garbled: each became an unhandled promise
+     * rejection in the console while the outer promise sat unresolved until its
+     * eight-second timeout, so every negotiation failure was reported as
+     * "no peer connection within 8000ms" whatever it actually was. That is the
+     * difference between a diagnosable bug and a pair who "sometimes get the
+     * relay".
+     */
+    const abandon = (why: string, e?: unknown) => finish(() => {
+      pc.close();
+      reject(new Error(e ? `${why}: ${(e as Error).message}` : why));
+    });
+
     if (caller) {
       // Unreliable and unordered: see the note at the top of this file.
       const dc = pc.createDataChannel("input", {
@@ -199,17 +278,22 @@ export function connectWebRTC(
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         sig.send(encodeSignal({ sdp: pc.localDescription!.toJSON() }));
-      })();
+      })().catch((e) => abandon("could not offer a peer connection", e));
     } else {
       pc.ondatachannel = (e) => ready(e.channel);
     }
 
     // Candidates can arrive before the remote description is set; SCTP will
     // not have them until it is, so they wait here rather than being dropped.
-    const pendingIce: RTCIceCandidateInit[] = [];
+    //
+    // Keyed, so the same candidate arriving twice -- which a peer repeating
+    // itself across a reconnection does -- costs one entry rather than two.
+    const pendingIce = new Map<string, RTCIceCandidateInit>();
     const flush = async () => {
-      while (pendingIce.length) {
-        try { await pc.addIceCandidate(pendingIce.shift()!); } catch { /* stale */ }
+      const waiting = [...pendingIce.values()];
+      pendingIce.clear();
+      for (const c of waiting) {
+        try { await pc.addIceCandidate(c); } catch { /* stale */ }
       }
     };
 
@@ -237,11 +321,15 @@ export function connectWebRTC(
         if (s.ice) {
           if (pc.remoteDescription) {
             try { await pc.addIceCandidate(s.ice); } catch { /* stale */ }
+          } else if (pendingIce.size < MAX_PENDING_ICE) {
+            pendingIce.set(s.ice.candidate ?? String(pendingIce.size), s.ice);
           } else {
-            pendingIce.push(s.ice);
+            // More candidates than any handshake produces, and still no remote
+            // description. Whatever is on the other end is not negotiating.
+            abandon("the peer sent candidates and never an answer");
           }
         }
-      })();
+      })().catch((e) => abandon("the peer connection handshake failed", e));
     });
   });
 }

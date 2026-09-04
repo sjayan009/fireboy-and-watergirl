@@ -8,6 +8,18 @@
 # This one holds credentials. They are repo secrets, masked in logs, and
 # unavailable to pull requests from forks -- and the key stored here should be
 # one minted for CI, not one that has ever been anywhere else.
+#
+# ## Why it is several jobs and not one command
+#
+# It was `npm run test:all`, which is `&&` all the way along -- so the first
+# failure ended the run and everything after it was simply not attempted. A
+# stale golden-render baseline therefore also cancelled the mouse tests, the
+# cross-engine tests, the live database suite and every application browser
+# test, and did so every night: a red job with one known cause, hiding whatever
+# else had broken behind it.
+#
+# The stages that do not depend on each other are separate jobs now. One of them
+# failing still fails the run; it no longer erases the others' results.
 name: full
 
 on:
@@ -15,21 +27,69 @@ on:
     - cron: "20 4 * * *"
   workflow_dispatch:
 
-jobs:
-  everything:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v5
+permissions:
+  contents: read
 
-      - uses: actions/setup-node@v5
+jobs:
+  # The migration runs once, before anything that reads the schema, and holds
+  # the shared concurrency group while it does. `deployed` is in the same group.
+  schema:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: fbwg-database
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
           node-version: 22
           cache: npm
+      - run: npm ci
+      - name: write the environment the scripts read
+        env:
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          umask 077
+          {
+            echo "SUPABASE_DB_PASSWORD=$SUPABASE_DB_PASSWORD"
+            echo "SUPABASE_PROJECT_REF=$SUPABASE_PROJECT_REF"
+          } > .env.local
+      # It refuses to re-run a file it has already applied, and now also refuses
+      # to skip one that has been EDITED since it ran -- so on almost every
+      # night this prints a column of skips and costs a second.
+      - name: the database is the schema the tests expect
+        run: npm run db:migrate
+      - if: always()
+        run: rm -f .env.local
 
+  engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
+        with:
+          node-version: 22
+          cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium firefox webkit
+      # No credentials at all: none of this touches the network.
+      - name: the whole engine, including the soak and the goldens
+        run: npm --prefix engine run test:full
 
+  database:
+    runs-on: ubuntu-latest
+    needs: schema
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
       - name: write the environment the test scripts read
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -46,20 +106,38 @@ jobs:
             echo "SUPABASE_DB_PASSWORD=$SUPABASE_DB_PASSWORD"
             echo "SUPABASE_PROJECT_REF=$SUPABASE_PROJECT_REF"
           } > .env.local
+      - name: row level security, the assurance matrix, and the load tests
+        run: npm run db:test
+      - if: always()
+        run: rm -f .env.local
 
-      # Nothing applied the migrations. `migrate.mjs` was run by hand, which is
-      # another way of saying it was run when somebody remembered -- and
-      # `0013_open_signup` sat unapplied for days while the tests that would
-      # have noticed passed an invite code and never asked the question.
-      #
-      # It refuses to re-run a file it has already applied, so on almost every
-      # night this prints thirteen skips and costs a second.
-      - name: the database is the schema the tests expect
-        run: npm run db:migrate
-
-      - name: everything
-        run: npm run test:all
-
-      - name: and never leave the credentials lying about
-        if: always()
+  application:
+    runs-on: ubuntu-latest
+    needs: schema
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - name: write the environment the test scripts read
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: |
+          umask 077
+          {
+            echo "SUPABASE_URL=$SUPABASE_URL"
+            echo "SUPABASE_PUBLISHABLE_KEY=$SUPABASE_PUBLISHABLE_KEY"
+            echo "SUPABASE_SECRET_KEY=$SUPABASE_SECRET_KEY"
+          } > .env.local
+      - name: build it as it ships
+        run: npm run build && npm run check
+      - name: and drive it in three browsers, with two accounts
+        run: npm run app:test
+      - if: always()
         run: rm -f .env.local

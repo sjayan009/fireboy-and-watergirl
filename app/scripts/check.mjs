@@ -90,10 +90,25 @@ console.log("nothing secret reached the build");
 
   // The one value that IS meant to be there, so a build that silently lost its
   // configuration fails here rather than in front of somebody.
+  //
+  // Except on a run that HAS no project: a pull request from a fork, or from
+  // Dependabot, gets no repository secrets, and this check used to demand the
+  // presence of values GitHub had deliberately withheld. Those runs build
+  // against documented placeholders instead, and the assertion becomes the one
+  // that is true of them -- that the placeholder is what is in there, and not
+  // a real project reached by accident.
   const bundles = text.filter((p) => p.endsWith(".js"));
-  const configured = bundles.some((p) =>
-    /sb_publishable_|supabase\.co/.test(readFileSync(p, "utf8")));
-  check("but the project it talks to is configured", configured);
+  const bodies = bundles.map((p) => readFileSync(p, "utf8"));
+  if (process.env.FBWG_PLACEHOLDER_ENV === "1") {
+    check("this run has no project, and says so in the bundle",
+          bodies.some((b) => b.includes("placeholder.supabase.co")));
+    check("and reached no real one",
+          !bodies.some((b) => /https:\/\/(?!placeholder)[a-z0-9]+\.supabase\.co/
+            .test(b)));
+  } else {
+    check("but the project it talks to is configured",
+          bodies.some((b) => /sb_publishable_|supabase\.co/.test(b)));
+  }
 }
 
 // ---- the manifests tell the truth -----------------------------------------

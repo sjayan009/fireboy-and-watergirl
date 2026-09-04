@@ -18,7 +18,7 @@ export function el<K extends keyof HTMLElementTagNameMap>(
     if (k === "class") node.className = String(v);
     else if (k === "html") node.innerHTML = String(v);
     else if (k.startsWith("on") && typeof v === "function") {
-      node.addEventListener(k.slice(2).toLowerCase(), v as EventListener);
+      on(node, k.slice(2).toLowerCase(), v as (e: Event) => unknown);
     } else if (k === "value" && node instanceof HTMLInputElement) {
       node.value = String(v);
     } else node.setAttribute(k, v === true ? "" : String(v));
@@ -28,6 +28,40 @@ export function el<K extends keyof HTMLElementTagNameMap>(
     node.append(typeof c === "string" ? document.createTextNode(c) : c);
   }
   return node;
+}
+
+/**
+ * Add a listener that may be async, and hear about it when it fails.
+ *
+ * `addEventListener` wants a function returning void, so an `async` handler
+ * hands it a promise nobody holds: a rejection inside one is an unhandled
+ * rejection in the console and, on screen, a button that was pressed and did
+ * nothing. Half the handlers in these screens catch their own errors and half
+ * relied on never having any.
+ *
+ * This is deliberately not a UI: it reports to the console and lets the screen
+ * decide whether anything visible should happen, because most of the callers
+ * already have a place to put a message and the ones that do not want one at
+ * the point the promise is created rather than here.
+ */
+export function on(target: EventTarget, type: string,
+                   handler: (e: Event) => unknown): () => void {
+  const wrapped = (e: Event) => {
+    let result: unknown;
+    try {
+      result = handler(e);
+    } catch (err) {
+      console.error(`the ${type} handler threw:`, err);
+      return;
+    }
+    if (result && typeof (result as Promise<unknown>).catch === "function") {
+      void (result as Promise<unknown>).catch((err: unknown) => {
+        console.error(`the ${type} handler failed:`, err);
+      });
+    }
+  };
+  target.addEventListener(type, wrapped);
+  return () => target.removeEventListener(type, wrapped);
 }
 
 export function clear(node: HTMLElement): HTMLElement {

@@ -24,6 +24,7 @@
 import { DisplayObject, TextField } from "../flash/flash.js";
 import { FontSet } from "./fonts.js";
 import { cssFilter, hasVisibleFilter } from "./filters.js";
+import { assetUrl } from "../asseturl.js";
 
 export interface ChildPlacement {
   name: string;
@@ -184,13 +185,14 @@ export class SpriteRenderer {
 
   static async load(base: string, stageW = 640,
                     stageH = 480): Promise<SpriteRenderer> {
-    const res = await fetch(`${base}/sprites.json`, { cache: "force-cache" });
+    const res = await fetch(assetUrl(base, "sprites.json"),
+                            { cache: "force-cache" });
     const manifest = await res.json();
     // A missing font must not cost us the art: the fields fall back to a serif
     // stack and everything else still renders.
     const fonts = await FontSet.load(base).catch(() => null);
     // Button art: the up-state characters JPEXS does not export as sprites.
-    const buttons: ButtonSet | null = await fetch(`${base}/buttons.json`,
+    const buttons: ButtonSet | null = await fetch(assetUrl(base, "buttons.json"),
                                                   { cache: "force-cache" })
       .then((r) => r.json()).catch(() => null);
     return new SpriteRenderer(manifest, base, stageW, stageH, fonts, buttons);
@@ -239,7 +241,7 @@ export class SpriteRenderer {
     this.pending.add(key);
     img.onload = () => { this.pending.delete(key); this.generation++; };
     img.onerror = () => { this.pending.delete(key); this.failed.add(key); };
-    img.src = `${this.base}/${key}`;
+    img.src = assetUrl(this.base, key);
     return null;
   }
 

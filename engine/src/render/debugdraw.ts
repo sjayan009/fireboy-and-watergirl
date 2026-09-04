@@ -8,7 +8,7 @@
  *
  * CreateGround positions its clips at `col * 20`, so the world is 20px/tile.
  */
-import { b2Body, b2CircleShape, b2PolygonShape, b2Shape } from
+import { b2Shape } from
   "../box2d/box2d.js";
 
 export const PPU = 20;              // pixels per world unit (tile)
