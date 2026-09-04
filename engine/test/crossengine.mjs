@@ -33,7 +33,7 @@ try {
     let browser;
     try {
       browser = await playwright[name].launch();
-    } catch (e) {
+    } catch {
       console.log(`  ${name.padEnd(9)}: not installed -- skipped`);
       continue;
     }

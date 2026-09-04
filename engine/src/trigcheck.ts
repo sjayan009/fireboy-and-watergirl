@@ -1,4 +1,4 @@
-import { detSin, detCos, detAtan2, detAtan, detAcos, detPow } from
+import { detSin, detCos, detAtan2, detAcos, detPow } from
   "./box2d/dettrig.js";
 
 function ulpErr(a: number, b: number): number {
