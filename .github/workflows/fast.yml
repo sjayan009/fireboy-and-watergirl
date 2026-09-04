@@ -1,9 +1,24 @@
-# Every push. Minutes, not tens of minutes, and no credentials at all.
+# Every push and every pull request. Minutes, not tens of minutes.
 #
 # Everything here runs against the code alone: the simulation, the netcode over
 # a simulated link, the typecheck, the build, and the checks that no secret
 # reached the bundle. Anything needing a browser or a database is in full.yml,
 # because a suite people stop waiting for is a suite that stops being run.
+#
+# ## It used to be impossible for a fork to pass
+#
+# The comment above said "no credentials at all" and the job contradicted it in
+# two places: the build read the Supabase URL and publishable key from
+# repository SECRETS, and `check.mjs` then asserted unconditionally that those
+# values had reached the bundle. GitHub does not pass secrets to a workflow
+# triggered by a pull request from a fork, and treats Dependabot the same way --
+# so those runs built with empty values and failed a check that asked whether
+# the empty values were there. Every outside contribution and every dependency
+# bump arrived with a red required check nobody could turn green.
+#
+# So a run without credentials now says so and builds against documented
+# placeholders, and the check asks the question that is actually true of the
+# build in front of it: "is this configured, or is it deliberately not?".
 name: fast
 
 on:
@@ -11,13 +26,23 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege, stated rather than inherited. Nothing here writes anything;
+# the default for a repository can be far broader, and a workflow that does not
+# say what it needs is one whose blast radius is a setting somewhere else.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      # Pinned to a commit rather than to a tag. `@v5` is a moving reference
+      # somebody else can repoint, which for an action that runs before any of
+      # this repository's own code is the widest supply-chain surface a CI job
+      # has. The comment is the version, so the pin can be read.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
           node-version: 22
           cache: npm
@@ -27,6 +52,18 @@ jobs:
       - name: the engine, on its own
         run: npm --prefix engine test
 
+      # Written to the environment rather than exported, so the build and the
+      # check that follows it agree about which kind of run this is.
+      - name: decide whether this run has a project to talk to
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        run: |
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "no Supabase project available (fork, Dependabot, or an" \
+                 "unconfigured repository) -- building against placeholders"
+            echo "FBWG_PLACEHOLDER_ENV=1" >> "$GITHUB_ENV"
+          fi
+
       - name: build
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -35,3 +72,9 @@ jobs:
 
       - name: nothing secret in it, nothing missing from it
         run: npm run check
+
+      # Last, because it needs the engine's declarations to exist: the rules
+      # that matter here are type-aware, and a type-aware rule with no types is
+      # a rule that passes everything.
+      - name: and it lints
+        run: npm run lint

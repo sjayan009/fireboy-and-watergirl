@@ -7,12 +7,25 @@
 # It lives in Actions rather than as a Vercel cron so the deployment can stay
 # purely static -- no serverless function in the request path, which is the
 # whole reason page loads are one edge round trip.
+#
+# ## With the key a browser already has
+#
+# It used to send the SECRET key, in both authentication headers, to ask
+# `profiles` for one id. That key bypasses row level security entirely and can
+# administer the whole project; the probe needs none of it, and a scheduled
+# workflow is a long-lived place for a credential to sit. The publishable key
+# does the same job: PostgREST answers, the policies return nothing to an
+# anonymous caller, and a 200 is exactly the liveness signal being asked for.
+# Reading zero rows is the point -- if this ever returns a row, the policies
+# have a hole in them.
 name: keepalive
 
 on:
   schedule:
     - cron: "40 6 * * *"
   workflow_dispatch:
+
+permissions: {}
 
 jobs:
   ping:
@@ -21,11 +34,16 @@ jobs:
       - name: touch the database
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
         run: |
-          code=$(curl -s -o /dev/null -w '%{http_code}' \
-            -H "apikey: $SUPABASE_SECRET_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SECRET_KEY" \
+          body=$(curl -sS -w '\n%{http_code}' \
+            -H "apikey: $SUPABASE_PUBLISHABLE_KEY" \
             "$SUPABASE_URL/rest/v1/profiles?select=id&limit=1")
-          echo "profiles responded $code"
+          code=$(printf '%s' "$body" | tail -n1)
+          rows=$(printf '%s' "$body" | head -n1)
+          echo "profiles responded $code with $rows"
           test "$code" = "200"
+          # An anonymous caller must see nothing. A row here is not a keepalive
+          # failure, it is a row level security failure, and this is the one
+          # thing in the project that asks the question every single day.
+          test "$rows" = "[]"
