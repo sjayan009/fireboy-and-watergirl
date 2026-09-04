@@ -29,6 +29,7 @@ import { NetSession, Slot } from "./net/session.js";
 import { GameHost } from "./net/gamehost.js";
 import { Command } from "./net/protocol.js";
 import { Transport } from "./net/transport.js";
+import { getSaveStore, setSaveStore, type SaveStore } from "./game/save.js";
 import type { Intent } from "./game/shellinput.js";
 
 /** The original stage: 39*20*0.8 + 16 = 640, 29*20*0.8 + 16 = 480. */
@@ -50,6 +51,24 @@ export interface GameViewOptions {
   canvas: HTMLCanvasElement;
   /** Where the extracted art and audio live. */
   assets?: string;
+  /**
+   * Where this view's progress is kept.
+   *
+   * Per view, and that is the whole point of it. `openSave` reads a module
+   * global, and a global that one screen sets and never puts back is a global
+   * every later screen inherits: the play screen installed the PAIR's store,
+   * the watch screen built a view without mentioning saves, and a level watched
+   * to its end wrote the players' medals and times into the watcher's own
+   * progress -- or, after a visit to pair play, into the pair's. The comment at
+   * the top of `screens/watch.ts` promised that watching touches nothing, and
+   * nothing implemented the promise.
+   *
+   * A watcher passes `MemorySave`; a pair passes the pair's store; solo passes
+   * nothing and gets this browser's `localStorage` as before. The factory is
+   * scoped around the one constructor call that consults it and restored
+   * afterwards, so no view can leave it pointing anywhere.
+   */
+  save?: SaveStore;
   /** Called after every rendered frame, for whatever the page shows around it. */
   onFrame?: (view: GameView) => void;
   /**
@@ -119,17 +138,36 @@ export class GameView {
     this.onRefused = o.onRefused;
 
     resetClock();
-    this.game = new (Game as any)();
+    // Scoped, not installed: `Game`'s constructor calls `openSave` once and
+    // holds the result forever, so the factory only has to be right for the
+    // length of this call -- and must be back to whatever it was afterwards,
+    // or the next view built anywhere inherits this one's storage.
+    const previous = getSaveStore();
+    if (o.save) setSaveStore(() => o.save!);
+    try {
+      this.game = new (Game as any)();
+    } finally {
+      setSaveStore(previous);
+    }
     this.shell = new ShellInput(this.game, this.game.stage);
 
     const base = o.assets ?? "/extracted/assets";
     // Art and audio arrive whenever they arrive. The game is playable before
     // either does -- the renderer draws nothing it has not got, and the sound
     // bus holds its queue -- so neither is awaited.
-    SpriteRenderer.load(base).then((r) => { this.sprites = r; })
-      .catch((e) => console.warn("sprite art unavailable:", e));
-    AudioPlayer.load(base).then((a) => { this.audio = a; })
-      .catch((e) => console.warn("audio unavailable:", e));
+    //
+    // And whenever they arrive may be after this view is gone: a route change
+    // during the first few seconds used to leave a loader resolving into a
+    // destroyed view, which for the audio player meant an AudioContext and two
+    // global gesture listeners that nothing would ever take down again.
+    SpriteRenderer.load(base).then((r) => {
+      if (this.destroyed) return;
+      this.sprites = r;
+    }).catch((e) => console.warn("sprite art unavailable:", e));
+    AudioPlayer.load(base).then((a) => {
+      if (this.destroyed) { a.dispose(); return; }
+      this.audio = a;
+    }).catch((e) => console.warn("audio unavailable:", e));
 
     // Installed before anything can be clicked. Solo it answers "not mine" to
     // everything and the ported handlers run untouched; in a session it is what
@@ -553,11 +591,35 @@ export class GameView {
   get isMuted(): boolean { return this.muted; }
   setRunning(on: boolean): void { this.running = on; }
 
+  /**
+   * Whether this view has been torn down.
+   *
+   * Read by the asset loaders above, which resolve on their own schedule and
+   * used to attach to a view that no longer had a canvas.
+   */
+  private destroyed = false;
+
+  /**
+   * Put the view down: the loop, the listeners, the audio, and the save.
+   *
+   * Idempotent, because a page can reach this by more than one route -- a
+   * navigation and a `pagehide` in the same instant -- and closing an
+   * AudioContext twice is an exception rather than a no-op.
+   *
+   * The audio used to be MUTED here and nothing else, which is why the comment
+   * in `screens/play.ts` claiming this releases the audio context was wrong:
+   * every play or watch screen left a live context, its sources still
+   * connected, behind it. Browsers cap those in the low tens.
+   */
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     cancelAnimationFrame(this.raf);
     for (const off of this.listeners) off();
     this.listeners = [];
     this.game.The_cookie?.flush?.();
-    this.audio?.setMuted(true);
+    this.audio?.dispose();
+    this.audio = null;
+    this.sprites = null;
   }
 }

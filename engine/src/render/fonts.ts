@@ -13,6 +13,7 @@
  * there for the case where the TTF fails to load at all, not for missing
  * glyphs.
  */
+import { assetUrl } from "../asseturl.js";
 
 export interface FontInfo { file: string; name: string; }
 
@@ -21,17 +22,47 @@ const FALLBACK = 'Georgia, "Times New Roman", serif';
 export class FontSet {
   private constructor(private index: Record<string, FontInfo>) {}
 
+  /**
+   * The set for a given asset base, loaded at most once per document.
+   *
+   * The faces are a property of the DOCUMENT -- `document.fonts` is global and
+   * a family named `swf-font-767` means the same thing to every canvas on the
+   * page -- so loading them per `GameView` added five more `FontFace` objects
+   * to the document on every visit to play or watch and removed none of them.
+   * Navigating between the two a dozen times left sixty faces registered for
+   * five families, all identical, all still holding their decoded tables.
+   *
+   * Caching the PROMISE rather than the result matters: two views built in the
+   * same tick would otherwise both miss the cache and both load.
+   */
+  private static cache = new Map<string, Promise<FontSet>>();
+
   /** Injects @font-face rules and resolves once the faces are usable. */
-  static async load(base: string): Promise<FontSet> {
-    const res = await fetch(`${base}/fonts/fonts.json`, { cache: "force-cache" });
+  static load(base: string): Promise<FontSet> {
+    const hit = FontSet.cache.get(base);
+    if (hit !== undefined) return hit;
+    const loading = FontSet.fetchAndRegister(base).catch((e) => {
+      // A failure must not be cached: the next view should try again rather
+      // than inherit a network blip forever.
+      FontSet.cache.delete(base);
+      throw e;
+    });
+    FontSet.cache.set(base, loading);
+    return loading;
+  }
+
+  private static async fetchAndRegister(base: string): Promise<FontSet> {
+    const res = await fetch(assetUrl(base, "fonts/fonts.json"),
+                            { cache: "force-cache" });
     const index: Record<string, FontInfo> = await res.json();
 
     // FontFace over a <style> tag: it reports load failure instead of quietly
     // falling back, which is the difference between "the timer looks wrong"
     // and a diagnosable error.
     const faces = Object.entries(index).map(async ([id, info]) => {
-      const face = new FontFace(`swf-font-${id}`,
-                                `url("${base}/fonts/${info.file}")`);
+      const family = `swf-font-${id}`;
+      const face = new FontFace(family,
+                                `url("${assetUrl(base, `fonts/${info.file}`)}")`);
       await face.load();
       (document as any).fonts.add(face);
     });
