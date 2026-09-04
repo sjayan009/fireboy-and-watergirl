@@ -210,7 +210,12 @@ try {
   });
   page.on("response", (r) => {
     if (r.status() >= 400) missing.push(`${r.status()} ${r.url()}`);
-    if (r.url().endsWith(".webp")) webp.push(r.url());
+    // The PATH, not the whole URL. Asset requests carry `?v=<digest>` so that
+    // the one-year `immutable` header on this subtree is a promise the build
+    // can keep -- and `endsWith(".webp")` on the full URL therefore matched
+    // nothing at all. The art was loading correctly the whole time; the test
+    // had simply stopped being able to recognise it.
+    if (new URL(r.url()).pathname.endsWith(".webp")) webp.push(r.url());
   });
 
   await page.goto(`${SITE}/#/login`, { waitUntil: "load", timeout: 60000 });
