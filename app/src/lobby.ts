@@ -156,7 +156,13 @@ export class Lobby {
     failed: (e: Error) => void;
   }>();
 
-  private constructor(private readonly me: Presence) {}
+  private refreshTimer: ReturnType<typeof setInterval>;
+  private wake = () => { if (!document.hidden) void this.refresh(); };
+  private constructor(private readonly me: Presence) {
+    this.refreshTimer = setInterval(this.wake, 12000);
+    document.addEventListener("visibilitychange", this.wake);
+    window.addEventListener("focus", this.wake);
+  }
 
   /** The signed-in user, as the other side sees them. */
   get self(): Presence { return this.me; }
@@ -187,6 +193,12 @@ export class Lobby {
       this.announce();
     }).finally(() => { this.refreshing = null; });
     return this.refreshing;
+  }
+
+  /** A mutation needs a read that began after it, not an older in-flight poll. */
+  async refreshAfterChange(): Promise<void> {
+    if (this.refreshing) await this.refreshing;
+    await this.refresh();
   }
 
   private async refreshNow(): Promise<void> {
@@ -720,6 +732,9 @@ export class Lobby {
 
   async close(): Promise<void> {
     this.closing = true;
+    clearInterval(this.refreshTimer);
+    document.removeEventListener("visibilitychange", this.wake);
+    window.removeEventListener("focus", this.wake);
     this.abort.abort();
     for (const pending of this.outbound.values()) pending.failed(new Error("signed out"));
     this.outbound.clear();

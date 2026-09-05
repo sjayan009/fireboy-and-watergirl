@@ -12,10 +12,19 @@ try {
   await Promise.all([left.goto(target+"?pair=left"),right.goto(target+"?pair=right")]);
   for (const page of [left,right]) {
     await page.waitForFunction(()=>window.__fbwg?.view?.prepared);
-    await page.waitForFunction(()=>document.querySelector(".play-toolbar button")?.textContent === "Friends (1)");
+    await page.waitForFunction(()=>document.querySelector(".tool-friends")?.textContent === "Friends (1)");
   }
   await left.getByRole("button",{name:"Friends (1)",exact:true}).click();
   // "Invite <username>", not "Invite": the accessible name carries the row.
+  await left.getByRole("button",{name:/^Invite \S/}).click();
+  await right.locator("#stage").focus();
+  await left.getByRole("button",{name:"Send invite",exact:true}).click();
+  await right.getByRole("button",{name:"Accept",exact:true}).waitFor();
+  assert(await right.locator("#stage").evaluate(e=>e===document.activeElement),"incoming invitation never steals focus");
+  assert(await right.locator(".play-drawer").isHidden(),"incoming invitation does not open a panel");
+  await left.getByRole("button",{name:"Cancel",exact:true}).click();
+  await right.getByRole("button",{name:"Accept",exact:true}).waitFor({state:"hidden"});
+  assert(await right.evaluate(()=>!window.__fbwg.view.session),"canceled invitation does not start a game");
   await left.getByRole("button",{name:/^Invite \S/}).click();
   await left.getByRole("button",{name:"Send invite",exact:true}).click();
   try { await right.getByRole("button",{name:"Accept",exact:true}).click(); }
@@ -34,6 +43,19 @@ try {
   await left.getByRole("button",{name:"Friends (1)",exact:true}).click();
   assert.equal(await left.evaluate(()=>window.__fbwg.view.session.runSerial),serial,"a social panel preserves the running session");
   await left.keyboard.press("Escape");
+  await left.setViewportSize({width:1366,height:768});
+  await left.getByRole("button",{name:"Friends (1)",exact:true}).click();
+  await left.locator("#stage").focus();
+  await left.keyboard.down("ArrowRight");
+  assert(await left.evaluate(()=>window.__fbwg.view.held.has("ArrowRight")),"a docked panel permits live character input");
+  await left.getByLabel("Their username",{exact:true}).fill("Friend");
+  assert.equal(await left.evaluate(()=>window.__fbwg.view.held.size),0,"editing a friend form releases movement");
+  await left.keyboard.up("ArrowRight");
+  await left.keyboard.press("Escape");
+  await left.getByRole("button",{name:"Mute",exact:true}).click();
+  await left.keyboard.down("ArrowRight");
+  assert(await left.evaluate(()=>window.__fbwg.view.held.has("ArrowRight")),"muting does not require another click to keep playing");
+  await left.keyboard.up("ArrowRight");
   // Real shared Quit followed by the chooser's next Start.
   await left.evaluate(()=>window.__fbwg.view.session.send(4,window.__fbwg.view.slot));
   for (const page of [left,right]) await page.waitForFunction(()=>!window.__fbwg.view.session.running);

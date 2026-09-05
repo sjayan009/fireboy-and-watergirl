@@ -6,6 +6,8 @@
  * first frame. Lists here are small enough to redraw whole.
  */
 
+import { emblem } from "./brand.js";
+
 type Attrs = Record<string, unknown>;
 type Child = Node | string | null | undefined | false;
 
@@ -122,7 +124,9 @@ export function form(o: {
 
 /** A centred card, which is every screen that is not the game itself. */
 export function card(title: string, ...children: Child[]): HTMLElement {
-  return el("div", { class: "card" }, el("h1", {}, title), ...children);
+  return el("div", { class: "card" },
+    el("div", { class: "account-brand" }, emblem(), el("span", {}, "Fireboy & Watergirl", el("br"), "The Forest Temple")),
+    el("h1", {}, title), ...children);
 }
 
 export function link(text: string, href: string): HTMLAnchorElement {

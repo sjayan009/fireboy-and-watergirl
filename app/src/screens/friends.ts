@@ -1,202 +1,205 @@
-/**
- * Managing friends: add one, answer the ones who added you, drop the rest.
- *
- * Deliberately separate from the play screen. Adding a friend is a thing you do
- * occasionally and carefully; inviting one is a thing you do every time you sit
- * down. Mixing them puts a destructive "remove" next to a "play" you press
- * constantly.
- */
-import {
-  accept, block, listFriends, remove, request, unblock, Friend,
-} from "../friends.js";
-import { peekLobby } from "../lobby.js";
-import { card, el, field, form, inputOf, note } from "../ui/dom.js";
+import { accept, block, remove, request, unblock } from "../friends.js";
+import { getLobby, type Lobby, type FriendState } from "../lobby.js";
+import { auth } from "../auth.js";
+import { card, el, field, form, inputOf, note, on } from "../ui/dom.js";
 
-/**
- * How often the list asks again while it is on screen.
- *
- * The screen used to be a snapshot taken on entry that redrew only after the
- * local user's own actions, so a request arriving while you sat looking at the
- * page was invisible until you navigated away and back. The two-person browser
- * test encoded the workaround -- it reloads in a loop waiting for the other
- * account's request to appear -- which is the sort of thing a test does when
- * the product is wrong and nobody has said so.
- *
- * Polling rather than a Postgres-changes subscription, and that is a
- * deliberately unambitious choice: `friendships` is not in the Realtime
- * publication, adding it would put every row change on a socket, and the whole
- * question here is "has anything happened to my handful of rows". One small
- * query every twelve seconds, only while the tab is visible, answers it.
- */
-const POLL_MS = 12000;
+type FriendRow = {
+  root: HTMLElement; name: HTMLElement; status: HTMLElement; avatar: HTMLElement;
+  actions: HTMLElement; setup: HTMLElement; error: HTMLElement; signature: string;
+  friend: FriendState; invite?: HTMLButtonElement;
+};
 
-export function friendsScreen(host: HTMLElement): () => void {
-  const name = field("Their username", {
-    required: true, minlength: 3, maxlength: 20, autocomplete: "off",
-  });
-  const sent = note("Request sent.");
-  sent.hidden = true;
+/** Keyed rows keep open disclosures, in-flight setup and keyboard focus intact. */
+export class FriendsPanel {
+  private lobby: Lobby | undefined;
+  private off: (() => void) | undefined;
+  private gone = false;
+  private rows = new Map<string, FriendRow>();
+  private friends: FriendState[] = [];
+  private filter = field("Find a friend", { type: "search", placeholder: "Filter your friends", autocomplete: "off" });
+  private trouble = el("div", { class: "error", role: "alert", hidden: true });
+  private current = el("div", { class: "friend-list" });
+  private incoming = el("div", { class: "friend-list" });
+  private outgoing = el("div", { class: "friend-list" });
+  private blocked = el("div", { class: "friend-list" });
+  private incomingSection = el("section", { hidden: true }, el("h3", {}, "Waiting for You"), this.incoming);
+  private outgoingSection = el("section", { hidden: true }, el("h3", {}, "Requests Sent"), this.outgoing);
+  private blockedSection = el("details", { class: "blocked-friends", hidden: true }, el("summary", {}, "Blocked Friends"), this.blocked);
+  private empty = note("Add a friend below to play together. You can also play on one keyboard.");
+  private count = el("span", { class: "friend-count" }, "0");
+  readonly root = el("div", { class: "friends-hub" });
 
-  // Row actions are one click with no form around them, so without this a
-  // failed accept looks exactly like a click that never landed.
-  const trouble = el("p", { class: "error", role: "alert" });
-  trouble.hidden = true;
-  const act = (fn: () => Promise<void>) => async (e: Event) => {
-    const button = e.currentTarget as HTMLButtonElement;
-    button.disabled = true;
-    trouble.hidden = true;
-    try {
-      await fn();
-      await draw();
-      // A friendship that just changed state changes which channels the lobby
-      // should hold. It re-reads the list only when asked, so accepting a
-      // request here used to leave the two of you unable to see each other
-      // until something else -- usually opening the play screen -- refreshed
-      // it.
-      void peekLobby()?.then((l) => l.refresh()).catch(() => { /* it will */ });
-    } catch (err) {
-      trouble.textContent = (err as Error).message;
-      trouble.hidden = false;
-      button.disabled = false;
-    }
-  };
-
-  const incoming = el("div", { class: "list" });
-  const outgoing = el("div", { class: "list" });
-  const current = el("div", { class: "list" });
-  const blocked = el("div", { class: "list" });
-
-  const sections = {
-    incoming: el("section", {}, el("h2", {}, "Waiting for you"), incoming),
-    outgoing: el("section", {}, el("h2", {}, "Asked"), outgoing),
-    current: el("section", {}, el("h2", {}, "Friends"), current),
-    blocked: el("section", {}, el("h2", {}, "Blocked"), blocked),
-  };
-  for (const s of Object.values(sections)) s.hidden = true;
-
-  host.append(card("Friends",
-    note("Add someone by the exact username they picked."),
-    form({
-      submit: "Send a request",
-      children: [name, sent],
-      onSubmit: async () => {
-        await request(inputOf(name).value.trim());
-        inputOf(name).value = "";
-        sent.hidden = false;
-        await draw();
-      },
-    }),
-    trouble, sections.incoming, sections.outgoing, sections.current,
-    sections.blocked,
-    el("p", { class: "note" }, el("a", { href: "#/play" }, "Back to the game"))));
-
-  /**
-   * Whether this screen is still on show.
-   *
-   * `draw` is async and is now also started by a timer, so a redraw can be in
-   * flight when the route changes -- and writing into a detached DOM is at best
-   * wasted work and at worst a stale list appearing on the next screen.
-   */
-  let gone = false;
-  /** So two refreshes cannot interleave and render each other's rows. */
-  let drawing = 0;
-
-  async function draw(): Promise<void> {
-    const mine = ++drawing;
-    let all: Friend[];
-    try {
-      all = await listFriends();
-    } catch (e) {
-      if (gone || mine !== drawing) return;
-      current.replaceChildren(note((e as Error).message));
-      return;
-    }
-    if (gone || mine !== drawing) return;
-
-    const rows = (list: Friend[], actions: (f: Friend) => Node[]) =>
-      list.map((f) => el("div", { class: "row" },
-        el("span", { class: "name" }, f.username), ...actions(f)));
-
-    const waiting = all.filter((f) => f.ourMove);
-    const asked = all.filter((f) => f.theirMove);
-    const friends = all.filter((f) => f.status === "accepted");
-    // Only the blocks that are ours to lift. A row somebody blocked US on is
-    // still a row we can read, and putting it on screen would announce a thing
-    // they did not choose to tell us -- and offer a button that the database
-    // will refuse anyway.
-    const shut = all.filter((f) => f.blockedByMe);
-
-    incoming.replaceChildren(...rows(waiting, (f) => [
-      el("button", { class: "ghost", onclick: act(() => accept(f.id)) },
-         "Accept"),
-      el("button", { class: "ghost", onclick: act(() => remove(f.id)) },
-         "Ignore"),
-    ]));
-
-    outgoing.replaceChildren(...rows(asked, (f) => [
-      el("span", { class: "dim" }, "waiting"),
-      el("button", { class: "ghost", onclick: act(() => remove(f.id)) },
-         "Cancel"),
-    ]));
-
-    current.replaceChildren(...rows(friends, (f) => [
-      // Blocking keeps the friendship row, and with it the levels the two of
-      // you finished together; removing throws them away. Two buttons because
-      // they are two different decisions, and the reversible one goes first.
-      el("button", {
-        class: "ghost", onclick: act(() => block(f.id)),
-      }, "Block"),
-      el("button", {
-        class: "ghost",
-        onclick: act(async () => {
-          // Unfriending cascades to `pair_progress`, so it is worth saying so
-          // rather than discovering it afterwards.
-          if (!confirm(
-            `Remove ${f.username}? The levels you finished together go too.`)) {
-            return;
-          }
-          await remove(f.id);
-        }),
-      }, "Remove"),
-    ]));
-
-    blocked.replaceChildren(...rows(shut, (f) => [
-      el("span", { class: "dim" }, "cannot reach you"),
-      el("button", {
-        class: "ghost", onclick: act(() => unblock(f.id)),
-      }, "Unblock"),
-    ]));
-
-    if (friends.length === 0) {
-      current.replaceChildren(note("Nobody yet. The game needs two."));
-    }
-    sections.incoming.hidden = waiting.length === 0;
-    sections.outgoing.hidden = asked.length === 0;
-    sections.current.hidden = false;
-    sections.blocked.hidden = shut.length === 0;
+  constructor(host: HTMLElement, private options: {
+    onInvite?: (friend: FriendState, slot: HTMLElement) => void;
+    busy?: () => boolean;
+    onChange?: (friends: FriendState[]) => void;
+  } = {}) {
+    const name = field("Their username", { required: true, minlength: 3, maxlength: 20, autocomplete: "off", placeholder: "Exact username", spellcheck: "false" });
+    const sent = el("p", { class: "note", role: "status", hidden: true });
+    const add = form({ submit: "Send a request", children: [name, sent], onSubmit: async () => {
+      const username = inputOf(name).value.trim();
+      await request(username);
+      if (this.gone) return;
+      inputOf(name).value = "";
+      sent.textContent = `Request sent to ${username}.`; sent.hidden = false;
+      await this.lobby?.refreshAfterChange();
+      // Crossed requests are accepted by the existing API in the same operation.
+      if (this.lobby?.list.some(f => f.username.toLowerCase() === username.toLowerCase() && f.status === "accepted")) sent.textContent = `You and ${username} are now friends.`;
+    }});
+    add.classList.add("add-friend");
+    /*
+     * The people you already have come first, and the way to add somebody
+     * follows them.
+     *
+     * The form was at the top, which put a text field asking for a username
+     * nobody has typed yet above the list of the friends you play with every
+     * time. Opening this panel is nearly always "invite one of these", and
+     * that answer now begins at the top of the panel; adding a friend is the
+     * occasional errand, and it is one scroll away rather than in the way.
+     */
+    this.root.append(el("div", { class: "social-intro" }, el("span", { class: "paired-mark", "aria-hidden": "true" }, "↗↙"),
+      el("p", {}, "Better with a friend", el("span", {}, "Find each other. Take on the temple."))),
+      this.trouble, this.incomingSection,
+      el("section", {}, el("h3", {}, "Your Friends", this.count), this.filter, this.current, this.empty),
+      el("section", {}, el("h3", {}, "Add a Friend"), add),
+      this.outgoingSection, this.blockedSection);
+    host.append(this.root);
+    inputOf(this.filter).addEventListener("input", () => this.applyFilter());
+    getLobby().then(lobby => {
+      if (this.gone) return;
+      this.lobby = lobby;
+      this.off = lobby.onChange(friends => this.update(friends));
+      void lobby.refresh();
+    }).catch(e => this.showError((e as Error).message));
   }
 
-  void draw();
+  private showError(message: string): void {
+    if (this.gone) return;
+    this.trouble.replaceChildren(el("span", {}, message), el("button", { class: "ghost", onclick: () => { void this.lobby?.refresh(); } }, "Retry"));
+    this.trouble.hidden = false;
+  }
 
-  // Whatever the other person did while this was open. Coalesced with the
-  // ordinary redraw -- `draw` is idempotent and guards its own ordering -- and
-  // paused while the tab is hidden, because a list nobody is looking at does
-  // not need to be current.
-  const tick = setInterval(() => {
-    if (document.visibilityState === "visible") void draw();
-  }, POLL_MS);
-  // And at once on coming back, so returning to the tab is not a twelve-second
-  // wait for news that is already a minute old.
-  const onWake = () => {
-    if (document.visibilityState === "visible") void draw();
-  };
-  document.addEventListener("visibilitychange", onWake);
-  addEventListener("focus", onWake);
+  update(friends = this.friends): void {
+    if (this.gone) return;
+    this.friends = friends;
+    this.options.onChange?.(friends);
+    if (this.lobby?.lastError) this.showError("Your friends could not refresh. Please try again.");
+    else this.trouble.hidden = true;
+    const visible = friends.filter(f => f.status !== "blocked" || f.blockedByMe);
+    const ids = new Set(visible.map(f => f.id));
+    for (const [id, row] of this.rows) if (!ids.has(id)) {
+      const hadFocus = row.root.contains(document.activeElement);
+      row.root.remove(); this.rows.delete(id);
+      if (hadFocus) inputOf(this.filter).focus();
+    }
+    for (const f of [...visible].sort((a,b) => Number(!!b.activity)-Number(!!a.activity) || a.username.localeCompare(b.username))) {
+      let row = this.rows.get(f.id);
+      if (!row) { row = this.makeRow(f); this.rows.set(f.id,row); }
+      row.friend = f;
+      row.name.textContent = f.username;
+      row.actions.querySelector("summary")?.setAttribute("aria-label", `Actions for ${f.username}`);
+      row.avatar.textContent = f.username.slice(0,2).toUpperCase();
+      const activity = f.status === "pending" ? (f.ourMove ? "Wants to be friends" : "Waiting for a reply") :
+        f.status === "blocked" ? "Cannot reach you" : f.activity === "in_game" ? "In a game" :
+        f.activity ? "Online" : f.connection === "connecting" ? "Connecting…" : f.connection === "unavailable" ? "Unavailable" : "Offline";
+      row.status.textContent = activity;
+      row.avatar.dataset.activity = f.activity ?? "offline";
+      const signature = `${f.status}:${f.ourMove}:${f.theirMove}:${f.blockedByMe}`;
+      if (signature !== row.signature) { row.signature = signature; this.actions(row); }
+      if (row.invite) {
+        const connect = !f.activity && f.connection === "unavailable";
+        row.invite.textContent = connect ? "Connect" : "Invite";
+        row.invite.setAttribute("aria-label", `${connect ? "Connect to" : "Invite"} ${f.username}`);
+        row.invite.disabled = !!this.options.busy?.() || (!f.activity && !connect);
+        row.invite.title = this.options.busy?.() ? "Finish or leave the current invitation or game first" : !f.activity ? "Your friend needs to be online" : `Play with ${f.username}`;
+      }
+      const parent = f.blockedByMe ? this.blocked : f.ourMove ? this.incoming : f.theirMove ? this.outgoing : this.current;
+      if (row.root.parentElement !== parent) parent.append(row.root);
+    }
+    this.incomingSection.hidden = !this.incoming.children.length;
+    this.outgoingSection.hidden = !this.outgoing.children.length;
+    this.blockedSection.hidden = !this.blocked.children.length;
+    this.count.textContent = String(friends.filter(f => f.status === "accepted").length);
+    this.applyFilter();
+  }
 
-  return () => {
-    gone = true;
-    clearInterval(tick);
-    document.removeEventListener("visibilitychange", onWake);
-    removeEventListener("focus", onWake);
-  };
+  private applyFilter(): void {
+    const query = inputOf(this.filter).value.trim().toLowerCase();
+    let shown = 0;
+    for (const row of this.rows.values()) {
+      if (row.friend.status !== "accepted") continue;
+      row.root.hidden = !row.friend.username.toLowerCase().includes(query);
+      if (!row.root.hidden) shown++;
+    }
+    this.empty.hidden = shown > 0;
+    this.empty.textContent = query ? "No friends match that name." : "Add a friend below to play together. You can also play on one keyboard.";
+  }
+
+  private makeRow(friend: FriendState): FriendRow {
+    const name = el("strong", { class: "name" });
+    const status = el("span", { class: "friend-state" });
+    const avatar = el("span", { class: "friend-avatar", "aria-hidden": "true" });
+    const actions = el("div", { class: "friend-actions" });
+    const setup = el("div", { class: "friend-setup" });
+    const error = el("p", { class: "error", role: "alert", hidden: true });
+    const root = el("article", { class: "friend-row", "data-friend": friend.id },
+      el("div", { class: "friend-main" }, avatar, el("div", { class: "friend-identity" }, name, status), actions), error, setup);
+    return { root, name, status, avatar, actions, setup, error, friend, signature:"" };
+  }
+
+  private actions(row: FriendRow): void {
+    row.root.querySelector(".remove-confirm")?.remove();
+    row.actions.replaceChildren(); row.invite = undefined;
+    const f = row.friend;
+    const act = (label: string, fn: () => Promise<void>) => el("button", { class: "ghost small", onclick: async (event: Event) => {
+      const button = event.currentTarget as HTMLButtonElement;
+      button.disabled = true; row.error.hidden = true;
+      try { await fn(); await this.lobby?.refreshAfterChange(); }
+      catch (error) { row.error.textContent = (error as Error).message; row.error.hidden = false; }
+      finally { button.disabled = false; }
+    } }, label);
+    if (f.ourMove) row.actions.append(act("Accept", () => accept(f.id)), act("Decline", () => remove(f.id)));
+    else if (f.theirMove) row.actions.append(act("Cancel", () => remove(f.id)));
+    else if (f.blockedByMe) row.actions.append(act("Unblock", () => unblock(f.id)));
+    else if (f.status === "accepted") {
+      if (this.options.onInvite) {
+        row.invite = el("button", { class: "ghost invite-friend", onclick: () => {
+          if (!row.friend.activity) this.lobby?.prioritize(f.id);
+          else this.options.onInvite?.(row.friend,row.setup);
+        } }, "Invite");
+        row.actions.append(row.invite);
+      }
+      const menu = el("details", { class: "friend-more" });
+      const summary = el("summary", { "aria-label": `Actions for ${f.username}`, title: `Actions for ${f.username}` }, "•••");
+      const confirmation = el("div", { class: "remove-confirm", hidden: true });
+      const removeButton = el("button", { class: "ghost danger-text", onclick: () => {
+        confirmation.hidden = false; menu.open = false;
+        confirmation.querySelector<HTMLButtonElement>("button")?.focus();
+      } }, "Remove friend");
+      menu.append(summary, el("div", { class: "friend-popover" }, removeButton, act("Block", () => block(f.id))));
+      const cancel = el("button", { class: "ghost", onclick: () => { confirmation.hidden = true; summary.focus(); } }, "Keep friend");
+      confirmation.append(el("strong", {}, `Remove ${f.username}?`),
+        note("Your shared progress will also be deleted. This cannot be undone."),
+        el("div", { class: "confirm-actions" }, cancel, act("Remove", () => remove(f.id))));
+      row.root.querySelector(".remove-confirm")?.remove();
+      row.root.append(confirmation);
+      row.actions.append(menu);
+    }
+  }
+
+  destroy(): void { this.gone = true; this.off?.(); }
+}
+
+export function friendsScreen(host: HTMLElement): () => void {
+  const body = card("Friends"); host.append(body);
+  const copy = el("button", { class: "ghost copy-username" }, `Copy my username: ${auth().profile?.username ?? ""}`);
+  const feedback = el("p", { class: "note", role: "status" });
+  on(copy, "click", async () => {
+    try { await navigator.clipboard.writeText(auth().profile?.username ?? ""); feedback.textContent = "Username copied."; }
+    catch { feedback.textContent = "Could not copy. Select the username above to copy it manually."; }
+  });
+  body.append(copy,feedback);
+  const panel = new FriendsPanel(body, { onInvite: () => { location.hash = "/play"; } });
+  body.append(note(el("a", { href:"#/play" }, "Back to the game")));
+  return () => panel.destroy();
 }

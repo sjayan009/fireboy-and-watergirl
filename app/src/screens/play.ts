@@ -32,12 +32,13 @@ import type { Invite, Showing } from "../net/pairchannel.js";
 import { WatchChannel } from "../net/watchchannel.js";
 import { WatchMirror } from "../net/watch.js";
 import { auth, signOut } from "../auth.js";
-import { supabase } from "../supabase.js";
 import { clear, el, on } from "../ui/dom.js";
 import { FriendState, getLobby, Lobby, Ready } from "../lobby.js";
 import { PlayShell } from "../ui/playshell.js";
+import { FriendsPanel } from "./friends.js";
+import { Leaderboard } from "../ui/leaderboard.js";
 import { PlayController, loadSelection, selectionKey } from "../playstate.js";
-import { Ranking, leaderboardCache } from "../ranking.js";
+import { Ranking } from "../ranking.js";
 import { MatchLease } from "../matchlease.js";
 import { MatchSharing, type SharingState } from "../sharing.js";
 
@@ -315,7 +316,7 @@ export function playScreen(host: HTMLElement): () => void {
   function describe(): string {
     const s = view.session;
     const who = partner?.username ?? "your friend";
-    if (!s) return match ? `Reconnecting with ${who}` : "Play solo or invite a friend";
+    if (!s) return match ? `Reconnecting with ${who}` : "Play locally or invite a friend";
     if (!s.running) return `With ${who} · choosing a level`;
     return `${view.slot === 0 ? "Fireboy" : "Watergirl"} with ${who}` +
       (s.stalled ? " · waiting for your friend" : "") + cost();
@@ -352,6 +353,7 @@ export function playScreen(host: HTMLElement): () => void {
   function syncMute(): void {
     muted = view.isMuted;
     mute.textContent = muted ? "Unmute" : "Mute";
+    mute.setAttribute("aria-pressed", String(muted));
     try { localStorage.setItem(MUTE_KEY, muted ? "1" : "0"); } catch { /* private */ }
   }
 
@@ -491,9 +493,16 @@ export function playScreen(host: HTMLElement): () => void {
         !between || !view.canChooseLevel);
   }
 
+  const leaderboard = new Leaderboard(board, () => view.game.Translation as string[] | undefined);
+  let lastPartner: string | null = null;
+  try { lastPartner = localStorage.getItem(`fbwg.lastPartner.${auth().user!.id}`); } catch { /* optional */ }
   const shell = new PlayShell(host, {
     canvas, name, status, mute, banner, friends: panel, times, board,
     input: (enabled) => view.setInputEnabled(enabled),
+    onPanel: (panel, changed) => {
+      if (panel === "leaderboard") leaderboard.open(view.session?.selection ?? loadSelection(auth().user!.id, lastPartner ?? ""), changed);
+      if (panel === "progress") drawTimes();
+    },
     actions: [hand, share, leave, el("button", {
       class: "ghost", onclick: async () => {
         if (match && !confirm("Sign out and leave the game?")) return;
@@ -501,6 +510,9 @@ export function playScreen(host: HTMLElement): () => void {
       },
     }, "Sign out")],
   });
+  const friendsUI = new FriendsPanel(panel, { onInvite: showInviteForm, busy: () => match !== null || pending !== null });
+  const watchList = el("section", { class: "watch-list" });
+  panel.append(watchList);
   const offSave = progress.onChange(() => {
     const error = progress.lastError ?? progress.storageError;
     shell.saveStatus.textContent = error ? "Retry needed" : progress.waiting ? "Saving…" : "Saved";
@@ -531,7 +543,7 @@ export function playScreen(host: HTMLElement): () => void {
   on(shell.saveStatus, "click", async () => { shell.toggle("progress"); await progress.flushNow(); drawTimes(); });
   shell.notify("Preparing the game…");
   const prepare = () => {
-    void view.prepare().then(() => { if (!gone) shell.notify(""); }).catch(() => {
+    void view.prepare().then(() => { if (!gone) { shell.notify(""); void leaderboard.refresh(); } }).catch(() => {
       if (gone) return;
       notice("Some game art could not be loaded.", el("button", { class: "ghost", onclick: prepare }, "Retry loading"));
       shell.open("setup");
@@ -555,7 +567,7 @@ export function playScreen(host: HTMLElement): () => void {
 
   /** A one-line message, replacing whatever the banner was showing. */
   function notice(text: string, ...extra: (Node | string)[]): void {
-    shell.notify(text);
+    shell.showNotice();
     noticeText = text;
     banner.hidden = false;
     clear(banner);
@@ -614,17 +626,9 @@ export function playScreen(host: HTMLElement): () => void {
    * It replaces the hiscore screen the original had, whose server stopped
    * answering some time around 2010.
    */
-  let showTimes = false;
-
   function drawTimes(): void {
     clear(times);
-    const toggle = el("button", {
-      class: "ghost small",
-      onclick: () => { showTimes = !showTimes; drawTimes(); },
-    }, showTimes ? "Hide" : "Show");
-    times.append(el("h2", {}, "Best times", toggle));
-    if (!showTimes) return;
-
+    times.append(el("h2", {}, "Best Times"));
     const data = view.game.The_cookie?.data;
     const table = view.game.Translation as string[] | undefined;
     if (!data || !table) {
@@ -675,109 +679,11 @@ export function playScreen(host: HTMLElement): () => void {
     times.append(...rows);
   }
 
-  // ---- everybody else's times --------------------------------------------
-
-  /**
-   * The best time on one level, across every pair who is willing to be listed.
-   *
-   * A projection, not a window onto `pair_progress` -- that table is still
-   * members-only in every verb, and `leaderboard()` returns a rank, two names
-   * and a time rather than the row they came from. Nothing here can read a
-   * pair's progress; it can only be told where they placed.
-   */
-  let boardMode = "adventure";
-  let boardNum = 1;
-  let boardOpen = false;
-  /**
-   * Which selection the board is drawing for.
-   *
-   * Both pickers call the same async draw, and the RPC has no cancellation --
-   * so choosing level 3 and then level 4 while the network is slow could resolve
-   * in either order, and the loser used to append its rows under the winner's
-   * heading. The rank and the times looked exactly like level 4's.
-   */
-  let boardGeneration = 0;
-
-  /** The map node for a level, from the table the game itself indexes by. */
-  function nodeOf(mode: string, num: number): number {
-    const table = view.game.Translation as string[] | undefined;
-    if (!table) return 0;
-    const type = MODES.findIndex(([v]) => v === mode) + 1;
-    return table.indexOf(`${type}_${num}`) + 1;
-  }
-
-  async function drawBoard(): Promise<void> {
-    const generation = ++boardGeneration;
-    clear(board);
-    const toggle = el("button", {
-      class: "ghost small",
-      onclick: () => { boardOpen = !boardOpen; void drawBoard(); },
-    }, boardOpen ? "Hide" : "Show");
-    board.append(el("h2", {}, "Verified leaderboard", toggle));
-    if (!boardOpen) return;
-
-    const mode = el("select", { class: "pick" },
-      ...MODES.map(([value, label]) =>
-        el("option", { value, selected: value === boardMode }, label)));
-    const num = el("select", { class: "pick" });
-    const fill = () => {
-      const count = MODES.find(([v]) => v === mode.value)?.[2] ?? 1;
-      num.replaceChildren(...Array.from({ length: count }, (_, i) =>
-        el("option", { value: String(i + 1), selected: i + 1 === boardNum },
-           `Level ${i + 1}`)));
-    };
-    fill();
-    mode.addEventListener("change", () => {
-      boardMode = mode.value; boardNum = 1; void drawBoard();
-    });
-    num.addEventListener("change", () => {
-      boardNum = Number(num.value); void drawBoard();
-    });
-    board.append(el("div", { class: "row" }, mode, num));
-
-    const node = nodeOf(boardMode, boardNum);
-    if (node <= 0) {
-      board.append(el("p", { class: "note" }, "No such level."));
-      return;
-    }
-    const loading = el("p", { class: "note" }, "Loading…");
-    board.append(loading);
-    const key = `${auth().user?.id}:${node}`;
-    const cached = leaderboardCache.get(key);
-    const { data, error } = cached && Date.now() - cached.at < 15000
-      ? { data: cached.data, error: null }
-      : await supabase.rpc("verified_leaderboard", { p_node: node });
-    if (!error) leaderboardCache.set(key, { at: Date.now(), data });
-    // Anything that resolves after a newer selection has started belongs to a
-    // heading that is no longer on screen.
-    if (generation !== boardGeneration || gone) return;
-    loading.remove();
-    if (error) {
-      board.append(el("p", { class: "note" }, error.message));
-      return;
-    }
-    const rows = (data ?? []) as {
-      rank: number; a_username: string; b_username: string;
-      best_time_str: string; is_mine: boolean;
-    }[];
-    if (rows.length === 0) {
-      board.append(el("p", { class: "note" },
-        "No verified results yet. Historical personal results are preserved in your progress."));
-      return;
-    }
-    for (const r of rows) {
-      board.append(el("div", { class: r.is_mine ? "row mine" : "row" },
-        el("span", { class: "rank" }, `${r.rank}.`),
-        el("span", { class: "name" }, `${r.a_username} & ${r.b_username}`),
-        // A time, not a grade: dimmer than the name beside it, so that the
-        // orange marking WHICH ROW IS YOURS is the only orange in the list.
-        el("span", { class: "time" }, r.best_time_str || "")));
-    }
-  }
+  function drawBoard(): Promise<void> { return leaderboard.refresh(); }
 
   // ---- the lobby ---------------------------------------------------------
 
-  panel.append(el("p", { class: "note" }, "Connecting to your friends…"));
+
   drawTimes();
   void drawBoard();
 
@@ -855,51 +761,15 @@ export function playScreen(host: HTMLElement): () => void {
 
   function drawPanel(friends: FriendState[]): void {
     shell.friends(friends.filter(f => f.status === "accepted" && f.activity !== null).length);
-    const accepted = friends.filter((f) => f.status === "accepted").sort((a, b) => Number(b.activity !== null) - Number(a.activity !== null) || a.username.localeCompare(b.username));
-    clear(panel);
-    panel.append(el("h2", {}, "Play together"));
-    if (lobby?.lastError) panel.append(el("p", { class: "error" }, "Friends could not refresh. ", el("button", { class: "ghost", onclick: () => { void lobby?.refresh(); } }, "Retry")));
-
-    if (accepted.length === 0) {
-      panel.append(el("p", { class: "note" },
-        "You have no friends here yet. ",
-        el("a", { href: "#/friends" }, "Add one"),
-        " — the game needs two people."));
-      return;
-    }
-
-    for (const f of accepted) {
-      const online = f.activity !== null;
-      panel.append(el("div", { class: "row" },
-        el("span", { class: `dot ${f.activity ?? "off"}` }),
-        el("span", { class: "name" }, f.username),
-        el("span", { class: "dim" },
-          f.activity === "in_game" ? "in a game"
-          : f.activity ? "online" : f.connection === "connecting" ? "connecting" : f.connection === "unavailable" ? "unavailable" : "offline"),
-        el("button", {
-          // Paired with somebody is paired with somebody, level or no level:
-          // between levels the session is still up and still theirs. Leaving is
-          // what makes this button live again, and there is a button for that.
-          class: "ghost",
-          // Named for the row it is in. The label is the same four letters on
-          // every one of them, and the name that says WHICH friend it invites
-          // is a sibling span -- so a screen reader walking this list heard
-          // "Invite, Invite, Invite" fifty times with no way to tell them
-          // apart. The visible text stays short; only the accessible name is
-          // the long one.
-          "aria-label": `${!online && f.connection === "unavailable" ? "Connect to" : "Invite"} ${f.username}`,
-          disabled: (!online && f.connection !== "unavailable") || match !== null || pending !== null,
-          onclick: () => { if (!online) lobby?.prioritize(f.id); else showInviteForm(f); },
-        }, !online && f.connection === "unavailable" ? "Connect" : "Invite")));
-    }
-
+    friendsUI.update(friends);
+    clear(watchList);
     // Games our friends have opened. Pushed to us when they turn watching on,
     // because a friend cannot ask who is playing -- other people's friendships
     // are not theirs to see.
     if (showing.size > 0) {
-      panel.append(el("h2", {}, "Watch"));
+      watchList.append(el("h2", {}, "Watch"));
       for (const [topic, s] of showing) {
-        panel.append(el("div", { class: "row" },
+        watchList.append(el("div", { class: "row" },
           el("span", { class: "dot in_game" }),
           el("span", { class: "name" }, s.players.join(" & ")),
           el("button", {
@@ -915,11 +785,11 @@ export function playScreen(host: HTMLElement): () => void {
   }
 
   /** Choose the level and the roles, then send the invitation. */
-  function showInviteForm(friend: FriendState): void {
+  function showInviteForm(friend: FriendState, slot: HTMLElement): void {
     if (match || pending) return;
     flow.set("configuring");
     lobby?.prioritize(friend.id);
-    shell.open("setup");
+    shell.placeSetup(slot);
     const selection = loadSelection(auth().user!.id, friend.id);
     const mode = el("select", { class: "pick" },
       ...MODES.map(([value, label]) => el("option", { value }, label)));
@@ -964,8 +834,13 @@ export function playScreen(host: HTMLElement): () => void {
     noticeText = "";
     clear(banner);
     banner.append(
-      el("span", {}, `Invite ${friend.username}:`), mode, num, roles, go, say,
+      el("span", {}, `Invite ${friend.username}:`),
+      el("label", { class: "setup-field" }, "Mode", mode),
+      el("label", { class: "setup-field" }, "Level", num),
+      el("label", { class: "setup-field" }, "Characters", roles), go, say,
       stop);
+    mode.focus({ preventScroll: true });
+    requestAnimationFrame(() => { if (!gone && slot.isConnected) banner.scrollIntoView({ block: "nearest" }); });
 
     on(go, "click", async () => {
       go.disabled = true;
@@ -982,6 +857,8 @@ export function playScreen(host: HTMLElement): () => void {
         await view.prepareLevel(mode.value, Number(num.value), abort.signal);
         if (!flow.owns(abort) || gone) return;
         try { localStorage.setItem(selectionKey(auth().user!.id, friend.id), JSON.stringify({ mode: mode.value, num: Number(num.value), iAmFireboy: roles.value === "me" })); } catch { /* optional preference */ }
+        lastPartner = friend.id;
+        try { localStorage.setItem(`fbwg.lastPartner.${auth().user!.id}`,friend.id); } catch { /* optional */ }
         const ready = await lobby!.invite(friend.id, {
           mode: mode.value,
           num: Number(num.value),
@@ -1027,7 +904,6 @@ export function playScreen(host: HTMLElement): () => void {
     const abort = flow.start("accepting");
     pending = { session: invite.session, attempt: invite.attempt, friendId: from.id, abort };
     shell.invite(true);
-    shell.open("setup");
 
     // "Not now" is an answer, and it now gets sent. Silence used to be the only
     // way to decline, and silence is what somebody who has walked away from
@@ -1375,12 +1251,12 @@ export function playScreen(host: HTMLElement): () => void {
       view.pauseForSuspension();
       if (consent?.consent) void consent.set(false);
     } else {
-      void lobby?.refresh(); void consent?.refresh(); void ranking.flush();
+      void consent?.refresh(); void ranking.flush();
       if (match) notice("Press P when you are both ready to continue.");
     }
   };
   document.addEventListener("visibilitychange",visibility);
-  const refreshFriends = setInterval(() => { if (!document.hidden) void lobby?.refresh(); },15000);
+
 
   // Tearing the view down matters: it owns a requestAnimationFrame loop, window
   // key listeners and an audio context. The LOBBY is deliberately left alone --
@@ -1390,6 +1266,8 @@ export function playScreen(host: HTMLElement): () => void {
     gone = true;
     flow.cancel();
     shell.destroy();
+    friendsUI.destroy();
+    leaderboard.destroy();
     consent?.close(); consent = null; watchGeneration++;
     lease.close();
     ranking.close();
@@ -1397,7 +1275,7 @@ export function playScreen(host: HTMLElement): () => void {
     removeEventListener("pagehide", onHide);
     removeEventListener("pageshow", onShow);
     document.removeEventListener("visibilitychange",visibility);
-    clearInterval(refreshFriends);
+
     rebuilding?.abort();
     rebuilding = null;
     if (beating !== null) { clearInterval(beating); beating = null; }

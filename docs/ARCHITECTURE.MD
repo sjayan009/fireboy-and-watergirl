@@ -937,7 +937,7 @@ progress and the historical leaderboard do not depend on it.
 > could — there are no replays to re-execute. The board's empty state says so:
 > *"No verified results yet. Historical personal results are preserved in your
 > progress."* `pair_progress` is intact, `sync_progress` still writes it, and the
-> personal Best times panel reads the game's own save data.
+> personal Best Times panel reads the game's own save data.
 
 ---
 

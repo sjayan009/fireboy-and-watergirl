@@ -1,662 +1,390 @@
 /*
- * The forest temple's own palette, taken from the game's art: warm stone,
- * lantern orange for Fireboy, pool blue for Watergirl.
+ * Warm near-black, and two colours that are allowed to be colours.
+ *
+ * Everything structural -- ground, panel, hairline, every button face -- sits
+ * on one low-saturation warm-black ramp taken from the game's own stone, so
+ * the only things on screen with a hue are Fireboy's ember, Watergirl's pool,
+ * and the grades the board awards. A tinted chrome competes with the art it
+ * frames: the surfaces went green for a while and the game, which is lantern
+ * light on wet rock, ended up looking like the thing behind the glass rather
+ * than the point of the page. Black gives the canvas the contrast back.
  */
 :root {
-  --ink: #f2e9dd;
-  --dim: #a1937f;
-  --bg: #14110e;
-  --panel: #1e1a15;
-  --edge: #33291f;
-  --fire: #e8642a;
-  --water: #35a7d8;
-  --bad: #e2564a;
-  --radius: 10px;
-
+  --bg: #14110E; --panel: #1E1A15; --ink: #F2ECE0; --dim: #A99E8D;
+  --fire: #FF865B; --water: #75D5EB; --edge: #342e24; --bad: #ffad9b;
+  --gold: #f0ce7b; --silver: #ded7cc; --bronze: #d6a686;
+  --radius: 10px; --press: 100ms; --settle: 180ms; --ease: cubic-bezier(.22,.61,.36,1);
   /*
-   * The grades the results board awards, which used to be one colour.
+   * The reader's own system font, which is the one typeface already tuned for
+   * the screen it is being read on.
    *
-   * A, B, C and "never finished" were all `--fire`, so the column that exists
-   * to say how well a level went said only that a level had been played. Gold,
-   * silver and bronze are what the grades already mean to anybody who has seen
-   * a results screen, and the dash is dimmed out of the reading order entirely.
+   * San Francisco on a Mac or an iPhone, Segoe UI Variable on Windows 11,
+   * Roboto on Android -- each with its own hinting, its own tracking tables
+   * and its own legibility work, none of it downloaded. It replaced 550 KB of
+   * Bricolage Grotesque and Source Sans 3, which is 550 KB that used to sit in
+   * front of the first frame of a game.
+   *
+   * Two stacks, not one, because both families ship optical sizes: SF Text and
+   * SF Display, Segoe UI Variable Text and Display. The larger cut is drawn
+   * tighter and lighter for headings; the smaller one has the open spacing that
+   * keeps a 12px label readable. `-apple-system` picks between SF's two by
+   * size on its own, so naming Display there costs nothing and gets Windows
+   * the same courtesy.
    */
-  --gold: #f0c14b;
-  --silver: #c8c3bb;
-  --bronze: #c98a52;
-
-  /*
-   * One press duration and one settle, so nothing on screen moves on a timing
-   * nobody chose. 100ms is under the threshold where a press stops feeling
-   * attached to the finger; 260ms is the slowest thing here and only arrivals
-   * use it. Both are cut to nothing under `prefers-reduced-motion`.
-   */
-  --press: 100ms;
-  --settle: 260ms;
-  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
-
+  --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', system-ui, Roboto, sans-serif;
+  --heading: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display', 'Segoe UI', system-ui, Roboto, sans-serif;
   color-scheme: dark;
 }
-
 * { box-sizing: border-box; }
-
-/*
- * `hidden` has to actually hide.
- *
- * The attribute's own rule is `[hidden] { display: none }` at user-agent
- * weight, which any class here that sets `display` silently beats. That is how
- * the invitation banner came to be a strip that stayed on screen after it had
- * been dismissed -- `banner.hidden = true` ran, and nothing happened, which to
- * the person clicking is indistinguishable from a button that does not work.
- */
 [hidden] { display: none !important; }
-
-/*
- * The scrollbar gutter is reserved whether or not there is a scrollbar, and
- * that is a correctness fix rather than a polish one.
- *
- * `.screen` sets `aspect-ratio`, so below about a 950px viewport the stage's
- * HEIGHT is a function of the page's width -- and without a reserved gutter the
- * width is a function of whether the scrollbar is showing. Showing it made the
- * stage shorter, which made the content fit, which took the scrollbar away,
- * which made the stage taller, which did not fit. There was nothing to damp the
- * loop and it ran for as long as anything kept the layout dirty.
- */
 html { scrollbar-gutter: stable; }
-
+html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink); font: 1rem/1.47 var(--ui); font-optical-sizing: auto; }
+/* Light type on a dark ground reads heavier than it is; macOS thins it back. */
+body { -webkit-font-smoothing: antialiased; background-image: radial-gradient(ellipse at 0 0, #241f18, transparent 60%); }
+button, input, select { font: inherit; }
+button, summary, a { -webkit-tap-highlight-color: transparent; }
+button { cursor: pointer; border: 1px solid transparent; border-radius: 8px; }
+button:disabled { cursor: default; opacity: .55; }
+button, a.ghost, summary { transition: background-color var(--press), border-color var(--press), color var(--press), transform var(--press); }
+button:active:not(:disabled), a.ghost:active { transform: translateY(1px); }
+a { color: var(--water); text-underline-offset: 3px; }
+h1,h2,h3,p { margin-top: 0; }
 /*
- * The type scale is relative, so that somebody who has made their browser text
- * bigger gets a bigger app rather than the same app with the words clipped.
+ * Weight and leading carry the hierarchy, not one display face.
  *
- * `15px` was the whole scale, and every size under it was another fixed pixel
- * value -- which meant the browser's own text setting changed nothing at all.
- * 0.9375rem is that same 15px at the default setting and grows with the
- * setting; the sizes below are `em` and `rem` for the same reason.
+ * Tracking is size-specific and leading runs the other way: tight and slightly
+ * closed up at 2rem, open and near-neutral by the time a heading is the same
+ * size as the text under it. The old values were drawn for Bricolage, which is
+ * a much wider face -- -.035em on a system font at 32px reads as a mistake.
  */
-html, body {
-  margin: 0;
-  min-height: 100%;
-  background: var(--bg);
-  color: var(--ink);
-  font: 0.9375rem/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
-}
+h1,h2,h3 { font-family: var(--heading); }
+h1 { font-size: 2rem; font-weight: 700; line-height: 1.12; letter-spacing: -.021em; }
+h2 { font-size: 1.35rem; font-weight: 600; line-height: 1.2; letter-spacing: -.014em; }
+h3 { font-size: 1rem; font-weight: 600; line-height: 1.3; letter-spacing: -.006em; }
+/* And at label sizes it opens the other way, as SF's own caption cuts do. */
+.play-footer, .identity-detail, .field > span, .board-filters label,
+.leaderboard-table th, .friend-state, .friend-count,
+.settings-value { letter-spacing: .006em; }
+:where(button,a,input,select,summary,[tabindex]):focus-visible { outline: 2px solid var(--water); outline-offset: 3px; }
+#app { min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 32px 18px; }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
 
-body {
-  /* A faint warm glow from the top, so the page is not a flat black field. */
-  background-image: radial-gradient(120% 60% at 50% 0%, #241d16 0%, var(--bg) 70%);
-}
+/* Shared controls have a shallow top edge, like inset instruments. */
+.ghost, a.ghost { display: inline-flex; justify-content: center; align-items: center; min-height: 36px; gap: 8px; padding: 7px 12px; border: 1px solid var(--edge); border-radius: 8px; color: var(--ink); background: #24201a; font-size: .875rem; font-weight: 600; text-decoration: none; box-shadow: inset 0 1px 0 #ffffff09; }
+.ghost:hover:not(:disabled), summary:hover { background: #322c23; border-color: #6b6151; }
+.ghost[aria-pressed='true'], .tool[aria-expanded='true'] { color: var(--ink); background: #3b342a; border-color: #7d7361; box-shadow: inset 0 -2px 0 #a99e8d; }
+.primary { min-height: 40px; padding: 9px 15px; background: var(--fire); color: #24170e; font-weight: 600; box-shadow: inset 0 1px 0 #ffffff4d, 0 2px 0 #693c27; }
+.primary:hover:not(:disabled) { background: #ff9e7c; }
+.small { min-height: 32px; padding: 5px 9px; font-size: .8125rem; }
+.note { margin: 8px 0 0; font-size: .875rem; color: var(--dim); }
+.note code { padding: 3px 6px; border-radius: 4px; background: #100e0c; color: var(--ink); user-select: all; overflow-wrap: anywhere; }
+form { display: grid; gap: 14px; margin-top: 20px; }
+.field { display: grid; gap: 6px; min-width: 0; }
+.field > span, .board-filters label { font-size: .8125rem; color: var(--dim); }
+.field input, .pick { width: 100%; min-width: 0; min-height: 40px; padding: 9px 11px; border: 1px solid #5b5346; border-radius: 7px; color: var(--ink); background: #16130f; box-shadow: inset 0 2px 3px #0002; }
+.field input::placeholder { color: #8f8574; }
+.field input:focus-visible, .pick:focus-visible { border-color: var(--water); }
+.pick { cursor: pointer; font-size: .875rem; }
+.error { margin: 8px 0; padding: 11px; border: 1px solid #946252; border-radius: 7px; background: #402d26; color: #ffd1bf; font-size: .875rem; overflow-wrap: anywhere; }
+.error .note { color: inherit; }
+.error .ghost { margin-top: 8px; }
 
-#app {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px 16px;
-}
-
-/* ---- cards --------------------------------------------------------------- */
-
-.card {
-  width: 100%;
-  max-width: 380px;
-  padding: 28px;
-  background: var(--panel);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius);
-}
-
-/*
- * Tracking is a function of size, so there is no one value that is right here.
- *
- * Letters read as drifting apart the larger they are set and as crowding the
- * smaller, so the heading tightens and the small print opens up very slightly.
- * A single `letter-spacing` for the whole app is wrong at one end or the other.
- */
-.card h1 {
-  margin: 0 0 6px;
-  font-size: 1.4rem;
-  line-height: 1.2;
-  letter-spacing: -0.018em;
-}
-
-.card h2 {
-  margin: 28px 0 4px;
-  font-size: 0.875rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--dim);
-}
-
-.note {
-  margin: 8px 0 0;
-  color: var(--dim);
-  font-size: 0.8125rem;
-  letter-spacing: 0.005em;
-}
-.note a { color: var(--water); }
-.note code {
-  font-size: 0.75rem;
-  color: var(--ink);
-  background: #0f0d0b;
-  padding: 2px 5px;
-  border-radius: 4px;
-  user-select: all;
-}
-
-/* ---- forms --------------------------------------------------------------- */
-
-form { margin-top: 18px; display: grid; gap: 12px; }
-
-.field { display: grid; gap: 5px; }
-.field span { font-size: 0.8125rem; color: var(--dim); }
-
-.field input {
-  width: 100%;
-  padding: 9px 11px;
-  font: inherit;
-  color: var(--ink);
-  background: #100e0b;
-  border: 1px solid var(--edge);
-  border-radius: 7px;
-}
-
-.field input:focus-visible {
-  outline: none;
-  border-color: var(--fire);
-}
-
-button {
-  font: inherit;
-  cursor: pointer;
-  border-radius: 7px;
-  border: 1px solid transparent;
-}
-
-button:disabled { cursor: default; opacity: 0.6; }
-
-/*
- * A focus ring on everything that can be focused.
- *
- * Only the text fields had one. Every button, link and picker was left with
- * whatever the user agent draws, which on this background is a dark outline on
- * a dark panel -- so tabbing through the header was moving an invisible
- * cursor. `:where()` keeps this at zero specificity so the field's own ring,
- * which is a border rather than an outline, still wins.
- */
-:where(button, a, select, [tabindex]):focus-visible {
-  outline: 2px solid var(--fire);
-  outline-offset: 2px;
-}
-
-/*
- * The canvas is a tab stop and said nothing about it.
- *
- * `#stage` sets `outline: none` deliberately -- a ring drawn tight around the
- * stage cuts across the picture -- so the ring goes on the frame instead, which
- * is the thing a player sees as the edge of the game.
- */
-.screen:has(#stage:focus-visible) { outline: none; }
-
-/* The play surface has a height budget. Secondary content scrolls in its panel. */
-html:has(.play-shell) { scrollbar-gutter: auto; overflow: hidden; }
-#app:has(.play-shell) { padding: 8px; height: 100dvh; min-height: 0; align-items: stretch; }
-.play.play-shell { width: 100%; max-width: none; height: 100%; min-height: 0; gap: 8px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
-.play-shell:fullscreen { padding: 8px; background: var(--bg); }
-.play-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.play-toolbar > button { min-height: 36px; }
-.play-identity { display: flex; flex-direction: column; flex: 1; min-width: 160px; font-size: 13px; }
-.play-identity .status { color: var(--dim); }
-.play-workspace { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; position: relative; }
-.game-viewport { min-width: 0; min-height: 0; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.play-shell .screen { flex: none; border: 1px solid var(--edge); border-radius: 6px; aspect-ratio: 4 / 3; outline: none; }
-.play-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--dim); font-size: 12px; }
-.play-footer .ghost { font-size: 12px; padding: 2px 8px; }
-.focus-hint { border-bottom: 2px solid transparent; }
-.play-shell:has(#stage:focus-visible) .focus-hint { color: var(--ink); border-color: var(--dim); }
-.play-drawer { position: absolute; z-index: 5; inset: 0 0 0 auto; width: min(320px, 100%); min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; box-shadow: -8px 0 24px #0005; }
-.drawer-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; }
-.drawer-heading h2 { margin: 0; font-size: 16px; }
-.drawer-tabs { display: flex; padding: 0 8px 8px; border-bottom: 1px solid var(--edge); gap: 2px; }
-.drawer-tabs .ghost { font-size: 12px; padding: 6px; }
-/*
- * Which panel you are looking at.
- *
- * Two channels, not one: the underline is what a sighted reader sees, and it
- * sits on the same edge the strip already draws so nothing moves when it
- * appears. `aria-current` carries the same fact to a screen reader -- see
- * `PlayShell.open`. Colour alone would say it to neither in a high-contrast
- * mode that drops backgrounds.
- */
-.drawer-tabs .ghost.current {
-  color: var(--ink);
-  box-shadow: inset 0 -2px 0 var(--fire);
-  border-radius: var(--radius) var(--radius) 0 0;
-}
-.drawer-content { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px; }
-.drawer-content .panel, .drawer-content .card { padding: 0; border: 0; background: transparent; max-width: none; }
-.drawer-content .panel + .panel { margin-top: 20px; }
-.drawer-content .banner { flex-direction: column; align-items: stretch; }
-.drawer-content .banner .pick { width: 100%; }
-.drawer-content .row { flex-wrap: wrap; gap: 6px; }
-.drawer-content .row .name { overflow-wrap: anywhere; }
-.menu-actions { display: grid; gap: 12px; }
-.menu-actions h3 { margin-bottom: 0; }
-.play-toast { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); padding: 8px 12px; border-radius: 6px; color: var(--ink); background: #1e1a15ee; font-size: 13px; pointer-events: none; }
-.play-toast:empty { display: none; }
-@media (min-width: 1100px) {
-  .drawer-open .play-workspace { grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; }
-  .play-drawer { position: static; width: 320px; box-shadow: none; }
-}
-@media (max-width: 600px) {
-  .play-identity { flex-basis: 100%; }
-  .play-toolbar { gap: 4px; }
-  .play-toolbar > button { flex: 1; }
-}
-
-/*
- * Feedback on the PRESS rather than on the release.
- *
- * Nothing here had an `:active` state, so a button answered a click only by
- * whatever it went on to do -- and "Send invite" does a handshake over the
- * network before anything changes on screen, which is a second or more of a
- * control that looks untouched. The scale is small enough to read as the
- * surface giving way rather than as the layout moving.
- */
-button, a.ghost {
-  transition: background-color var(--press) var(--ease),
-              border-color var(--press) var(--ease),
-              transform var(--press) var(--ease);
-}
-
-button:active:not(:disabled), a.ghost:active { transform: scale(0.97); }
-
-.primary {
-  padding: 10px 14px;
-  font-weight: 600;
-  color: #1a0f07;
-  background: var(--fire);
-}
-
-.primary:hover:not(:disabled) { background: #f4783f; }
-.primary:active:not(:disabled) { background: #d2551f; }
-
-/*
- * `min-height` rather than more padding, so the target grows without the label
- * moving. 32px is the smallest thing worth aiming at with a mouse; a coarse
- * pointer gets the full 44 below, because this is played on phones and the
- * tests run at a phone width for that reason.
- */
-.ghost {
-  display: inline-flex;
-  align-items: center;
-  min-height: 32px;
-  padding: 6px 11px;
-  font-size: 0.8125rem;
-  color: var(--ink);
-  background: transparent;
-  border: 1px solid var(--edge);
-  border-radius: 7px;
-  text-decoration: none;
-}
-
-.ghost:hover:not(:disabled) { border-color: var(--dim); background: #241e18; }
-.ghost:active:not(:disabled) { background: #2c251d; }
-
-@media (pointer: coarse) {
-  .ghost { min-height: 44px; padding: 6px 14px; }
-  .primary { min-height: 44px; }
-  .pick { min-height: 44px; }
-}
-
-.error {
-  margin: 0;
-  padding: 9px 11px;
-  font-size: 0.8125rem;
-  color: #ffd9d4;
-  background: #3a1a17;
-  border: 1px solid #5c2721;
-  border-radius: 7px;
-}
-
-.qr {
-  margin-top: 10px;
-  border-radius: 8px;
-  background: #fff;
-  padding: 8px;
-}
-
-/* ---- the game ------------------------------------------------------------ */
-
-.play {
-  width: 100%;
-  max-width: 900px;
-  display: grid;
-  gap: 12px;
-}
-
-/*
- * The bar had seven controls that looked identical, and one of them ends the
- * game both people are in.
- *
- * They are two different kinds of thing. "Mute", "Let them pick", "Let friends
- * watch" and "Leave game" act on the session that is running; "Friends",
- * "Settings" and "Sign out" go somewhere else. Boxing the first group and
- * leaving the second as plain text is the whole hierarchy -- and it is roughly
- * what the bar looked like by accident already, because `.ghost` set a border
- * COLOUR with no border style, so the two anchors in it drew no border at all
- * while every button beside them did.
- *
- * Sticky, because the controls belong to the game and the leaderboard below is
- * long enough to scroll them off the top; translucent so the page passing
- * underneath still reads as one surface rather than as a strip laid over it.
- */
-.bar {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: -4px 0;
-  padding: 8px 0;
-  font-size: 0.8125rem;
-  background: color-mix(in srgb, var(--bg) 78%, transparent);
-  backdrop-filter: blur(16px) saturate(140%);
-}
-
-.bar .spacer { flex: 1; }
-.bar .who { font-weight: 600; }
-.bar .status { color: var(--dim); }
-
-/* The session's own controls, kept together and away from the navigation. */
-.bar .acts { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-
-/*
- * Navigation is quieter than the controls beside it: no box, and it does not
- * light up until it is pointed at. Leaving this screen is never the thing
- * somebody came to this screen to do.
- */
-/*
- * `margin-left: auto` so that a bar too narrow to hold one line keeps the
- * navigation on the right when it wraps, instead of dropping it to the left
- * under the identity. On one line the spacer has already taken the slack and
- * this does nothing.
- */
-.bar nav { display: flex; align-items: center; gap: 2px; margin-left: auto; }
-
-.bar nav .ghost {
-  border-color: transparent;
-  color: var(--dim);
-  padding-inline: 8px;
-}
-
-.bar nav .ghost:hover { color: var(--ink); border-color: var(--edge); }
-
-/*
- * Leaving takes the other person's game with it, so it does not look like
- * "Mute". Not a confirmation -- rejoining is a click and the pair are talking
- * to each other anyway -- just a control that reads as the consequence it is.
- */
-.bar .leave {
-  color: #f0b3aa;
-  border-color: #5c2721;
-}
-
-.bar .leave:hover:not(:disabled) {
-  color: #ffd9d4;
-  border-color: var(--bad);
-  background: #3a1a17;
-}
-
-/*
- * The stage is a fixed 640x480 that CSS scales. `image-rendering: auto` is
- * deliberate: the art is smooth 2009 vector-derived bitmaps, and nearest
- * neighbour would make a pixel-art look the game never had.
- */
-.screen {
-  background: #000;
-  border: 1px solid var(--edge);
-  border-radius: var(--radius);
-  overflow: hidden;
-  aspect-ratio: 640 / 480;
-}
-
-#stage {
-  display: block;
-  width: 100%;
-  height: 100%;
-  outline: none;
-  touch-action: none;
-}
-
-.keys { margin: 0; color: var(--dim); font-size: 0.8125rem; text-align: center; }
-
-/* ---- friends, presence and invitations ----------------------------------- */
-
-.panel {
-  padding: 16px 18px;
-  background: var(--panel);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius);
-}
-
-.panel h2 {
-  margin: 0 0 10px;
-  font-size: 0.8125rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--dim);
-}
-
-.list { display: grid; gap: 2px; }
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 0;
-  border-bottom: 1px solid #241e18;
-}
-
-.row:last-child { border-bottom: none; }
-.row .name { font-weight: 600; }
-.row .dim, .banner .dim { color: var(--dim); font-size: 0.8125rem; }
-.row button { margin-left: auto; }
-.row button + button { margin-left: 8px; }
-
-/* A friend's presence. Grey is not "away", it is "not there at all". */
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #4a3f33;
-  flex: none;
-}
-
-/*
- * The halo, not just the hue, is what says somebody is there.
- *
- * Grey against blue is the whole difference between a friend who can be invited
- * and one who cannot, and for a red-green or low-vision reader two 8px discs
- * are two 8px discs. A ring around the live states means presence has a shape
- * as well as a colour; the text beside it still carries the same fact in words.
- */
-.dot.online, .dot.in_lobby {
-  background: var(--water);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--water) 20%, transparent);
-}
-
-.dot.in_game {
-  background: var(--fire);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fire) 20%, transparent);
-}
-
-/* Recovery codes, shown once and meant to be copied down by hand. */
-.codelist {
-  margin: 10px 0 0;
-  padding-left: 24px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px 16px;
-}
-
-.codelist code {
-  font-size: 0.9375rem;
-  letter-spacing: 1px;
-}
-
+/* Entry and settings screens share the same identity without a marketing page. */
+.card { width: 100%; max-width: 440px; padding: 34px; background: var(--panel); border: 1px solid #423b30; border-top: 3px solid #8a8070; border-radius: 22px 6px 22px 6px; box-shadow: 0 24px 80px #00000080; }
+.card > .account-brand { display:flex; align-items:center; gap:10px; margin-bottom:28px; color:var(--dim); font-size:.8125rem; }
+.card h1 { margin-bottom: 10px; }
+.card h2 { margin: 28px 0 8px; font-size: 1rem; }
+.card .field input { min-height: 44px; }
+.card .primary { min-height: 44px; }
+.card:has(.friends-hub) { max-width: 520px; }
+.card > .note:last-child { padding-top: 18px; }
+.qr { max-width: 100%; margin-top: 10px; background: white; padding: 8px; border-radius: 8px; }
+.codelist { padding-left: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
+.codelist code { font-size: .9375rem; }
 .factors, .codes { display: grid; gap: 8px; }
 .factors button, .codes button { justify-self: start; }
+.check { display: flex; align-items: flex-start; gap: 10px; margin-top: 12px; }
+.check input { flex:none; width:18px; height:18px; accent-color:var(--water); }
 
-.check { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.check input { width: 16px; height: 16px; }
+/* Settings is a list of rows that opens one at a time. See screens/settings.ts. */
+.settings-list { display:grid; margin-top:22px; border-top:1px solid var(--edge); }
+.settings-group { border-bottom:1px solid var(--edge); }
+.settings-group > summary { list-style:none; display:flex; align-items:center; gap:12px; padding:14px 2px; cursor:pointer; font-size:.9375rem; }
+.settings-group > summary::-webkit-details-marker { display:none; }
+.settings-group > summary:hover .settings-value { color:var(--ink); }
+.settings-name { font-weight:600; }
+.settings-value { margin-left:auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--dim); font-size:.8125rem; transition:color var(--press); }
+/* The row's own state, pointing at the content it hides. */
+.settings-group > summary::after { content:''; flex:none; width:8px; height:8px; margin-left:2px; border-right:2px solid var(--dim); border-bottom:2px solid var(--dim); transform:rotate(-45deg); transition:transform var(--settle) var(--ease); }
+.settings-group[open] > summary::after { transform:rotate(45deg); }
+.settings-group[open] > summary { color:var(--ink); }
+.settings-body { padding:0 2px 20px; animation:panel-arrive var(--settle) var(--ease); }
+.settings-body > *:first-child { margin-top:0; }
+.settings-body form { margin-top:12px; }
+.settings-list .settings-group:last-child .settings-name { color:var(--bad); }
+/* In the drawer the card's own title is hidden, so that title's air goes too. */
+.drawer-content .settings-list { margin-top:2px; }
 
-/* A pair's position on the board, beside their names. */
-.rank { color: var(--dim); min-width: 2.5em; }
-.row.mine .name { color: var(--fire); }
-
+/* The game keeps a stable height budget. Decoration belongs to its frame. */
+html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
+#app:has(.play-shell) { padding: 0; height: 100dvh; min-height: 0; align-items: stretch; }
+.play { width: 100%; max-width: 960px; display: grid; gap: 12px; }
+.play.play-shell { position:relative; max-width:none; height:100%; min-height:0; padding:0 14px; display:grid; grid-template-rows:auto minmax(0,1fr) auto; gap:0; }
+.play-shell:fullscreen { background: var(--bg); }
 /*
- * The grade a level was finished with, as the results board awards it.
+ * The chrome is a frame, not a header.
  *
- * A, B, C and "reached but never finished" were one colour, which made the
- * column a tally of levels played rather than of how they went. The medal
- * colours are the ones the grades already imply; the dash is dimmed, because a
- * level you have not finished is not a result.
+ * The toolbar was 84px tall and the footer 46, and the game is 4:3 -- so 40
+ * pixels of comfortable padding cost more than 50 pixels of width as well.
+ * Together with the viewport's own inset this had taken the stage down by
+ * about a twelfth from where it used to sit. Everything above still fits at
+ * its own size; there is simply no air around it that the game was not using.
  */
-.grade {
-  margin-left: auto;
-  font-weight: 700;
-  min-width: 1.5em;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.grade.g3 { color: var(--gold); }
-.grade.g2 { color: var(--silver); }
-.grade.g1 { color: var(--bronze); }
-.grade.g0 { color: #5b5044; font-weight: 400; }
-
+.play-toolbar { display:flex; align-items:center; gap:7px; min-height:58px; padding:8px 0; }
+.play-toolbar > .tool { min-height:40px; padding:8px 13px; }
+.play-identity { display:flex; align-items:center; gap:12px; margin-right:auto; min-width:0; }
+.identity-copy { min-width:0; }
+.element-emblem { display:inline-flex; flex:none; width:38px; height:38px; }
+.element-emblem svg { width:100%; height:100%; }
+.game-title { display:block; font:700 1.1rem/1.3 var(--heading); letter-spacing:-.017em; }
+/* The title and the line under it are two things, and now read as two. */
+.identity-detail { display:flex; align-items:center; flex-wrap:wrap; gap:4px 10px; margin-top:2px; color:var(--dim); font-size:.75rem; }
 /*
- * A leaderboard time, which is not a grade and no longer borrows its colour.
+ * Your own name, which should look like the one thing on this row that is
+ * yours. Full ink at 600, and a solid rule instead of the dotted one it wore:
+ * dotted read as provisional next to the status line's coloured rule, and at
+ * 12px the dots mostly read as a blur anyway. The tooltip and the label keep
+ * saying it copies.
  *
- * Every time in the list was orange and so was the name of the row that is
- * yours, so the one mark that answers "where am I" was competing with a column
- * of the same orange. Tabular figures because they are a column of numbers and
- * were being read as a ragged one.
+ * The rule is a background line, not text-decoration, and the padding matches
+ * the status line's to the pixel -- because the two sit side by side and were
+ * built differently, so one rule hung 3px below its baseline while the other
+ * sat at the bottom of a padding box. Two rules on one row at two heights is
+ * the kind of thing you see before you can say what is wrong with it. The
+ * border goes because a button carries a transparent one, and a background is
+ * painted inside it: that alone was another pixel of disagreement. So does the
+ * radius, which curled the ends of a one-pixel line upwards, and so does the
+ * user agent's own button background, which a bare `background-image` does not
+ * displace -- it showed through as a grey pill behind the name.
  */
-.time {
-  margin-left: auto;
-  font-weight: 600;
-  text-align: right;
-  color: var(--dim);
-  font-variant-numeric: tabular-nums;
-}
-
-.row.mine .time { color: var(--ink); }
-
-.panel h2 button { margin-left: 12px; }
-
+.copy-name { max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border:0; border-radius:0; padding:0 0 3px; color:var(--ink); font-size:.75rem; font-weight:600; background-color:transparent; background-image:linear-gradient(to right, #b9ad9c 0 100%); background-repeat:no-repeat; background-size:100% 1px; background-position:0 100%; user-select:text; }
 /*
- * The banner arrives rather than appearing.
+ * The session line: white words, ruled half in one element and half in the
+ * other.
  *
- * It sits between the header and the stage, so showing it moves the game down
- * the page -- and an invitation, a stall and a lost connection all use it, which
- * means that jump happens at moments somebody is already reading something
- * else. Easing it in from the edge it is attached to makes the movement
- * legible: it comes from the top, which is where it lives.
+ * It sits between the game's name and your own username, both full-strength
+ * ink, and it was --dim -- so the only line on that row that changes was the
+ * one the eye skipped. White brings it level with its neighbours, and the
+ * colour goes into the rule underneath rather than the words, where it says
+ * whose game this is without turning the sentence into a warning label.
  *
- * `@starting-style` is what gives an element entering from `display: none` a
- * frame to start from. A browser without it draws the banner exactly as before.
+ * A gradient rather than a border, because a border cannot be two colours and
+ * two abutting elements faking one line would be two things pretending to be
+ * one. It meets in the middle of the line, not at a word.
  */
-.banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 11px 14px;
-  font-size: 0.875rem;
-  background: #23303a;
-  border: 1px solid #2f4553;
-  border-radius: var(--radius);
-  opacity: 1;
-  transform: none;
-  transition: opacity var(--settle) var(--ease),
-              transform var(--settle) var(--ease);
-}
-
-@starting-style {
-  .banner { opacity: 0; transform: translateY(-8px); }
-}
-
-.pick {
-  font: inherit;
-  font-size: 0.8125rem;
-  padding: 5px 7px;
-  color: var(--ink);
-  background: #100e0b;
-  border: 1px solid var(--edge);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: border-color var(--press) var(--ease);
-}
-
-.pick:hover { border-color: var(--dim); }
-
-.small { padding: 6px 12px; font-size: 0.8125rem; }
-
-/* ---- what the reader has asked us for ------------------------------------ */
-
+.identity-detail .status { max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); padding-bottom:3px; background-image:linear-gradient(to right, var(--fire) 0 50%, var(--water) 50% 100%); background-repeat:no-repeat; background-size:100% 1px; background-position:0 100%; }
+.tool::before { content:''; display:inline-block; flex:none; width:16px; height:16px; background:currentColor; mask-size:contain; mask-repeat:no-repeat; }
+.tool-friends::before { mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8'%3E%3Ccircle cx='9' cy='7' r='3'/%3E%3Cpath d='M2 21v-3a7 7 0 0 1 14 0v3M17 4a3 3 0 0 1 0 6m2 4a5 5 0 0 1 3 5v2'/%3E%3C/svg%3E"); }
+.tool-leaderboard::before { mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8'%3E%3Cpath d='M8 21V11h8v10M2 21V16h6m8-3h6v8M10 2h4l-2 4z'/%3E%3C/svg%3E"); }
 /*
- * Reduced motion is not "no feedback", it is feedback that does not travel.
+ * The one toolbar button whose icon is the state, not the action.
  *
- * The press stays -- it is the only thing telling somebody the button took the
- * click -- but it stops being a movement: the surface changes colour where it
- * used to shrink, and the banner fades in where it used to slide.
+ * Friends, Leaderboard and Menu open something; Mute IS something, and the
+ * speaker kept its sound waves whether the sound was on or off, so the only
+ * thing that ever changed was a word. The pressed state is already true when
+ * the game is muted -- both screens keep `aria-pressed` in step with the
+ * canvas's own mute button -- so the crossed-out speaker needs nothing but a
+ * selector.
  */
-@media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-
-  button:active:not(:disabled), a.ghost:active { transform: none; }
-  .ghost:active:not(:disabled) { background: #3a3129; }
-  .banner { transition: opacity 150ms linear !important; transform: none; }
-  @starting-style { .banner { transform: none; } }
-}
-
+.tool-mute::before { mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8'%3E%3Cpath d='M3 9v6h4l6 5V4L7 9H3Zm13-2a7 7 0 0 1 0 10m3-13a11 11 0 0 1 0 16'/%3E%3C/svg%3E"); }
+.tool-mute[aria-pressed='true']::before { mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M3 9v6h4l6 5V4L7 9H3Zm14 0 6 6m0-6-6 6'/%3E%3C/svg%3E"); }
+.tool-fullscreen::before { mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8'%3E%3Cpath d='M3 9V3h6m6 0h6v6m0 6v6h-6m-6 0H3v-6'/%3E%3C/svg%3E"); }
+.tool-menu::before { mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8'%3E%3Cpath d='M3 5h18M3 12h18M3 19h18'/%3E%3C/svg%3E"); }
+.has-invite { border-color: var(--water); }
+.play-workspace { display:grid; grid-template-columns:minmax(0,1fr); min-height:0; position:relative; }
+.game-viewport { position:relative; min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; overflow:hidden; background:#0b0a09; border:1px solid #3a342a; border-radius:16px 4px 16px 4px; box-shadow:inset 0 0 0 5px #1a1712, inset 0 0 0 6px #2b2620; }
+.screen { background:#000; overflow:hidden; aspect-ratio:4/3; border-radius:4px; }
+.play-shell .screen { flex:none; outline:none; border:0; }
+#stage { display:block; width:100%; height:100%; outline:none; touch-action:none; }
+.play-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px 16px; padding:6px 2px; min-height:32px; color:var(--dim); font-size:.75rem; }
+.play-footer .ghost { min-height:26px; padding:2px 8px; font-size:.75rem; background:transparent; border-color:transparent; box-shadow:none; }
+.save-status::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--dim); }
 /*
- * A blurred bar over scrolling text is exactly what this asks us to stop doing.
- * The chrome becomes solid, and keeps its edge so it is still a layer.
+ * The controls line is always lit, whatever has focus.
+ *
+ * It used to be dim until the canvas took keyboard focus, then turn white with
+ * a blue rule under it -- so the one line telling somebody which keys to press
+ * was at its faintest before they had pressed anything, and went out again the
+ * moment they opened a panel. It is a legend, not a status light: it says the
+ * same true thing at every moment, so it looks the same at every moment.
  */
-@media (prefers-reduced-transparency: reduce) {
-  .bar {
-    background: var(--bg);
-    backdrop-filter: none;
-    border-bottom: 1px solid var(--edge);
-  }
-
-  /*
-   * The toast is the shell's version of the same mistake: it sits ON the game,
-   * which is the busiest thing on the screen, and it was letting 7% of it
-   * through. `.play-drawer` needs nothing here -- its background is already
-   * opaque and only its shadow has alpha.
-   */
-  .play-toast { background: var(--panel); border: 1px solid var(--edge); }
-}
-
+.focus-hint { color:var(--ink); border-bottom:1px solid var(--water); }
+.play-drawer { position:absolute; z-index:5; inset:0 0 0 auto; width:min(360px,100%); min-height:0; display:grid; grid-template-rows:auto auto minmax(0,1fr); background:var(--panel); border:1px solid #423b30; border-radius:16px 4px 16px 4px; box-shadow:-16px 0 40px #00000077; }
+.drawer-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:18px 18px 12px; }
+.drawer-heading h2 { margin:0; font-size:1.4rem; }
+.close-panel { font-size:1.4rem; width:30px; min-height:30px; padding:0; background:transparent; border-color:transparent; box-shadow:none; }
+.drawer-tabs { display:flex; padding:0 14px; border-bottom:1px solid var(--edge); gap:2px; }
+.drawer-tabs .ghost { border:0; border-radius:7px 7px 0 0; background:transparent; box-shadow:none; color:var(--dim); padding:9px 8px; font-size:.8125rem; }
 /*
- * More contrast means the borders that were there to be barely noticed have to
- * be seen, and the dim text has to stop being dim.
+ * A tab has to look worth clicking before it is clicked.
+ *
+ * These inherited the shared `.ghost` hover, which fills a button with a flat
+ * #322c23 and leaves the label at --dim. On a panel this dark that is a murky
+ * square slab under grey text, which is the look of a control that has been
+ * turned OFF -- so hovering a tab actively discouraged the click it was asking
+ * for. The label going to full ink is the fix; the surface only has to lift a
+ * little, so it is a translucent white rather than another opaque colour.
+ *
+ * The dim underline is the second half of it: the hovered tab shows, in grey,
+ * exactly where the water-coloured indicator will sit if the click happens.
+ * The in-between state points at the outcome instead of merely lighting up.
  */
-@media (prefers-contrast: more) {
-  :root { --dim: #cbbca6; --edge: #6b5844; }
+.drawer-tabs .ghost:hover:not(:disabled) { color:var(--ink); background:#ffffff0d; border-color:transparent; }
+.drawer-tabs .ghost:hover:not(:disabled):not(.current) { box-shadow:inset 0 -2px 0 #6b6151; }
+.drawer-tabs .current { color:var(--ink); box-shadow:inset 0 -2px 0 var(--water); }
+.drawer-content { min-height:0; overflow:auto; overscroll-behavior:contain; padding:18px; scrollbar-width:thin; scrollbar-color:#57503f transparent; }
+.drawer-content > * { animation:panel-arrive var(--settle) var(--ease); }
+@keyframes panel-arrive { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+.drawer-content .panel, .drawer-content .card { padding:0; border:0; background:transparent; max-width:none; border-radius:0; box-shadow:none; }
+.drawer-content .account-brand, .drawer-content .card > h1 { display:none; }
+.drawer-content .card h2:first-of-type { margin-top:0; }
+.session-notices { position:absolute; z-index:7; top:12px; left:12px; width:min(430px,calc(100% - 24px)); max-height:calc(100% - 24px); overflow:auto; pointer-events:none; }
+.session-notices:has(.banner:not([hidden])) { pointer-events:auto; }
+.banner { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:15px; background:#2b241b; border:1px solid #6b6151; border-radius:10px; font-size:.875rem; box-shadow:0 8px 24px #0003; }
+.banner > span:first-child { flex-basis:100%; }
+.banner .dim { color:var(--dim); }
+.play-toast { position:absolute; z-index:9; bottom:48px; left:50%; transform:translateX(-50%); width:max-content; max-width:calc(100% - 32px); padding:10px 16px; border-radius:8px; color:var(--ink); background:#2a2520; border:1px solid #5b5346; font-size:.875rem; pointer-events:none; box-shadow:0 6px 24px #0004; }
+.play-toast:empty { display:none; }
 
-  .bar { background: var(--bg); backdrop-filter: none; }
-  .ghost, .pick, .field input { border-color: var(--dim); }
-  .row { border-bottom-color: var(--edge); }
-  .grade.g0 { color: var(--dim); }
-  .bar nav .ghost { border-color: var(--edge); color: var(--ink); }
+/* One social surface. Rows are keyed; details do not disappear on refresh. */
+.social-intro { display:flex; align-items:center; gap:12px; padding:0 0 17px; border-bottom:1px solid var(--edge); }
+.social-intro p { font:600 1rem/1.3 var(--heading); letter-spacing:-.006em; margin:0; }
+.social-intro p span { display:block; margin-top:5px; color:var(--dim); font:400 .8125rem/1.4 var(--ui); letter-spacing:.006em; }
+.paired-mark { font-size:1.5rem; letter-spacing:-.4em; padding-right:.4em; color:var(--water); }
+.friends-hub section { margin-top:23px; }
+.friends-hub h3 { display:flex; align-items:center; gap:8px; margin:0 0 12px; font-size:.9375rem; }
+.friend-count { color:var(--dim); font:400 .8125rem var(--ui); }
+.add-friend { gap:8px; margin-top:17px; }
+.add-friend > button { background:#e6ddcd; color:#14110E; box-shadow:inset 0 1px 0 #fff7,0 2px 0 #0a0806; }
+.add-friend > button:hover:not(:disabled) { background:#f4ece0; }
+.friend-list { display:grid; }
+.friend-row { min-width:0; padding:12px 0; border-bottom:1px solid var(--edge); }
+.friend-row:last-child { border-bottom:0; }
+.friend-main { display:flex; align-items:center; gap:9px; min-width:0; }
+.friend-avatar { display:flex; align-items:center; justify-content:center; flex:none; width:34px; height:38px; background:#332d24; color:var(--dim); font-size:.75rem; font-weight:600; border:1px solid #4a4237; border-radius:11px 4px 11px 4px; position:relative; }
+.friend-avatar[data-activity='in_lobby']::after, .friend-avatar[data-activity='online']::after, .friend-avatar[data-activity='in_game']::after { content:''; position:absolute; right:-3px; bottom:-2px; width:9px; height:9px; background:var(--water); border-radius:50%; border:2px solid var(--panel); }
+.friend-avatar[data-activity='in_game']::after { background:var(--fire); border-radius:2px; }
+.friend-identity { flex:1; min-width:0; }
+.friend-identity .name { display:block; font-size:.875rem; overflow-wrap:anywhere; line-height:1.3; }
+.friend-state { display:block; color:var(--dim); font-size:.75rem; margin-top:2px; }
+.friend-actions { display:flex; align-items:center; gap:4px; flex:none; }
+.invite-friend { padding:5px 8px; min-height:32px; font-size:.8125rem; }
+.friend-more { position:relative; }
+.friend-more summary { list-style:none; display:flex; align-items:center; justify-content:center; width:27px; min-height:32px; border-radius:5px; font-size:.6875rem; cursor:pointer; }
+.friend-more summary::-webkit-details-marker { display:none; }
+.friend-popover { display:grid; position:absolute; right:0; top:100%; z-index:3; min-width:150px; padding:6px; background:#201c17; border:1px solid #5b5346; border-radius:8px; box-shadow:0 8px 20px #0004; }
+.friend-popover .ghost { justify-content:flex-start; border:0; background:transparent; box-shadow:none; }
+.danger-text { color:#ffc2a9; }
+.remove-confirm { margin-top:10px; padding:12px; background:#402f25; border:1px solid #a8785d; border-radius:8px; font-size:.875rem; }
+.remove-confirm .note { color:#efcaba; }
+.confirm-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:12px; }
+.friend-setup:not(:empty) { margin-top:10px; }
+.friend-setup .banner { box-shadow:none; background:#241f18; padding:12px; }
+.friend-setup .pick { width:100%; }
+.setup-field { display:grid; gap:5px; width:100%; color:var(--dim); font-size:.8125rem; }
+.play-drawer:has(> .session-notices) { grid-template-rows:auto auto auto minmax(0,1fr); }
+.play-drawer > .session-notices { position:static; width:auto; max-height:35dvh; margin:0 12px; }
+.play-drawer > .session-notices:has(.banner:not([hidden])) { padding-top:12px; }
+.blocked-friends { margin-top:22px; border-top:1px solid var(--edge); padding-top:14px; font-size:.875rem; color:var(--dim); }
+.blocked-friends summary { cursor:pointer; padding:5px 0; }
+.watch-list:empty { display:none; }
+.watch-list { margin-top:22px; }
+
+/* Results are a table, with paired names and quiet, aligned timing. */
+.board-intro { margin-bottom:12px; }
+.board-intro h3 { font-size:1.15rem; line-height:1.3; margin:12px 0 0; }
+.trophy-mark { color:var(--gold); font-size:2rem; }
+.board-filters { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:22px 0; }
+.board-filters label { display:grid; gap:6px; }
+.leaderboard-table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:.875rem; }
+.leaderboard-table th { text-align:left; color:var(--dim); font-weight:400; font-size:.75rem; padding:8px 4px; border-bottom:1px solid #57503f; }
+.leaderboard-table th:first-child { width:38px; }
+.leaderboard-table th:last-child { width:64px; text-align:right; }
+.leaderboard-table td { padding:13px 4px; border-bottom:1px solid var(--edge); overflow-wrap:anywhere; }
+.leaderboard-table .mine { background:#2e2820; }
+.leaderboard-table .mine td:first-child { border-left:2px solid var(--water); }
+.pair-and { color:var(--dim); }
+.your-pair { display:block; font-size:.75rem; color:var(--water); padding-top:3px; }
+.time, .grade, .rank { font-variant-numeric:tabular-nums; }
+.time { text-align:right; white-space:nowrap; }
+.rank { color:var(--dim); }
+.board-empty { border-top:1px solid var(--edge); padding-top:20px; }
+.board-empty h3 { font-size:1rem; line-height:1.4; }
+.panel h2 { margin-bottom:12px; font-size:1.1rem; }
+.row { display:flex; align-items:center; gap:8px; padding:10px 0; border-bottom:1px solid var(--edge); font-size:.875rem; }
+.row .name { flex:1; min-width:0; overflow-wrap:anywhere; font-weight:600; }
+.row .dim { color:var(--dim); font-size:.8125rem; }
+.grade { margin-left:auto; font-weight:600; min-width:1.5em; text-align:right; }
+.grade.g3 { color:var(--gold); } .grade.g2 { color:var(--silver); } .grade.g1 { color:var(--bronze); } .grade.g0 { color:var(--dim); }
+.menu-group { display:grid; gap:9px; padding-bottom:20px; margin-bottom:20px; border-bottom:1px solid var(--edge); }
+/* A divider separates two things; under the last group it separates nothing. */
+.menu-group:last-child { padding-bottom:0; margin-bottom:0; border-bottom:0; }
+.menu-group h3 { margin:0 0 4px; color:var(--dim); font-size:.875rem; }
+.menu-group:not(:has(button,a,.control-keys,.note)) { display:none; }
+.control-keys { display:grid; gap:9px; }
+.menu-group .ghost { justify-content:flex-start; }
+.menu-group .leave { margin-top:10px; color:#ffc2a9; border-color:#926753; }
+.control-pair { display:flex; align-items:center; justify-content:space-between; margin:0; font-size:.875rem; }
+.fire-control { color:var(--fire); } .water-control { color:var(--water); }
+kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border-radius:5px; font:600 .8125rem var(--ui); color:var(--ink); }
+.dot { width:8px; height:8px; border-radius:50%; background:#6b6151; flex:none; }
+.dot.online,.dot.in_lobby { background:var(--water); box-shadow:0 0 0 3px #75d5eb25; }
+.dot.in_game { background:var(--fire); }
+.keys { margin:0; color:var(--dim); font-size:.875rem; text-align:center; }
+
+@media (min-width:1100px) {
+  .drawer-open .play-workspace { grid-template-columns:minmax(0,1fr) 320px; gap:16px; }
+  .play-drawer { position:static; width:320px; box-shadow:none; }
+  .drawer-open .session-notices { max-width:calc(100% - 372px); }
+}
+@media (max-width:1099px) {
+  .play.play-shell { padding:0 12px; }
+  .play-toolbar { flex-wrap:wrap; padding:9px 0; }
+  .play-identity { flex-basis:100%; margin-bottom:5px; }
+  .game-title { font-size:1rem; }
+  .element-emblem { width:36px; height:36px; }
+  .play-drawer { width:min(360px,100%); }
+  .drawer-open .game-viewport::after { content:''; position:absolute; inset:0; background:#000000aa; }
+}
+@media (max-width:600px) {
+  .play.play-shell { padding:0 8px; }
+  .play-toolbar { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:5px; }
+  .play-identity { grid-column:1/-1; }
+  .tool-friends,.tool-leaderboard { grid-column:span 3; }
+  .tool-mute,.tool-fullscreen,.tool-menu { grid-column:span 2; }
+  .stop-watching { grid-column:1/-1; }
+  .play-toolbar > .tool { font-size:.75rem; padding:7px 8px; gap:5px; min-height:40px; }
+  .tool::before { width:13px; height:13px; }
+  .identity-detail .status { max-width:190px; }
+  .play-footer { padding-block:5px; }
+  .focus-hint { font-size:.6875rem; }
+  .card { padding:26px 22px; }
+  .drawer-content { padding:14px; }
+  .friend-actions { gap:3px; }
+}
+@media (pointer:coarse) {
+  .ghost,.primary,.pick,.friend-more summary { min-height:44px; }
+  .friend-more summary { width:32px; }
+}
+@media (prefers-reduced-motion:reduce) {
+  *,*::before,*::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; }
+  button:active:not(:disabled),a.ghost:active { transform:none; }
+}
+@media (prefers-contrast:more) {
+  :root { --dim:#efe7da; --edge:#8f8474; }
+  .field input,.pick,.ghost { border-color:var(--dim); }
+}
+@media (forced-colors:active) {
+  .tool[aria-expanded='true'],.drawer-tabs .current { outline:2px solid Highlight; }
+  .friend-avatar::after { forced-color-adjust:none; }
 }
