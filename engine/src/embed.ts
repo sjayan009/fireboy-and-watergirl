@@ -428,6 +428,20 @@ export class GameView {
     if (!enabled) this.clearInput();
   }
   get isPreparing(): boolean { return !this.prepared; }
+  /**
+   * Whether every image this scene reaches is actually loaded.
+   *
+   * False is playable and not an error -- see `SpriteRenderer.prepare` -- but
+   * it is a reason not to rank the run, because a replay is only worth
+   * verifying if both peers were simulating and drawing the same thing. Only a
+   * manifest that will not load at all is fatal, and that rejects `prepare`
+   * rather than showing up here.
+   *
+   * Meaningful once `prepare` has settled, which both of its readers satisfy:
+   * `onPrepareRun` is called from inside it, and the frame loop does not run
+   * at all until `prepared`.
+   */
+  get artComplete(): boolean { return (this.sprites?.missing ?? 0) === 0; }
   private prepareScene(): void {
     this.preparationGeneration++;
     this.prepared = false;

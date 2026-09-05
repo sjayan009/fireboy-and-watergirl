@@ -26,7 +26,16 @@ export function completedResult(game: any, frames: number): VerifiedResult | nul
   if (!board || board.Result.F.visible) return null;
   const medal = board.Result.A.visible ? 3 : board.Result.B.visible ? 2 : board.Result.C.visible ? 1 : 0;
   if (!medal) return null;
-  const seconds = Number(game.m_timer.mins.text) * 60 + Number(game.m_timer.secs.text);
+  // The clock is two text fields, so it can be unreadable in a way a number
+  // cannot: `Number("")` is 0 and `Number("--")` is NaN, and NaN passes every
+  // range check written as a comparison, because every comparison against NaN
+  // is false. A completion nobody can put a time on is not a completion this
+  // can score, so it is refused here rather than allowed to reach a caller
+  // whose bounds check would wave it through.
+  const mins = Number(game.m_timer.mins.text), secs = Number(game.m_timer.secs.text);
+  if (!Number.isInteger(mins) || !Number.isInteger(secs) || mins < 0 || secs < 0 || secs > 59) return null;
+  const seconds = mins * 60 + secs;
+  if (seconds < 3 || seconds > 5999) return null;
   return { node: game.cur_node, medal, seconds, frames };
 }
 export function parseReplay(text: string): Replay {
@@ -66,7 +75,10 @@ export function verifyReplay(text: string): VerifiedResult {
     SoundBus.drain();
     const result = completedResult(game, f + 1);
     if (result) {
-      if (f + 1 !== r.frames || result.seconds < 3 || result.seconds > 5999) throw new Error("Replay completion boundary disagrees");
+      // Only the boundary: `completedResult` has already refused anything it
+      // could not put a plausible time on, so repeating the range here would
+      // be a condition that can no longer be true.
+      if (f + 1 !== r.frames) throw new Error("Replay completion boundary disagrees");
       return result;
     }
     if (game.children.some((c: any) => c.GOboard)) throw new Error("Level failed");

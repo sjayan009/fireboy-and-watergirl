@@ -231,12 +231,39 @@ export function playScreen(host: HTMLElement): () => void {
   const rankedStatus = el("span", { class: "ranked-status", role: "status", "aria-live": "polite" });
   const ranking = new Ranking(label => { rankedStatus.textContent = label; });
 
+  /**
+   * What identifies this run to the ranking, or null when there is nothing to
+   * rank.
+   *
+   * One function rather than the same object literal in three places: the three
+   * were already identical, and `eligible` is exactly the kind of field that
+   * gets added to two of them.
+   */
+  function rankedContext() {
+    if (!match) return null;
+    return {
+      friend: match.friend.id,
+      connection: match.invite.attempt ?? match.invite.session,
+      uploader: match.iInvited,
+      eligible: view.artComplete,
+    };
+  }
+
   const view = new GameView({
     canvas,
     assets: __ASSETS__,
     save: progress.store,
     onPrepareRun: async v => {
-      if (match && v.session) await ranking.prepare({ friend: match.friend.id, connection: match.invite.attempt ?? match.invite.session, uploader: match.iInvited },v.session);
+      // Said once per prepared scene, so a level that starts with holes in it
+      // says so rather than looking like a rendering bug somebody should
+      // report. Preparation retries what failed last time, so this clears
+      // itself the moment the art actually arrives.
+      if (!v.artComplete) {
+        notice("Some game art did not load. The level still plays, but this " +
+               "run will not be ranked.");
+      }
+      const context = rankedContext();
+      if (context && v.session) await ranking.prepare(context, v.session);
     },
     onState: () => {
       const next = describe();
@@ -261,13 +288,15 @@ export function playScreen(host: HTMLElement): () => void {
       }
       showHand();
       showShare();
-      if (match && view.session) ranking.observe({ friend: match.friend.id, connection: match.invite.attempt ?? match.invite.session, uploader: match.iInvited }, view.session, view.game);
+      const context = rankedContext();
+      if (context && view.session) ranking.observe(context, view.session, view.game);
     },
     onFrame: () => watchStall(),
     onConfirmed: (v, frame) => {
       if (v.session) mirror?.confirmed(v.session,frame);
       if (frame % 26 === 0 || v.game.children.some((c: { Rboard?: unknown }) => c.Rboard)) progress.confirm(v.game.The_cookie.data);
-      if (match && v.session) ranking.observe({ friend: match.friend.id, connection: match.invite.attempt ?? match.invite.session, uploader: match.iInvited }, v.session, v.game, frame);
+      const context = rankedContext();
+      if (context && v.session) ranking.observe(context, v.session, v.game, frame);
     },
     onRefused: (why) => {
       if (why === "preparation-failed") {
@@ -848,6 +877,13 @@ export function playScreen(host: HTMLElement): () => void {
           // between levels the session is still up and still theirs. Leaving is
           // what makes this button live again, and there is a button for that.
           class: "ghost",
+          // Named for the row it is in. The label is the same four letters on
+          // every one of them, and the name that says WHICH friend it invites
+          // is a sibling span -- so a screen reader walking this list heard
+          // "Invite, Invite, Invite" fifty times with no way to tell them
+          // apart. The visible text stays short; only the accessible name is
+          // the long one.
+          "aria-label": `${!online && f.connection === "unavailable" ? "Connect to" : "Invite"} ${f.username}`,
           disabled: (!online && f.connection !== "unavailable") || match !== null || pending !== null,
           onclick: () => { if (!online) lobby?.prioritize(f.id); else showInviteForm(f); },
         }, !online && f.connection === "unavailable" ? "Connect" : "Invite")));
@@ -866,6 +902,8 @@ export function playScreen(host: HTMLElement): () => void {
             // A class, not just the label. "Let friends watch" is also a button
             // with "watch" in it, and a text selector cannot tell them apart.
             class: "ghost watch", disabled: match !== null,
+            // Named for its row, for the same reason the invite buttons are.
+            "aria-label": `Watch ${s.players.join(" and ")}`,
             onclick: () => { location.hash = `/watch?t=${topic}`; },
           }, "Watch")));
       }

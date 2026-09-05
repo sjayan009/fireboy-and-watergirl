@@ -11,7 +11,12 @@ export class PlayShell {
   readonly screen: HTMLElement;
   readonly saveStatus = el("button", { class: "save-status ghost", "aria-live": "polite" }, "Saved");
   readonly friendButton = el("button", { class: "ghost", "aria-controls": "play-drawer", "aria-expanded": "false" }, "Friends (0)");
-  private drawer = el("aside", { class: "play-drawer", id: "play-drawer", "aria-label": "Game panels" });
+  // Labelled BY its heading rather than with a fixed string. The panel changes
+  // -- "Play together", "Match setup", "Your progress", "Game menu" -- and a
+  // region that always announces itself as "Game panels" tells somebody who
+  // has just opened it the one thing they already knew. The tab strip below
+  // had the same name, so there were also two landmarks called the same thing.
+  private drawer = el("aside", { class: "play-drawer", id: "play-drawer", "aria-labelledby": "drawer-title" });
   private content = el("div", { class: "drawer-content" });
   private title = el("h2", { id: "drawer-title" });
   private active: Panel | null = null;
@@ -24,6 +29,7 @@ export class PlayShell {
   private online = 0;
   private full = el("button", { class: "ghost", "aria-pressed": "false" }, "Fullscreen");
   private toast = el("div", { class: "play-toast", role: "status", "aria-live": "polite" });
+  private tabs!: HTMLElement;
 
   constructor(host: HTMLElement, private options: {
     canvas: HTMLCanvasElement; name: string; status: HTMLElement; mute: HTMLElement;
@@ -33,10 +39,15 @@ export class PlayShell {
     this.screen = el("div", { class: "screen" }, options.canvas);
     const close = el("button", { class: "ghost", "aria-label": "Close panel" }, "Close");
     const menu = el("button", { class: "ghost", "aria-controls": "play-drawer" }, "Menu");
-    const tabs = el("nav", { class: "drawer-tabs", "aria-label": "Game panels" });
+    const tabs = el("nav", { class: "drawer-tabs", "aria-label": "Switch panel" });
     for (const [key, label] of [["friends", "Friends"], ["setup", "Match setup"], ["progress", "Progress"]] as const) {
-      tabs.append(el("button", { class: "ghost", onclick: () => this.open(key) }, label));
+      // `data-panel` is what `open` marks the current one with. Nothing said
+      // which panel you were looking at -- not a class, not an attribute -- so
+      // the three tabs were identical whether you had just opened Progress or
+      // never touched them.
+      tabs.append(el("button", { class: "ghost", "data-panel": key, onclick: () => this.open(key) }, label));
     }
+    this.tabs = tabs;
     this.panels = {
       friends: el("div", {}, options.friends,
         el("button", { class: "ghost", onclick: () => this.open("manage") }, "Manage friends")),
@@ -112,6 +123,16 @@ export class PlayShell {
     this.drawer.hidden = false;
     this.friendButton.setAttribute("aria-expanded", "true");
     this.title.textContent = ({ friends: "Play together", setup: "Match setup", progress: "Your progress", menu: "Game menu", manage: "Manage friends", settings: "Settings" })[panel];
+    // `aria-current` rather than `aria-selected`: these are buttons in a nav,
+    // not a WAI-ARIA tablist, and claiming to be one would promise arrow-key
+    // navigation that is not implemented. Menu, Manage and Settings are opened
+    // from elsewhere and correctly leave every tab unmarked.
+    for (const tab of this.tabs.querySelectorAll<HTMLElement>("button")) {
+      const current = tab.dataset.panel === panel;
+      tab.classList.toggle("current", current);
+      if (current) tab.setAttribute("aria-current", "true");
+      else tab.removeAttribute("aria-current");
+    }
     this.content.replaceChildren();
     if (panel === "manage") this.offPanel = friendsScreen(this.content);
     else if (panel === "settings") settingsScreen(this.content);

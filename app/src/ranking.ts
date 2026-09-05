@@ -5,7 +5,13 @@ import { canonicalReplay, completedResult } from "@engine/verified.js";
 import { ENGINE_VERSION } from "@engine/version.js";
 
 interface RankedWrite { key: string; owner: string; attempt: string; digest: string; replay: string | null; at: number }
-interface Context { friend: string; connection: string; uploader: boolean }
+/**
+ * `eligible` is whether this client is in a state where a score would mean
+ * anything -- today, whether all of the level's art actually loaded. Missing
+ * art does not stop anybody playing; it stops the run being submitted, because
+ * a verified time is a claim about a simulation both peers agreed on.
+ */
+interface Context { friend: string; connection: string; uploader: boolean; eligible: boolean }
 type Registration = { id: Promise<string>; finished: boolean };
 export const leaderboardCache = new Map<string, { at: number; data: unknown }>();
 
@@ -66,11 +72,16 @@ export class Ranking {
   }
   async prepare(context: Context, session: NetSession): Promise<void> {
     if (!session.running || this.closed || auth().user?.id !== this.owner) return;
+    // Not registered at all rather than registered and then abandoned: an
+    // attempt row the pair can never complete is a row the verifier would
+    // keep offering itself until it timed out.
+    if (!context.eligible) { this.changed("Not ranked · some game art did not load"); return; }
     // A failed registration permits ordinary play and cannot publish a ranking.
     await this.registration(context,session).id.catch(() => {});
   }
   observe(context: Context, session: NetSession, game: any, confirmedFrame?: number): void {
     if (!session.running || this.closed || auth().user?.id !== this.owner) return;
+    if (!context.eligible) return;
     const run = this.registration(context,session);
     if (!confirmedFrame || run.finished || !completedResult(game,confirmedFrame)) return;
     const replay = session.replay(confirmedFrame);
