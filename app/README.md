@@ -73,6 +73,44 @@ enforced at every sign-in: Supabase issues the session at `aal1` regardless, and
 the `locked` stage is what makes the factor mean something -- the app shows
 nothing else until the code is answered.
 
+## The surrounding interface
+
+The surrounding interface uses the elemental control room shell. On desktop,
+Friends opens beside the game by default; its collapsed state is remembered per
+account. Friend requests, invitation setup, blocking and removal all live in
+that panel. Removal still deletes shared progress and requires an explicit
+inline confirmation. Leaderboard opens directly to verified results; Progress
+shows the current browser or pair's best times.
+
+Settings is a list of collapsed rows -- username, password, email, two-factor,
+leaderboard, deleting the account -- opening one at a time, and each row shows
+what it is set to without being opened. It used to be six forms stacked down one
+card, which in a 320px panel was four screens of scrolling.
+
+Inside the game itself, the intro menu's two dead entries -- More Games, which
+opened a 2009 portal, and Submit Hiscore, which posted to a score service that
+no longer exists -- no longer light up or take a click; their handlers have been
+stubs for as long as this port has existed. A panel over that menu (Instructions,
+Credits) now takes the whole pointer while it is up, so OK is the only thing on
+those screens a click can reach.
+
+The game canvas and engine are otherwise unchanged. Docked panels permit play when the
+canvas is focused, while forms and narrow-screen modal panels release game
+input. Mute and fullscreen remain direct toolbar actions.
+
+Everything outside the canvas is set in the reader's own system font -- San
+Francisco on Apple platforms, Segoe UI Variable on Windows 11, Roboto on
+Android -- through `--ui` and `--heading` in `styles.css`. Nothing is
+downloaded, which is 550 KB of Bricolage Grotesque and Source Sans 3 that used
+to load in front of the first frame. Apple's own San Francisco files cannot be
+served from a website: the licence covers app UI on Apple platforms, and this
+stack is how a page gets the real thing on the devices entitled to it. The
+canvas is untouched -- the game still draws the 2009 SWF's own baked glyphs.
+
+`npm run test:play` exercises the shell, a local pair, and social interactions
+in Chromium, Firefox and WebKit. All fixture users and leaderboard rows are
+local; the fixtures are excluded from production builds.
+
 ## Assets
 
 The extracted art and audio live at the repo root, not in `public/`. They are
