@@ -172,7 +172,7 @@ try {
   await a.click("button[type=submit]");
 
   await b.click("a[href='#/friends']");
-  await b.waitForSelector("text=Waiting for you", { timeout: 20000 });
+  await b.waitForSelector("text=Waiting for You", { timeout: 20000 });
   await b.click("button:has-text('Accept')");
   // Asserting a ROW exists would prove nothing: the pending request is a row
   // with the same name in it. Ask the database what it thinks instead.

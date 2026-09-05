@@ -29,6 +29,9 @@ import { RealtimeTransport } from "../net/realtime.js";
 import { auth, signOut } from "../auth.js";
 import { supabase } from "../supabase.js";
 import { el } from "../ui/dom.js";
+import { PlayShell } from "../ui/playshell.js";
+import { Leaderboard } from "../ui/leaderboard.js";
+import { FriendsPanel } from "./friends.js";
 
 const MUTE_KEY = "fbwg.muted";
 
@@ -42,7 +45,7 @@ export function watchScreen(host: HTMLElement): () => void {
     // they do say what this thing is and that it wants no input.
     role: "img",
     "aria-label": "The game being watched",
-    "aria-describedby": "watch-keys",
+    "aria-describedby": "play-keys",
   });
 
   let muted = false;
@@ -62,6 +65,7 @@ export function watchScreen(host: HTMLElement): () => void {
   const name = auth().profile?.username ?? "";
 
   let lastStatus = "";
+  let feedMessage = "Connecting to the game…";
   const view = new GameView({
     canvas,
     assets: __ASSETS__,
@@ -73,49 +77,46 @@ export function watchScreen(host: HTMLElement): () => void {
     },
   });
   view.setMuted(muted);
+  view.setInputEnabled(false);
 
   function describe(): string {
     const s = view.session;
-    if (!s) return "joining…";
-    if (!s.running) return "watching · waiting for them to start a level";
-    return `watching · frame ${s.frame}`;
+    if (!s) return feedMessage;
+    if (!s.running) return "Waiting for the next level";
+    return "Watching together";
   }
 
   mute.addEventListener("click", () => {
     view.setMuted(!view.isMuted);
     muted = view.isMuted;
     mute.textContent = muted ? "Unmute" : "Mute";
+    mute.setAttribute("aria-pressed", String(muted));
     try { localStorage.setItem(MUTE_KEY, muted ? "1" : "0"); } catch { /* private */ }
   });
 
-  host.append(el("div", { class: "play" },
-    // The same two groups the play screen uses. "Stop watching" acts on the
-    // feed that is running, so it sits with mute rather than with the links.
-    el("header", { class: "bar" },
-      el("span", { class: "who" }, name),
-      status,
-      el("span", { class: "spacer" }),
-      el("div", { class: "acts" },
-        mute,
-        // Plain, not the danger treatment the play screen's "Leave game" gets:
-        // stopping a feed costs nobody but the person who clicks it.
-        el("a", { class: "ghost", href: "#/play" }, "Stop watching")),
-      el("nav", {},
-        el("a", { class: "ghost", href: "#/friends" }, "Friends"),
-        el("button", {
-          class: "ghost",
-          onclick: async () => { await signOut(); },
-        }, "Sign out"))),
-    banner,
-    el("div", { class: "screen" }, canvas),
-    el("p", { class: "keys", id: "watch-keys" },
-      "You are watching. The controls belong to the two people playing.")));
+  const friends = el("div");
+  const board = el("div");
+  const leaderboard = new Leaderboard(board, () => view.game.Translation as string[] | undefined);
+  const shell = new PlayShell(host, {
+    canvas, name, status, mute, banner, friends, board,
+    times: el("p", {class:"note"}, "Watching does not change your own progress. Return to your game to see your best times."),
+    watching: true, input: () => { view.setInputEnabled(false); },
+    primaryAction: el("a", {class:"ghost stop-watching",href:"#/play"},"Stop watching"),
+    onPanel: (panel, changed) => { if (panel === "leaderboard") leaderboard.open(view.session?.selection, changed); },
+    actions: [el("button", {class:"ghost",onclick:async()=>{await signOut();}},"Sign out")],
+  });
+  shell.saveStatus.textContent = "Spectator";
+  shell.saveStatus.disabled = true;
+  const friendsUI = new FriendsPanel(friends, {
+    onChange: list => shell.friends(list.filter(f => f.status === "accepted" && f.activity !== null).length),
+  });
 
   if (import.meta.env.DEV) {
     (window as unknown as Record<string, unknown>).__fbwgWatch = { view };
   }
 
   function say(text: string): void {
+    feedMessage = text;
     banner.hidden = false;
     banner.replaceChildren(el("span", {}, text));
   }
@@ -188,6 +189,7 @@ export function watchScreen(host: HTMLElement): () => void {
   }
 
   return () => {
+    shell.destroy(); friendsUI.destroy(); leaderboard.destroy();
     leaving.abort();
     replaying?.abort();
     if (authorization !== null) clearTimeout(authorization);
