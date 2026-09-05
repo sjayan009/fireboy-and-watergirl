@@ -42,12 +42,14 @@ import {
   Showing,
 } from "./net/pairchannel.js";
 import { RealtimeTransport } from "./net/realtime.js";
-import { auth, onBeforeSignOut } from "./auth.js";
+import { boundedTransport, scopedChannel } from "./net/scope.js";
+import { auth, onAuth, onBeforeSignOut } from "./auth.js";
 import { Friend, listFriends } from "./friends.js";
 
 export interface FriendState extends Friend {
   /** What they are doing, or null when they are not online. */
   activity: Activity | null;
+  connection: "connecting" | "connected" | "unavailable";
 }
 
 export interface Ready {
@@ -115,14 +117,25 @@ const MAX_CHANNELS = 50;
 const OPEN_LANES = 6;
 
 export class Lobby {
+  private closing = false;
+  private abort = new AbortController();
+  private refreshing: Promise<void> | null = null;
+  lastError: string | null = null;
   private channels = new Map<string, PairChannel>();
+  private opening = new Map<string, Promise<PairChannel>>();
+  private prioritized: string | null = null;
+  prioritize(friendId: string): void {
+    this.prioritized = friendId;
+    if (this.refreshing) void this.refreshing.then(() => this.refresh());
+    else void this.refresh();
+  }
   private activity = new Map<string, Activity>();
   private friends: FriendState[] = [];
   private changeHandlers = new Set<(f: FriendState[]) => void>();
   private inviteHandlers = new Set<(i: Invite, from: FriendState) => void>();
   private resumeHandlers = new Set<(i: Invite, from: FriendState) => void>();
   private cancelHandlers =
-    new Set<(session: string, from: FriendState) => void>();
+    new Set<(session: string, from: FriendState, attempt?: string) => void>();
   private handoverHandlers = new Set<(h: Handover) => void>();
   private sharingHandlers = new Set<(s: Sharing) => void>();
   private showingHandlers =
@@ -137,6 +150,7 @@ export class Lobby {
    * indistinguishable from a friend who had wandered off.
    */
   private outbound = new Map<string, {
+    friendId: string; attempt?: string;
     accepted: () => void;
     ready: () => void;
     failed: (e: Error) => void;
@@ -147,15 +161,15 @@ export class Lobby {
   /** The signed-in user, as the other side sees them. */
   get self(): Presence { return this.me; }
 
-  static async open(): Promise<Lobby> {
+  static open(): Promise<Lobby> {
     const profile = auth().profile;
     const user = auth().user;
     if (!profile || !user) throw new Error("not signed in");
     const lobby = new Lobby({
       userId: user.id, username: profile.username, activity: "online",
     });
-    await lobby.refresh();
-    return lobby;
+    void lobby.refresh();
+    return Promise.resolve(lobby);
   }
 
   /**
@@ -166,26 +180,46 @@ export class Lobby {
    * optimistic try.
    */
   async refresh(): Promise<void> {
+    if (this.closing) return;
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = this.refreshNow().catch((e) => {
+      this.lastError = (e as Error).message;
+      this.announce();
+    }).finally(() => { this.refreshing = null; });
+    return this.refreshing;
+  }
+
+  private async refreshNow(): Promise<void> {
     const list = await listFriends();
+    if (this.closing) return;
+    this.lastError = null;
     this.friends = list.map((f) => ({
       ...f, activity: this.activity.get(f.id) ?? null,
+      connection: this.channels.has(f.id) ? "connected" : "connecting",
     }));
+    this.announce();
 
-    const accepted = list.filter((f) => f.status === "accepted");
+    const accepted = list.filter((f) => f.status === "accepted").sort((a,b) => Number(b.id === this.prioritized) - Number(a.id === this.prioritized));
     if (accepted.length > MAX_CHANNELS) {
       // Not a limit anybody in an invite-only project will meet, and a limit
       // all the same: one Realtime channel per friend is a design that stops
       // working at some number, and finding out which number in production is
       // worse than choosing one here. The friends beyond it are still in the
-      // list -- they simply read as offline and cannot be invited from this
-      // side, which is a degraded lobby rather than no lobby.
+      // list, labeled unavailable; selecting Connect prioritizes that friend.
       console.warn(`${accepted.length} accepted friends; keeping channels for ` +
                    `the first ${MAX_CHANNELS}`);
     }
     const wanted = new Set(accepted.slice(0, MAX_CHANNELS).map((f) => f.id));
+    for (const friend of this.friends) {
+      if (!wanted.has(friend.id)) friend.connection = "unavailable";
+    }
 
     for (const [id, channel] of this.channels) {
-      if (!wanted.has(id)) { void channel.close(); this.channels.delete(id); }
+      if (!wanted.has(id)) {
+        void channel.close(); this.channels.delete(id); this.activity.delete(id);
+        const friend = this.friends.find(f => f.id === id);
+        if (friend) friend.activity = null;
+      }
     }
 
     /**
@@ -209,12 +243,19 @@ export class Lobby {
           const i = next++;
           if (i >= missing.length) return;
           const id = missing[i];
+          if (this.closing) return;
           try {
-            this.channels.set(id, await this.openChannel(id));
+            const channel = await this.openChannel(id);
+            if (this.closing || !wanted.has(id)) { await channel.close(); continue; }
+            this.channels.set(id, channel);
+            const friend = this.friends.find(f => f.id === id);
+            if (friend) friend.connection = "connected";
             // Said as they arrive, so the list fills in rather than appearing
             // all at once at the end.
             this.announce();
           } catch (e) {
+            const friend = this.friends.find(f => f.id === id);
+            if (friend) friend.connection = "unavailable";
             // A channel that will not open is not a reason to have no lobby:
             // the friend simply reads as offline until it does.
             console.warn("could not open the channel for a friend:", e);
@@ -225,7 +266,15 @@ export class Lobby {
   }
 
   private async openChannel(friendId: string): Promise<PairChannel> {
-    const channel = await PairChannel.open(friendId, this.me);
+    const existing = this.opening.get(friendId);
+    if (existing !== undefined) return existing;
+    const opening = this.initializeChannel(friendId).finally(() => this.opening.delete(friendId));
+    this.opening.set(friendId,opening);
+    return opening;
+  }
+  private async initializeChannel(friendId: string): Promise<PairChannel> {
+    const channel = await PairChannel.open(friendId, this.me, this.abort.signal);
+    if (this.closing) { await channel.close(); throw new Error("Lobby closed"); }
 
     channel.onPresence((all) => {
       const them = all.find((p) => p.userId === friendId);
@@ -238,17 +287,18 @@ export class Lobby {
     });
 
     channel.onInvite((invite) => {
+      if (invite.from !== friendId || ![this.me.userId, friendId].includes(invite.fireboy)) return;
       const from = this.friends.find((f) => f.id === friendId);
       if (!from) return;
       for (const fn of this.inviteHandlers) fn(invite, from);
     });
 
     channel.onHandover((h) => {
-      for (const fn of this.handoverHandlers) fn(h);
+      for (const fn of this.handoverHandlers) fn({ ...h, from: friendId });
     });
 
     channel.onSharing((x) => {
-      for (const fn of this.sharingHandlers) fn(x);
+      for (const fn of this.sharingHandlers) fn({ ...x, from: friendId });
     });
 
     channel.onShowing((x) => {
@@ -265,10 +315,18 @@ export class Lobby {
 
     channel.onReply((reply) => {
       const waiting = this.outbound.get(reply.session);
-      if (!waiting) return;
+      if (!waiting || waiting.friendId !== friendId || waiting.attempt !== reply.attempt) return;
       if (!reply.accepted) { waiting.failed(new Error("they said not now")); return; }
       waiting.accepted();
       if (reply.ready) waiting.ready();
+    });
+    channel.onStatus(status => {
+      const friend = this.friends.find(f => f.id === friendId);
+      if (friend) {
+        friend.connection = status === "SUBSCRIBED" ? "connected" : "unavailable";
+        if (status !== "SUBSCRIBED") { friend.activity = null; this.activity.delete(friendId); }
+      }
+      this.announce();
     });
 
     // A cancel can land on either side and at any point -- including in the
@@ -279,9 +337,10 @@ export class Lobby {
     channel.onCancel((c: InviteCancel) => {
       const from = this.friends.find((f) => f.id === friendId);
       const waiting = this.outbound.get(c.session);
-      if (waiting) waiting.failed(new Error("they cancelled"));
+      if (c.from !== friendId) return;
+      if (waiting && waiting.friendId === friendId && waiting.attempt === c.attempt) waiting.failed(new Error("they cancelled"));
       if (!from) return;
-      for (const fn of this.cancelHandlers) fn(c.session, from);
+      for (const fn of this.cancelHandlers) fn(c.session, from, c.attempt);
     });
 
     return channel;
@@ -375,7 +434,7 @@ export class Lobby {
   }
 
   /** An invitation was withdrawn, by whichever side had it in hand. */
-  onCancel(fn: (session: string, from: FriendState) => void): () => void {
+  onCancel(fn: (session: string, from: FriendState, attempt?: string) => void): () => void {
     this.cancelHandlers.add(fn);
     return () => this.cancelHandlers.delete(fn);
   }
@@ -434,6 +493,7 @@ export class Lobby {
     onProgress?: (what: string) => void;
     signal?: AbortSignal;
   } = {}): Promise<Ready> {
+    invite.attempt = crypto.randomUUID();
     return this.offer(friendId, invite, true, o);
   }
 
@@ -463,6 +523,10 @@ export class Lobby {
     if (!channel || !friend) throw new Error("that friend is not connected");
 
     const { session, fireboy } = invite;
+    invite.attempt ??= crypto.randomUUID();
+    const attempt = new AbortController();
+    const abortLink = () => attempt.abort();
+    o.signal?.addEventListener("abort", abortLink, { once: true });
 
     let onAccepted!: () => void;
     let onReady!: () => void;
@@ -486,11 +550,12 @@ export class Lobby {
     // Withdrawing means telling them, or their banner sits there offering a
     // game nobody is on the other end of any more.
     const onAbort = () => {
-      channel.cancel({ session, from: this.me.userId });
+      channel.cancel({ session, attempt: invite.attempt, from: this.me.userId });
       fail(new Error("cancelled"));
     };
     o.signal?.addEventListener("abort", onAbort);
     this.outbound.set(session, {
+      friendId, attempt: invite.attempt,
       accepted: onAccepted, ready: onReady, failed: fail,
     });
 
@@ -505,7 +570,10 @@ export class Lobby {
       // side is not yet listening to, and lose it.
       o.onProgress?.("connecting…");
       const link = await Promise.race([
-        this.link(channel, true, o.signal, invite.relay), refused,
+        this.link(channel, true, invite.attempt ?? invite.session, attempt.signal, invite.relay).then(link => {
+          if (attempt.signal.aborted) { link.transport.close(); throw new Error("cancelled"); }
+          return link;
+        }), refused,
       ]);
 
       try {
@@ -522,6 +590,8 @@ export class Lobby {
         mode: invite.mode, num: invite.num, host: true, friend, invite,
       };
     } finally {
+      attempt.abort();
+      o.signal?.removeEventListener("abort", abortLink);
       // The timer used to be left running. It fired minutes into a game that
       // had started perfectly well and rejected a promise nobody was holding
       // any more, which is an unhandled rejection and nothing else.
@@ -542,7 +612,7 @@ export class Lobby {
    */
   decline(invite: Invite): void {
     this.channels.get(invite.from)?.reply({
-      session: invite.session, accepted: false,
+      session: invite.session, attempt: invite.attempt, accepted: false,
     });
   }
 
@@ -556,6 +626,9 @@ export class Lobby {
     const friend = this.friends.find((f) => f.id === invite.from);
     if (!channel || !friend) throw new Error("that friend is not connected");
     if (o.signal?.aborted) throw new Error("cancelled");
+    const attempt = new AbortController();
+    const abortLink = () => attempt.abort();
+    o.signal?.addEventListener("abort", abortLink, { once: true });
 
     // The same endings as the other side, minus the timeout: whoever waits here
     // is waiting on a handshake, not on a person.
@@ -565,23 +638,26 @@ export class Lobby {
       // Backing out after saying yes has to be said twice: the reply is what
       // stops them waiting, the cancel is what stops a handshake that may
       // already be in flight.
-      channel.reply({ session: invite.session, accepted: false });
-      channel.cancel({ session: invite.session, from: this.me.userId });
+      channel.reply({ session: invite.session, attempt: invite.attempt, accepted: false });
+      channel.cancel({ session: invite.session, attempt: invite.attempt, from: this.me.userId });
       fail(new Error("cancelled"));
     };
     o.signal?.addEventListener("abort", onAbort);
-    const offCancel = this.onCancel((session) => {
-      if (session === invite.session) fail(new Error("they cancelled"));
+    const offCancel = this.onCancel((session, from, identity) => {
+      if (session === invite.session && from.id === invite.from && identity === invite.attempt) fail(new Error("they cancelled"));
     });
 
     try {
       // Said FIRST, and listening started before the answer can arrive: the
       // inviter only offers once it has heard this.
-      channel.reply({ session: invite.session, accepted: true });
+      channel.reply({ session: invite.session, attempt: invite.attempt, accepted: true });
 
       o.onProgress?.("connecting…");
       const link = await Promise.race([
-        this.link(channel, false, o.signal, invite.relay), refused,
+        this.link(channel, false, invite.attempt ?? invite.session, attempt.signal, invite.relay).then(link => {
+          if (attempt.signal.aborted) { link.transport.close(); throw new Error("cancelled"); }
+          return link;
+        }), refused,
       ]);
 
       if (o.signal?.aborted) {
@@ -592,7 +668,7 @@ export class Lobby {
       // And only now the second half. The session is built from what this
       // returns, so telling them we are ready before it exists would invite a
       // Start we have nothing to hear it with.
-      channel.reply({ session: invite.session, accepted: true, ready: true });
+      channel.reply({ session: invite.session, attempt: invite.attempt, accepted: true, ready: true });
 
       return {
         ...link,
@@ -600,6 +676,8 @@ export class Lobby {
         mode: invite.mode, num: invite.num, host: false, friend, invite,
       };
     } finally {
+      attempt.abort();
+      o.signal?.removeEventListener("abort", abortLink);
       o.signal?.removeEventListener("abort", onAbort);
       offCancel();
     }
@@ -611,15 +689,19 @@ export class Lobby {
    * on it gets the game but not video.
    */
   private async link(channel: PairChannel, caller: boolean,
-                     signal?: AbortSignal, relayOnly?: boolean) {
-    const rendezvous = new RealtimeTransport(channel);
+                     identity: string, signal?: AbortSignal, relayOnly?: boolean) {
+    const rendezvous = new RealtimeTransport(scopedChannel(channel,identity));
     const link = await connect(rendezvous, caller,
                                { iceServers: STUN, signal, relayOnly });
     if (link.reason) console.info("using the relay path:", link.reason);
-    return { transport: link.transport, kind: link.kind };
+    return { transport: boundedTransport(link.transport), kind: link.kind };
   }
 
   async close(): Promise<void> {
+    this.closing = true;
+    this.abort.abort();
+    for (const pending of this.outbound.values()) pending.failed(new Error("signed out"));
+    this.outbound.clear();
     const closing = [...this.channels.values()].map((c) => c.close());
     this.channels.clear();
     this.changeHandlers.clear();
@@ -650,9 +732,15 @@ export class Lobby {
  * decides to invite you.
  */
 let current: Promise<Lobby> | null = null;
+let currentOwner: string | null = null;
 
 export function getLobby(): Promise<Lobby> {
-  if (!current) current = Lobby.open();
+  if (!current) {
+    currentOwner = auth().user?.id ?? null;
+    const opening = Lobby.open();
+    current = opening;
+    void opening.catch(() => { if (current === opening) current = null; });
+  }
   return current;
 }
 
@@ -672,9 +760,13 @@ export function peekLobby(): Promise<Lobby> | null {
 // Registered once, at module scope: signing out must take the websocket and
 // the presence announcement with it, whatever screen the button was on.
 onBeforeSignOut(closeLobby);
+onAuth(state => {
+  if (current && (state.stage !== "in" || state.user?.id !== currentOwner)) void closeLobby().catch(() => {});
+});
 
 export async function closeLobby(): Promise<void> {
   const lobby = current;
   current = null;
+  currentOwner = null;
   if (lobby) await (await lobby).close();
 }

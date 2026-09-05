@@ -103,7 +103,22 @@ export class RealtimeTransport implements Transport {
    */
   send(data: Uint8Array): void {
     if (this.closed) return;
+    // Commands and negotiation unblock the next action. They must not wait for input batching.
+    if (data[0] !== 1 || data.length < 18) {
+      this.flush();
+      this.pair.sendBytes([encode(data)]);
+      this.sent++;
+      return;
+    }
+    // Every input packet covers sixteen frames; keep the newest overlapping history.
+    // A gap larger than one window retains both packets so no frame is dropped.
+    const previous = this.lastInput;
+    const frame = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(2);
+    const covered = previous && data[1] === previous.slot && data[14] === previous.epoch && frame === previous.frame;
+    if (covered) this.queue.pop();
     this.queue.push(encode(data));
+    this.lastInput = { frame, first: covered ? previous.first : Math.max(0, frame - data[15] + 1), slot: data[1], epoch: data[14] };
+    if (this.queue.length >= 32) { this.flush(); return; }
 
     const since = Date.now() - this.lastSent;
     if (since >= FLUSH_MS) { this.flush(); return; }
@@ -113,11 +128,13 @@ export class RealtimeTransport implements Transport {
       this.flush();
     }, FLUSH_MS - since);
   }
+  private lastInput: { frame: number; first: number; slot: number; epoch: number } | null = null;
 
   private flush(): void {
     if (this.closed || this.queue.length === 0) return;
     const packets = this.queue;
     this.queue = [];
+    this.lastInput = null;
     this.sent++;
     this.lastSent = Date.now();
     this.pair.sendBytes(packets);

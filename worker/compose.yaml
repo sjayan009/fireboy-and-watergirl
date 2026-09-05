@@ -1,0 +1,22 @@
+# Runs on an existing free Linux VM. This file provisions no paid resources.
+services:
+  verifier:
+    build:
+      context: ..
+      dockerfile: worker/Dockerfile
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 1g
+    cpus: 1.5
+    stop_grace_period: 15s
+    environment:
+      VERIFIER_DATABASE_URL: ${VERIFIER_DATABASE_URL:?Set the scoped verifier database URL}
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

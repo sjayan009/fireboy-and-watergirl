@@ -38,7 +38,10 @@ function closeBoards(g: any): void {
 }
 
 export class GameHost implements SessionHost {
-  constructor(private game: any) {}
+  constructor(private game: any, private onConfirmed?: (frame: number) => void,
+    private preparing?: () => void, private prepared?: () => boolean) {}
+  confirmed(frame: number): void { this.onConfirmed?.(frame); }
+  ready(): boolean { return this.prepared?.() ?? true; }
 
   /** One fixed step, in Flash's order: playheads, then ENTER_FRAME. */
   step(bits: number, frame = 0, replaying = false): void {
@@ -130,12 +133,14 @@ export class GameHost implements SessionHost {
     g.PlayingMusic = false;
     g.MusicChannel?.stop?.();
     g.StartGame(type, num);
+    this.preparing?.();
   }
 
   /** The pause tray, driven exactly as clicking its tab would. */
-  pause(): void {
+  pause(force = false): void {
     const g = this.game;
     if (!g.m_pauseMenu || !g.m_level || g.m_level.ended) return;
+    if (force && (g.m_level.pause || g.m_pauseMenu.transition === 1)) return;
     g.m_pauseMenu.Show_Hide(new MouseEvent(MouseEvent.MOUSE_DOWN,
                                            g.m_pauseMenu.btn));
   }
@@ -149,6 +154,7 @@ export class GameHost implements SessionHost {
   retry(): void {
     closeBoards(this.game);
     this.game.RetryGame?.();
+    this.preparing?.();
   }
 
   /**

@@ -5,6 +5,8 @@
 .env*.local
 
 node_modules/
+.cache/
+supabase/.temp/
 dist/
 snaps/
 
@@ -29,3 +31,5 @@ preview/
 # beside a changed .py with nothing to say which was authoritative.
 __pycache__/
 *.py[cod]
+
+CODEBASE_AUDIT.md

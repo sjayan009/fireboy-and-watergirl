@@ -17,7 +17,7 @@
  * itself (`m_level.scaleX = 0.8; m_level.x += 16`), exactly as the original
  * did, and applying it a second time would shrink the level inside the menus.
  */
-import { Game, tickClock, resetClock } from "./game/game.js";
+import { Game, level, tickClock, resetClock } from "./game/game.js";
 import { hashLevel } from "./net/hash.js";
 import {
   SoundBus, Keyboard, advanceTree, enterFrameTree,
@@ -71,6 +71,11 @@ export interface GameViewOptions {
   save?: SaveStore;
   /** Called after every rendered frame, for whatever the page shows around it. */
   onFrame?: (view: GameView) => void;
+  /** Emitted only when observable shell/session state changes. */
+  onState?: (view: GameView) => void;
+  onConfirmed?: (view: GameView, frame: number) => void;
+  /** Runs after scene preparation and before the first simulation frame. */
+  onPrepareRun?: (view: GameView) => Promise<void>;
   /**
    * A button that changes shared state was pressed and could not be honoured.
    * Today the only one is a map node clicked by the peer who does not choose
@@ -79,9 +84,10 @@ export interface GameViewOptions {
   onRefused?: (reason: RefusedReason) => void;
 }
 
-export type RefusedReason = "not-your-pick";
+export type RefusedReason = "not-your-pick" | "preparation-failed";
 
 export interface JoinOptions {
+  initialLevel?: { mode: string; num: number };
   /**
    * Whether this peer's map clicks start a level for the pair.
    *
@@ -104,7 +110,19 @@ export class GameView {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly onFrame?: (v: GameView) => void;
+  private readonly onState?: (v: GameView) => void;
+  private readonly onConfirmed?: (v: GameView, frame: number) => void;
+  private lastState = "";
+  private inputEnabled = true;
+  private lastDrawnFrame = -1;
+  private lastSaveFrame = -1;
+  private assetBase: string;
+  private preparation: Promise<void> | null = null;
+  private preparationGeneration = 0;
+  private prepared = false;
+  private lastAssetRevision = -1;
   private readonly onRefused?: (reason: RefusedReason) => void;
+  private readonly onPrepareRun?: (view: GameView) => Promise<void>;
 
   sprites: SpriteRenderer | null = null;
   audio: AudioPlayer | null = null;
@@ -135,7 +153,10 @@ export class GameView {
     this.canvas.height = STAGE_H;
     this.ctx = this.canvas.getContext("2d")!;
     this.onFrame = o.onFrame;
+    this.onState = o.onState;
+    this.onConfirmed = o.onConfirmed;
     this.onRefused = o.onRefused;
+    this.onPrepareRun = o.onPrepareRun;
 
     resetClock();
     // Scoped, not installed: `Game`'s constructor calls `openSave` once and
@@ -152,6 +173,7 @@ export class GameView {
     this.shell = new ShellInput(this.game, this.game.stage);
 
     const base = o.assets ?? "/extracted/assets";
+    this.assetBase = base;
     // Art and audio arrive whenever they arrive. The game is playable before
     // either does -- the renderer draws nothing it has not got, and the sound
     // bus holds its queue -- so neither is awaited.
@@ -160,10 +182,7 @@ export class GameView {
     // during the first few seconds used to leave a loader resolving into a
     // destroyed view, which for the audio player meant an AudioContext and two
     // global gesture listeners that nothing would ever take down again.
-    SpriteRenderer.load(base).then((r) => {
-      if (this.destroyed) return;
-      this.sprites = r;
-    }).catch((e) => console.warn("sprite art unavailable:", e));
+    void this.prepare().catch((e) => console.warn("sprite art unavailable:", e));
     AudioPlayer.load(base).then((a) => {
       if (this.destroyed) { a.dispose(); return; }
       this.audio = a;
@@ -206,6 +225,14 @@ export class GameView {
       this.setMuted(!this.muted);
       return true;
     }
+    if (!s && intent.kind === "start") {
+      void this.prepareLevel(intent.mode,intent.num).then(() => {
+        if (!this.destroyed && !this.session) {
+          new GameHost(this.game,undefined,() => this.prepareScene()).start(intent.mode,intent.num);
+        }
+      }).catch(() => this.onRefused?.("preparation-failed"));
+      return true;
+    }
     if (!s) return false;
 
     // Watching. Every button that would change the game belongs to the two
@@ -219,7 +246,9 @@ export class GameView {
       // peer and dropped by the other's guard has no way back, so say no twice.
       if (s.running) return true;
       if (!this.canChooseLevel) { this.onRefused?.("not-your-pick"); return true; }
-      s.requestStart(intent.mode, intent.num);
+      void this.prepareLevel(intent.mode,intent.num).then(() => {
+        if (!this.destroyed && this.session === s && this.canChooseLevel) s.requestStart(intent.mode,intent.num);
+      }).catch(() => this.onRefused?.("preparation-failed"));
       return true;
     }
 
@@ -260,6 +289,9 @@ export class GameView {
       for (const c of [Keyboard.LEFT, Keyboard.RIGHT, Keyboard.UP,
                        Keyboard.A, Keyboard.D, Keyboard.W]) this.shell.forwardUp(c);
     });
+    on(window, "focusin", (e) => {
+      if (GameView.aimedElsewhere(e as unknown as KeyboardEvent)) this.clearInput();
+    });
     on(window, "pagehide", () => { this.game.The_cookie?.flush?.(); });
 
     on(this.canvas, "pointermove", (e) => {
@@ -267,6 +299,8 @@ export class GameView {
       this.canvas.style.cursor = over ? "pointer" : "default";
     });
     on(this.canvas, "pointerdown", (e) => {
+      if (!this.inputEnabled) return;
+      this.canvas.focus({ preventScroll: true });
       const target = this.pick(e as PointerEvent);
       if (!target) return;
       e.preventDefault();
@@ -297,7 +331,38 @@ export class GameView {
     return 0;
   }
 
+  /**
+   * Whether this key belongs to the control it was pressed on rather than to
+   * the game.
+   *
+   * The keyboard is bound to `window`, not to the canvas, so that a player who
+   * has clicked a button in the chrome can still move -- but that also means
+   * every key on the page arrives here, including the ones somebody is aiming
+   * at a form control. The level and leaderboard pickers are `<select>`s and
+   * sit on the same screen as a running game: the arrows that open one and walk
+   * its options were being cancelled by `keyDown`'s own `preventDefault` and fed
+   * to Fireboy at the same time, and `r` -- which a select reads as type-ahead
+   * -- was sending Retry to a shared session.
+   *
+   * A select or a text field owns every key while it has focus. A button or a
+   * link owns only the two that press it, so muting and then carrying on
+   * playing still works.
+   */
+  private static aimedElsewhere(e: KeyboardEvent): boolean {
+    const target = e.target as HTMLElement | null;
+    // No target at all is the document's key, which is the game's.
+    if (!target) return false;
+    if (target.isContentEditable) return true;
+    switch (target.tagName) {
+      case "INPUT": case "TEXTAREA": case "SELECT": case "OPTION": return true;
+      case "BUTTON": case "A": return e.key === " " || e.key === "Enter";
+      default: return false;
+    }
+  }
+
   private keyDown(e: KeyboardEvent): void {
+    if (!this.inputEnabled || e.defaultPrevented || GameView.aimedElsewhere(e)) return;
+    if (e.repeat && ["p", "r", "Escape"].includes(e.key.toLowerCase())) return;
     if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "].includes(e.key)) {
       e.preventDefault();
     }
@@ -329,7 +394,12 @@ export class GameView {
 
   private keyUp(e: KeyboardEvent): void {
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    // The release clears the held set wherever it happened. A key pressed over
+    // the game and released after focus has moved into a picker is the one way
+    // a direction could otherwise stay down forever, and window `blur` does not
+    // fire for a focus change inside the same page.
     if (this.live && MOVEMENT.includes(key)) { this.held.delete(key); return; }
+    if (!this.inputEnabled || GameView.aimedElsewhere(e)) return;
     this.shell.forwardUp(GameView.codeOf(e));
   }
 
@@ -351,6 +421,61 @@ export class GameView {
     return ((h.has("ArrowLeft") || h.has("a")) ? 1 : 0) |
            ((h.has("ArrowRight") || h.has("d")) ? 2 : 0) |
            ((h.has("ArrowUp") || h.has("w")) ? 4 : 0);
+  }
+
+  setInputEnabled(enabled: boolean): void {
+    this.inputEnabled = enabled;
+    if (!enabled) this.clearInput();
+  }
+  get isPreparing(): boolean { return !this.prepared; }
+  private prepareScene(): void {
+    this.preparationGeneration++;
+    this.prepared = false;
+    this.preparation = null;
+    this.clearInput();
+    void this.prepare().catch(() => this.onRefused?.("preparation-failed"));
+  }
+
+  prepare(): Promise<void> {
+    if (this.preparation === null) {
+      const generation = this.preparationGeneration;
+      this.preparation = (async () => {
+        const sprites = this.sprites ?? await SpriteRenderer.load(this.assetBase);
+        if (this.destroyed || generation !== this.preparationGeneration) return;
+        this.sprites = sprites;
+        await sprites.prepare(this.game);
+        if (this.destroyed || generation !== this.preparationGeneration) return;
+        await this.onPrepareRun?.(this);
+        if (this.destroyed || generation !== this.preparationGeneration) return;
+        this.prepared = true;
+        this.render();
+      })().catch(e => {
+        if (generation === this.preparationGeneration) this.preparation = null;
+        throw e;
+      });
+    }
+    return this.preparation;
+  }
+
+  async prepareLevel(mode: string, num: number, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    await this.prepare();
+    signal?.throwIfAborted();
+    const scene = new (level as any)(mode, num);
+    await this.sprites!.prepare(scene);
+    signal?.throwIfAborted();
+  }
+
+  clearInput(): void {
+    this.held.clear();
+    for (const c of [Keyboard.LEFT, Keyboard.RIGHT, Keyboard.UP, Keyboard.A, Keyboard.D, Keyboard.W]) this.shell.forwardUp(c);
+    this.session?.setLocalInput(0);
+  }
+
+  pauseForSuspension(): void {
+    this.clearInput();
+    if (this.session) this.session.send(Command.Pause, 1);
+    else new GameHost(this.game).pause(true);
   }
 
   /**
@@ -389,7 +514,11 @@ export class GameView {
       // Rollback: your own character answers on the very next frame, exactly as
       // in single-player, and the peer's input is predicted and corrected.
       rollback: true,
-      slot, transport, host: new GameHost(this.game),
+      slot, transport, host: new GameHost(this.game, (frame) => this.onConfirmed?.(this, frame), () => this.prepareScene(), () => this.prepared),
+      mayReceiveStart: (mode,num) => {
+        if (this.session?.runSerial === 0 && o.initialLevel) return mode === o.initialLevel.mode && num === o.initialLevel.num;
+        return !this.canChooseLevel;
+      },
       onDesync: o.onDesync, onQuit: o.onQuit, onLinkDown: o.onLinkDown,
     });
     return this.session;
@@ -480,7 +609,7 @@ export class GameView {
     this.raf = requestAnimationFrame(this.tick);
     const dt = Math.min((now - this.last) / 1000, 0.25);   // clamp a tab stall
     this.last = now;
-    if (!this.running) return;
+    if (!this.running || !this.prepared) return;
 
     // Held in a local, not re-read off `this`. A command applied inside `tick`
     // can end the session -- the peer left -- and the page's reaction to being
@@ -519,7 +648,10 @@ export class GameView {
       this.shell.syncMap();
       this.game.The_cookie?.flush?.();
     }
-    if (this.frame % 26 === 0) this.game.The_cookie?.flush?.();
+    if (this.frame % 26 === 0 && this.lastSaveFrame !== this.frame) {
+      this.lastSaveFrame = this.frame;
+      this.game.The_cookie?.flush?.();
+    }
 
     // Audio is a side effect of the simulation, never an input to it.
     if (this.audio) {
@@ -533,7 +665,16 @@ export class GameView {
       SoundBus.drain();
     }
 
-    this.render();
+    if (document.visibilityState !== "hidden" &&
+        (this.lastDrawnFrame !== this.frame || this.lastAssetRevision !== this.sprites?.revision)) {
+      this.render();
+      this.lastDrawnFrame = this.frame;
+      this.lastAssetRevision = this.sprites?.revision ?? 0;
+    }
+    const state = [this.session?.running, this.session?.generation, this.session?.stalled,
+      this.session?.linkDown, this.session?.desyncs, this.muted, this.canChooseLevel,
+      this.game.cur_type, this.game.cur_lev].join(":");
+    if (state !== this.lastState) { this.lastState = state; this.onState?.(this); }
     this.onFrame?.(this);
   };
 

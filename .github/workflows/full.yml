@@ -139,5 +139,12 @@ jobs:
         run: npm run build && npm run check
       - name: and drive it in three browsers, with two accounts
         run: npm run app:test
+      # Credentials are deliberately still in scope but unused: these drive a
+      # local fixture page against a vite dev server, so they prove the shell,
+      # the panels, the focus handling and the IndexedDB progress writes without
+      # touching an account. Kept in this job for the browsers it has already
+      # installed rather than paying for three more downloads in one of its own.
+      - name: the play shell, at four laptop sizes and across two tabs
+        run: npm run test:play
       - if: always()
         run: rm -f .env.local

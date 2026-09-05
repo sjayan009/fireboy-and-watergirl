@@ -27,6 +27,7 @@ import { MemorySave } from "@engine/game/save.js";
 import { WatchChannel } from "../net/watchchannel.js";
 import { RealtimeTransport } from "../net/realtime.js";
 import { auth, signOut } from "../auth.js";
+import { supabase } from "../supabase.js";
 import { el } from "../ui/dom.js";
 
 const MUTE_KEY = "fbwg.muted";
@@ -88,17 +89,23 @@ export function watchScreen(host: HTMLElement): () => void {
   });
 
   host.append(el("div", { class: "play" },
+    // The same two groups the play screen uses. "Stop watching" acts on the
+    // feed that is running, so it sits with mute rather than with the links.
     el("header", { class: "bar" },
       el("span", { class: "who" }, name),
       status,
       el("span", { class: "spacer" }),
-      mute,
-      el("a", { class: "ghost", href: "#/play" }, "Stop watching"),
-      el("a", { class: "ghost", href: "#/friends" }, "Friends"),
-      el("button", {
-        class: "ghost",
-        onclick: async () => { await signOut(); },
-      }, "Sign out")),
+      el("div", { class: "acts" },
+        mute,
+        // Plain, not the danger treatment the play screen's "Leave game" gets:
+        // stopping a feed costs nobody but the person who clicks it.
+        el("a", { class: "ghost", href: "#/play" }, "Stop watching")),
+      el("nav", {},
+        el("a", { class: "ghost", href: "#/friends" }, "Friends"),
+        el("button", {
+          class: "ghost",
+          onclick: async () => { await signOut(); },
+        }, "Sign out"))),
     banner,
     el("div", { class: "screen" }, canvas),
     el("p", { class: "keys", id: "watch-keys" },
@@ -129,11 +136,23 @@ export function watchScreen(host: HTMLElement): () => void {
    * leaving it subscribed with nobody holding it.
    */
   const leaving = new AbortController();
+  let replaying: AbortController | null = null;
+  let authorization: ReturnType<typeof setTimeout> | null = null;
+  async function authorize(): Promise<void> {
+    if (leaving.signal.aborted || !topic) return;
+    const { data,error } = await supabase.rpc("can_watch_pair_topic", { topic });
+    if (leaving.signal.aborted) return;
+    if (error || data !== true) {
+      replaying?.abort(); view.leave(); void room?.close();
+      say("This game is no longer available to watch."); return;
+    }
+    authorization = setTimeout(() => { void authorize(); },5000);
+  }
 
   if (!topic) {
     say("No game to watch. Pick one from your friends list.");
   } else {
-    WatchChannel.open(topic, leaving.signal).then((w) => {
+    WatchChannel.open(topic, leaving.signal, true).then((w) => {
       if (leaving.signal.aborted) { void w.close(); return; }
       room = w;
       // The same transport the relayed pairs use, over a different topic. It
@@ -149,7 +168,18 @@ export function watchScreen(host: HTMLElement): () => void {
           : "That level ended. Waiting for the next one."),
         onLinkDown: () => say("Lost the connection to that game."),
       });
-      say("Connected. Waiting for them to start a level.");
+      w.onSnapshot((text,epoch) => {
+        if (replaying) return;
+        replaying = new AbortController();
+        say("Catching up to the current game…");
+        void view.session!.loadConfirmedReplay(text,epoch,replaying.signal).then(() => {
+          if (!leaving.signal.aborted) banner.hidden = true;
+        }).catch(() => {
+          if (!leaving.signal.aborted) say("Could not catch up. Reopen this game to retry.");
+        }).finally(() => { replaying = null; });
+      });
+      void authorize();
+      say("Connected. Preparing the current game…");
       canvas.focus();
     }).catch((e) => {
       if (leaving.signal.aborted) return;
@@ -159,6 +189,8 @@ export function watchScreen(host: HTMLElement): () => void {
 
   return () => {
     leaving.abort();
+    replaying?.abort();
+    if (authorization !== null) clearTimeout(authorization);
     view.leave();
     view.destroy();
     void room?.close();
