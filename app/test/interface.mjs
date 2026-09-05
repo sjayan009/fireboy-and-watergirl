@@ -279,6 +279,38 @@ try {
       check("the connection status announces itself", shell.statusLive, "polite");
       check("and every control in the bar is named", shell.unnamedButtons, 0);
 
+      /*
+       * The game's keys are bound to `window`, and the pickers are on the same
+       * screen as the game.
+       *
+       * That binding is deliberate -- somebody who has just clicked "Mute" has
+       * to be able to carry on playing -- but it meant every key on the page
+       * arrived at the shell, including the ones aimed at a `<select>`. The
+       * arrows that walk the leaderboard's options were being cancelled by the
+       * handler's own `preventDefault` and fed to Fireboy at the same time, and
+       * `r`, which a select reads as type-ahead, was sending Retry to a session
+       * both people are in.
+       *
+       * `defaultPrevented` is the mechanism rather than a symptom of it: this
+       * listener is registered after the shell's, on the same target, so it
+       * sees whether the shell claimed a key that was not its to claim.
+       */
+      const board = page.locator(".panel", { hasText: "Leaderboard" });
+      const toggle = board.locator("button", { hasText: /^(Show|Hide)$/ });
+      if ((await toggle.textContent()) === "Show") await toggle.click();
+      const picker = board.locator("select.pick").first();
+      await picker.focus();
+
+      const cancelled = page.evaluate(() => new Promise((resolve) => {
+        window.addEventListener(
+          "keydown", (e) => resolve(e.defaultPrevented), { once: true });
+      }));
+      await page.keyboard.press("ArrowDown");
+      check("an arrow aimed at a picker is left to the picker",
+            await cancelled, false);
+      check("and the picker still has the focus",
+            await page.evaluate(() => document.activeElement?.tagName), "SELECT");
+
       check("and no page errors anywhere", problems, []);
       await ctx.close();
     } finally {

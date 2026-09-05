@@ -54,6 +54,8 @@
  */
 import { Transport } from "./transport.js";
 import { Snapshot } from "./snapshot.js";
+import { type Replay, encodeInputs, parseReplay } from "../verified.js";
+import { ENGINE_VERSION } from "../version.js";
 import {
   Command, HISTORY, Kind, decode, encodeCommand, encodeInput,
 } from "./protocol.js";
@@ -81,7 +83,7 @@ export interface SessionHost {
   /** Build a level. Called on Start, and again on every rebuild. */
   start(mode: string, num: number): void;
   /** Toggle the pause tray. */
-  pause(): void;
+  pause(force?: boolean): void;
   /** Rebuild the current level from its beginning. */
   retry(): void;
   /** Leave the level. */
@@ -93,6 +95,9 @@ export interface SessionHost {
   save?(s: Snapshot): void;
   /** Put back what `save` captured. */
   load?(s: Snapshot): void;
+  /** Side effects are released only from a contiguous, corrected input frontier. */
+  confirmed?(frame: number): void;
+  ready?(): boolean;
 }
 
 export interface SessionOptions {
@@ -143,6 +148,7 @@ export interface SessionOptions {
    * follows a pair through a retry without knowing anything happened.
    */
   observer?: boolean;
+  mayReceiveStart?: (mode: string, num: number) => boolean;
   onDesync?: (frame: number, mine: string, theirs: string) => void;
   /**
    * A Quit took effect and the level is over, with `bySlot` naming who asked.
@@ -249,6 +255,7 @@ export class NetSession {
   private readonly hashEvery: number;
   private readonly solo: boolean;
   private readonly observer: boolean;
+  private readonly mayReceiveStart?: (mode: string, num: number) => boolean;
   private readonly onDesync?: SessionOptions["onDesync"];
   private readonly onQuit?: SessionOptions["onQuit"];
   private readonly onLinkDown?: SessionOptions["onLinkDown"];
@@ -269,6 +276,7 @@ export class NetSession {
    * belong to and has to apply them again, so they are pruned by age instead.
    */
   private commands = new Map<number, { command: Command; a: number; b: number }[]>();
+  private commandCount = 0;
   /** Our own digests, so a remote one can be checked against the same frame. */
   private hashes = new Map<number, string>();
   /**
@@ -375,6 +383,7 @@ export class NetSession {
     this.host = o.host;
     // Set before anything that reads it: the delay below depends on it.
     this.observer = o.observer ?? false;
+    this.mayReceiveStart = o.mayReceiveStart;
     // Never for an observer. Rollback is the machinery for being wrong about
     // input you had to guess, and a watcher guesses nothing -- so the snapshot
     // it would cost buys nothing at all.
@@ -442,6 +451,43 @@ export class NetSession {
    * between "agreed" and "both idle on nothing".
    */
   get generation(): number { return this.epoch; }
+  runSerial = 0;
+  private bootstrapPackets: Uint8Array[] | null = null;
+  async loadConfirmedReplay(text: string, epoch: number, signal?: AbortSignal): Promise<void> {
+    if (!this.observer || !Number.isInteger(epoch) || epoch < 0 || epoch > 255) throw new Error("Invalid spectator snapshot");
+    const replay = parseReplay(text);
+    signal?.throwIfAborted();
+    const bits = Uint8Array.from(atob(replay.inputs), c => c.charCodeAt(0));
+    if (bits.length !== replay.frames || bits.some(b => b > 63)) throw new Error("Invalid spectator input");
+    this.bootstrapPackets = [];
+    this.begin(replay.mode,replay.num);
+    this.epoch = epoch;
+    this.input = [Array.from(bits,b => b & 7),Array.from(bits,b => b >> 3)];
+    this.confirmed = bits.length;
+    for (const c of replay.commands) this.queueCommand(c[0],c[1],c[2],c[3]);
+    try {
+      for (let f = 0; f < replay.frames; f++) {
+        signal?.throwIfAborted();
+        this.runFrame(f);
+        if (f % 260 === 259) await new Promise(resolve => setTimeout(resolve,0));
+      }
+    } finally {
+      const pending = this.bootstrapPackets;
+      this.bootstrapPackets = null;
+      if (!signal?.aborted) for (const packet of pending ?? []) this.receive(packet);
+      this.acc = 0;
+    }
+  }
+  replay(frame: number): Replay | null {
+    if (!this.started || frame < 1 || frame > this.frame || (!this.solo && frame > this.confirmed)) return null;
+    const commands: Replay["commands"] = [];
+    for (const [at, list] of [...this.commands].sort((a, b) => a[0] - b[0])) {
+      if (at >= frame) continue;
+      for (const c of list) commands.push([at, c.command, c.a, c.b]);
+    }
+    return { version: 1, engine: ENGINE_VERSION, mode: this.mode, num: this.num, frames: frame, inputs: encodeInputs(this.log.slice(0, frame)), commands };
+  }
+  get selection(): { mode: string; num: number } { return { mode: this.mode, num: this.num }; }
 
   // ---- starting ---------------------------------------------------------
 
@@ -461,9 +507,11 @@ export class NetSession {
 
   /** Everything that is indexed by frame number, back to frame zero. */
   private resetLog(): void {
+    this.runSerial++;
     this.input = [[], []];
     this.guess = [];
     this.commands.clear();
+    this.commandCount = 0;
     this.hashes.clear();
     this.log.length = 0;
     // The outbox deliberately survives: a Retry applies one frame after it is
@@ -687,7 +735,7 @@ export class NetSession {
     // is not -- nobody notices 400 ms on a pause, and a command that arrives
     // for a frame already behind the snapshot cannot be applied at all.
     const at = this.frame + this.delay + this.maxRollback;
-    this.queueCommand(at, command, a, b);
+    if (!this.queueCommand(at, command, a, b)) return;
     if (this.solo) return;
     const packet = encodeCommand({
       kind: Kind.Command, slot: this.slot, epoch: this.epoch,
@@ -708,11 +756,17 @@ export class NetSession {
    */
   private queueCommand(frame: number, command: Command, a: number,
                        b: number): boolean {
+    if (this.commandCount >= 2048) return false;
     const list = this.commands.get(frame) ?? [];
     for (const c of list) {
       if (c.command === command && c.a === a && c.b === b) return false;
     }
+    // Only a small, fixed set of command combinations can own a frame.
+    if (list.length >= 8) return false;
     list.push({ command, a, b });
+    this.commandCount++;
+    // The order cannot depend on which peer's packet arrived first.
+    list.sort((x,y) => x.command - y.command || x.a - y.a || x.b - y.b);
     this.commands.set(frame, list);
     return true;
   }
@@ -720,8 +774,14 @@ export class NetSession {
   // ---- receiving --------------------------------------------------------
 
   private receive(data: Uint8Array): void {
+    if (this.bootstrapPackets !== null) {
+      if (this.bootstrapPackets.length < 256 && data.length <= 64) this.bootstrapPackets.push(data.slice());
+      return;
+    }
     const p = decode(data);
     if (!p) return;
+    // An absolute protocol bound is not permission to allocate arbitrarily far ahead.
+    if (p.frame > this.frame + 256 || p.frame > 200000) return;
     // Our own packet, echoed back -- except for an observer, which is neither
     // slot and wants both.
     if (!this.observer && p.slot === this.slot) return;
@@ -780,6 +840,7 @@ export class NetSession {
     }
 
     if (p.command === Command.Start) {
+      if (this.mayReceiveStart && !this.mayReceiveStart(MODES[p.a], p.b)) return;
       // A level the peer named and this build does not have. Dropping it leaves
       // the session where it was rather than constructing a level out of
       // whatever is at that index.
@@ -787,6 +848,9 @@ export class NetSession {
       if (!this.started) this.begin(MODES[p.a], p.b);
       return;
     }
+    if (p.command === Command.Pause && (p.b !== 0 || (p.a !== 0 && p.a !== 1))) return;
+    if (p.command === Command.Retry && (p.a !== 0 || p.b !== 0)) return;
+    if (p.command === Command.Quit && (p.a !== p.slot || (p.b !== 0 && p.b !== 1))) return;
     // A peer that has gone. See `depart`: this one is deliberately not
     // scheduled, because the frame it would be scheduled on is one this peer
     // may never be able to reach -- the input that would carry it there left
@@ -918,7 +982,8 @@ export class NetSession {
    * ahead of the peer that a correction could no longer reach back.
    */
   tick(dt: number): void {
-    if (!this.started) return;
+    if (!this.started || this.bootstrapPackets !== null) return;
+    if (this.host.ready?.() === false) return;
     this.drainOutbox();
     this.settle();
     this.scheduleLocal();
@@ -965,6 +1030,7 @@ export class NetSession {
       // A command may have rebuilt the level under us and restarted the frame
       // count; the new level's first frame is next time round, not this one.
       if (this.frame <= at) break;
+      if (this.host.ready?.() === false) break;
     }
   }
 
@@ -1017,6 +1083,7 @@ export class NetSession {
     this.log[frame] = bits;
     this.host.step(bits, frame, replaying);
     this.frame = frame + 1;
+    if (this.solo || frame < this.confirmed) this.host.confirmed?.(this.frame);
     if (this.frame > this.ran) this.ran = this.frame;
 
     // Only a frame both players' real input decided is worth a digest. One
@@ -1044,7 +1111,7 @@ export class NetSession {
       return;
     }
     switch (command) {
-      case Command.Pause: this.host.pause(); break;
+      case Command.Pause: this.host.pause(a === 1); break;
       case Command.Retry: this.retryLevel(); break;
       case Command.Quit:
         this.host.quit();

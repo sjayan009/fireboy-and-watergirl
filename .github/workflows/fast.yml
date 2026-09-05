@@ -52,6 +52,15 @@ jobs:
       - name: the engine, on its own
         run: npm --prefix engine test
 
+      # Here rather than in `full`, because it is seconds and because it is the
+      # thing that decides whether a score is real. It needs no browser and no
+      # database: a recorded replay, run twice in isolated realms, has to derive
+      # the same medal and time both times, and every malformed or non-canonical
+      # replay has to be refused. `engine test` above already built engine/dist,
+      # which is what the verifier loads.
+      - name: a replay verifies to the same score twice, and only that score
+        run: npm run test:verifier
+
       # Written to the environment rather than exported, so the build and the
       # check that follows it agree about which kind of run this is.
       - name: decide whether this run has a project to talk to

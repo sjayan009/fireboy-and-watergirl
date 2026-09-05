@@ -525,7 +525,7 @@ try {
   const offer = await b.locator(".banner span").first().innerText();
   check("bob is told he would be Fireboy",
         /would be Fireboy/.test(offer), true);
-  await b.click(".banner button:has-text('Play')");
+  await b.click(".banner button:has-text('Accept')");
 
   console.log("\nthey connect and start the same level");
   for (const p of [a, b]) {
@@ -1154,7 +1154,7 @@ try {
     await a.waitForSelector(".banner select");
     await a.click(".banner button:has-text('Send invite')");
     await b.waitForSelector(".banner:has-text('wants to play')", { timeout: 40000 });
-    await b.click(".banner button:has-text('Play')");
+    await b.click(".banner button:has-text('Accept')");
 
     for (const p of [a, b]) {
       await p.waitForFunction("window.__fbwg && window.__fbwg.view.session",

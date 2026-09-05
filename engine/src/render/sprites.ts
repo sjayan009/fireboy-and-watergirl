@@ -25,6 +25,7 @@ import { DisplayObject, TextField } from "../flash/flash.js";
 import { FontSet } from "./fonts.js";
 import { cssFilter, hasVisibleFilter } from "./filters.js";
 import { assetUrl } from "../asseturl.js";
+import { assetRevision, imageAsset, jsonAsset } from "./assets.js";
 
 export interface ChildPlacement {
   name: string;
@@ -185,21 +186,32 @@ export class SpriteRenderer {
 
   static async load(base: string, stageW = 640,
                     stageH = 480): Promise<SpriteRenderer> {
-    const res = await fetch(assetUrl(base, "sprites.json"),
-                            { cache: "force-cache" });
-    const manifest = await res.json();
+    const [manifest, fonts, buttons] = await Promise.all([
+      jsonAsset<Manifest>(assetUrl(base, "sprites.json")),
+      FontSet.load(base).catch(() => null),
+      jsonAsset<ButtonSet>(assetUrl(base, "buttons.json")),
+    ]);
     // A missing font must not cost us the art: the fields fall back to a serif
     // stack and everything else still renders.
-    const fonts = await FontSet.load(base).catch(() => null);
     // Button art: the up-state characters JPEXS does not export as sprites.
-    const buttons: ButtonSet | null = await fetch(assetUrl(base, "buttons.json"),
-                                                  { cache: "force-cache" })
-      .then((r) => r.json()).catch(() => null);
     return new SpriteRenderer(manifest, base, stageW, stageH, fonts, buttons);
   }
 
   get loading(): number { return this.pending.size; }
   get missing(): number { return this.failed.size; }
+  get revision(): number { return assetRevision(); }
+  private loadingWork = new Set<Promise<void>>();
+
+  async prepare(root: DisplayObject): Promise<void> {
+    if (this.failed.size) this.prefetched.clear();
+    for (const key of this.failed) this.images.delete(key);
+    this.failed.clear();
+    this.warm(root);
+    const scratch = document.createElement("canvas");
+    scratch.width = this.stageW; scratch.height = this.stageH;
+    this.draw(scratch.getContext("2d")!, root);
+    await Promise.all([...this.loadingWork]);
+  }
 
   private scratch(which: "layer" | "maskLayer" | "filterLayer"):
       HTMLCanvasElement {
@@ -236,12 +248,15 @@ export class SpriteRenderer {
     if (hit) return hit.complete && hit.naturalWidth > 0 ? hit : null;
     if (this.failed.has(key)) return null;
 
-    const img = new Image();
+    const resource = imageAsset(assetUrl(this.base, key));
+    const img = resource.image;
     this.images.set(key, img);
     this.pending.add(key);
-    img.onload = () => { this.pending.delete(key); this.generation++; };
-    img.onerror = () => { this.pending.delete(key); this.failed.add(key); };
-    img.src = assetUrl(this.base, key);
+    const work = resource.ready.then(() => { this.pending.delete(key); this.generation++; }, e => {
+      this.pending.delete(key); this.failed.add(key); throw e;
+    });
+    this.loadingWork.add(work);
+    void work.finally(() => this.loadingWork.delete(work)).catch(() => { /* prepare exposes failures; lazy effects remain optional. */ });
     return null;
   }
 
@@ -289,7 +304,7 @@ export class SpriteRenderer {
   warm(root: DisplayObject): void {
     const seen = new Set<number>();
     const visit = (node: any): void => {
-      if (!node) return;
+      if (!node || node.visible === false) return;
       const sprite = this.spriteFor(node);
       if (sprite && !seen.has(sprite.id)) {
         seen.add(sprite.id);

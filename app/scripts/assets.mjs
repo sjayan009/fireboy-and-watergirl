@@ -169,11 +169,7 @@ await Promise.all(Array.from({ length: LANES }, async () => {
       after += now;
     } catch (e) {
       // A frame that will not convert is a frame that must still ship.
-      const fallback = join(TO, rel);
-      await copyFile(src, fallback);
-      const kept = await size(fallback);
-      after += kept;
-      console.warn(`  kept ${rel} as png (${e.message})`);
+      throw new Error(`Could not convert ${rel}; refusing an incomplete WebP release`, { cause: e });
     }
   }
 }));
