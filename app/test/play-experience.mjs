@@ -104,6 +104,19 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
       () => !document.querySelector(".play-drawer").contains(document.activeElement)),
       "closing does not strand focus inside the drawer");
 
+    /*
+     * And the footer's save indicator, which is the third control pointing at
+     * the drawer: it opens Progress, so it closes Progress. Not a tab -- the
+     * tab strip switches between panels and deliberately does not toggle.
+     */
+    const saved = page.locator(".save-status");
+    await saved.click();
+    assert.equal(await page.locator("#drawer-title").innerText(),"Your progress");
+    assert.equal(await saved.getAttribute("aria-expanded"),"true");
+    await saved.click();
+    assert(await drawer.isHidden(),"the save indicator closes the panel it opened");
+    assert.equal(await saved.getAttribute("aria-expanded"),"false");
+
     await menuButton.click();
     await page.getByRole("button",{ name:"Settings",exact:true }).click();
     assert(await page.evaluate(() => window.originalView === window.__fbwg.view),"settings preserves the game instance");

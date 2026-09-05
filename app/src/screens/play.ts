@@ -524,7 +524,11 @@ export function playScreen(host: HTMLElement): () => void {
       else notice("The other tab did not release the match. Close it and try again.");
     });
   });
-  on(shell.saveStatus, "click", async () => { shell.open("progress"); await progress.flushNow(); drawTimes(); });
+  // Toggles, like the toolbar buttons: press it again and Progress goes away.
+  // The flush is not conditional on which way it went -- when the label reads
+  // "Retry needed" the press IS the retry, and it should still happen on the
+  // press that closes the panel.
+  on(shell.saveStatus, "click", async () => { shell.toggle("progress"); await progress.flushNow(); drawTimes(); });
   shell.notify("Preparing the game…");
   const prepare = () => {
     void view.prepare().then(() => { if (!gone) shell.notify(""); }).catch(() => {

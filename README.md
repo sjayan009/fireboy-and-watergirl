@@ -27,6 +27,7 @@ deploy needs it.
 | `supabase/` | migrations and the tests that prove row level security |
 | `tools/` | the Python that turned the SWF into everything else |
 | `web/` | the engine's own harness, with readouts and debug hooks |
+| `docs/` | [the architecture](docs/ARCHITECTURE.MD), and the release and hosting notes |
 
 ## The two things that shaped it
 

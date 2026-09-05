@@ -9,7 +9,11 @@ export class PlayShell {
   readonly root = el("div", { class: "play play-shell" });
   readonly viewport = el("div", { class: "game-viewport" });
   readonly screen: HTMLElement;
-  readonly saveStatus = el("button", { class: "save-status ghost", "aria-live": "polite" }, "Saved");
+  // The footer's save indicator is also the way in and out of Progress, so it
+  // is a drawer control like the two in the toolbar and now says so. `aria-live`
+  // still belongs to it: the label doubles as the status ("Saving...", "Retry
+  // needed") and that has to be announced when it changes on its own.
+  readonly saveStatus = el("button", { class: "save-status ghost", "aria-live": "polite", "aria-controls": "play-drawer", "aria-expanded": "false" }, "Saved");
   readonly friendButton = el("button", { class: "ghost", "aria-controls": "play-drawer", "aria-expanded": "false" }, "Friends (0)");
   // Labelled BY its heading rather than with a fixed string. The panel changes
   // -- "Play together", "Match setup", "Your progress", "Game menu" -- and a
@@ -144,15 +148,16 @@ export class PlayShell {
   /**
    * `aria-expanded` describes the control it is on, not the drawer.
    *
-   * Both buttons point at the same region, and only one of them can be the
-   * reason it is open. Setting "true" on Friends whatever had opened it -- the
-   * Menu button, an incoming invitation -- told a screen reader that Friends
-   * was showing its panel when the panel on screen was the game menu.
+   * All three of these point at the same region, and only one of them can be
+   * the reason it is open. Setting "true" on Friends whatever had opened it --
+   * the Menu button, an incoming invitation -- told a screen reader that
+   * Friends was showing its panel when the panel on screen was the game menu.
    */
   private syncExpanded(): void {
     this.friendButton.setAttribute(
       "aria-expanded", String(this.active !== null && this.active === this.friendPanel()));
     this.menuButton.setAttribute("aria-expanded", String(this.active === "menu"));
+    this.saveStatus.setAttribute("aria-expanded", String(this.active === "progress"));
   }
 
   open(panel: Panel): void {
