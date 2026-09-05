@@ -442,6 +442,17 @@ export class SpriteRenderer {
 
     const sprite = this.spriteFor(node);
     let geom: FrameGeom | undefined;
+    /**
+     * Whether this node expected its own art this frame and did not get it.
+     *
+     * Art loads asynchronously and the loop draws whatever is ready, which is
+     * right for a level -- a tile arriving late is a tile arriving late. It is
+     * wrong for a panel and its contents: the credits scroll is one 330 KB SVG
+     * and the line drawn over it is text, so on the first open the text was on
+     * screen a beat before the scroll it belongs to, floating over the menu on
+     * its own. A child can now say it would rather wait.
+     */
+    let basePending = false;
     if (sprite) {
       const frame = Math.min(Math.max(node.currentFrame ?? 1, 1),
                              sprite.frames);
@@ -454,12 +465,14 @@ export class SpriteRenderer {
           : (geom.base ?? `${frame}_base.svg`);
         const img = this.image(`sprites/${sprite.id}/${file}`);
         if (img) ctx.drawImage(img, -geom.ox, -geom.oy);
+        else basePending = true;
         this.prefetch(sprite);
       }
     }
 
     for (const child of node.children ?? []) {
       if (skipMask && child === node.__clipMask) continue;
+      if (basePending && child.__afterBase) continue;
       const place = placementFor(geom, child);
       // A named child the frame's geometry does not place, and which never
       // got a transform from the SWF, is already baked into the composite --
@@ -520,6 +533,20 @@ export class SpriteRenderer {
           centre: [m.a * cx + m.c * cy + m.e, m.b * cx + m.d * cy + m.f],
         });
       }
+
+      /**
+       * `mouseChildren = false` takes a whole subtree out of the pointer's
+       * reach, exactly as it does in Flash.
+       *
+       * A panel laid over the intro menu -- Instructions, Credits -- draws on
+       * top of it and stops there: the menu underneath kept its hit boxes, so
+       * "Use A,W,D to move WaterGirl" was a click on Play, the line about
+       * puzzle levels was a click on More Games, and OK sat inside Submit
+       * Hiscore's box. Game.LoadInstructions now switches this off on the menu
+       * while the panel is up, which leaves OK as the only thing on screen a
+       * click can reach.
+       */
+      if (node.mouseChildren === false) { ctx.restore(); return; }
 
       const sprite = this.spriteFor(node);
       let geom: FrameGeom | undefined;
