@@ -4221,15 +4221,24 @@ export class Game extends MovieClip {
          this.m_introMenu.Buttons.Starter.addEventListener(MouseEvent.MOUSE_OVER,this.__bind(this.OverSounder));
          this.m_introMenu.Buttons.Instructer.addEventListener(MouseEvent.MOUSE_OVER,this.__bind(this.OverSounder));
          this.m_introMenu.Buttons.Instructer.addEventListener(MouseEvent.CLICK,this.__bind(this.LoadInstructions));
-         this.m_introMenu.Buttons.Submiter.addEventListener(MouseEvent.MOUSE_OVER,this.__bind(this.OverSounder));
-         this.m_introMenu.Buttons.Submiter.addEventListener(MouseEvent.CLICK,this.__bind(this.LoadHiscore));
-         this.m_introMenu.Buttons.Morer.addEventListener(MouseEvent.MOUSE_OVER,this.__bind(this.OverSounder));
-         this.m_introMenu.Buttons.Morer.addEventListener(MouseEvent.CLICK,this.__bind(this.MoreGames));
          this.m_introMenu.Buttons.Crediter.addEventListener(MouseEvent.MOUSE_OVER,this.__bind(this.OverSounder));
          this.m_introMenu.Buttons.Crediter.addEventListener(MouseEvent.CLICK,this.__bind(this.LoadCredits));
-         this.m_introMenu.ArmorLogo.addEventListener(MouseEvent.CLICK,this.__bind(this.MoreGames));
-         this.m_introMenu.ArmorLogo.buttonMode = true;
-         this.m_introMenu.ArmorLogo.useHandCursor = true;
+         /*
+          * The two entries that led off the page in 2009, and lead nowhere now.
+          *
+          * "More Games" opened Armor Games' portal and "Submit Hiscore" posted
+          * to a score service that has not existed for years; both handlers are
+          * stubs. A stub still lit the button, played the rollover sound and
+          * took the click, so a third of the menu answered every press with
+          * nothing. `enabled = false` is what the level map already uses for a
+          * node nobody has reached: the renderer stops hit-testing it, so it
+          * neither highlights nor clicks. The art stays where it always was.
+          */
+         this.m_introMenu.Buttons.Submiter.enabled = false;
+         this.m_introMenu.Buttons.Morer.enabled = false;
+         this.m_introMenu.ArmorLogo.enabled = false;
+         this.m_introMenu.ArmorLogo.buttonMode = false;
+         this.m_introMenu.ArmorLogo.useHandCursor = false;
       }
 
       loadComplete(param1: Event): void {
@@ -4254,6 +4263,7 @@ export class Game extends MovieClip {
 
       UnLoadCredits(param1: MouseEvent): any {
          this.removeChild(this.crd);
+         if(this.m_introMenu) this.m_introMenu.mouseChildren = true;
       }
 
       MuteSound(param1: MouseEvent): any {
@@ -4436,6 +4446,7 @@ export class Game extends MovieClip {
 
       UnLoadInstructions(param1: MouseEvent): any {
          this.removeChild(this.instr);
+         if(this.m_introMenu) this.m_introMenu.mouseChildren = true;
       }
 
       CreateTeaser(): any {
@@ -4584,6 +4595,105 @@ export class Game extends MovieClip {
       LoadCredits(param1: MouseEvent): any {
          this.crd = new Credits();
          this.addChild(this.crd);
+         /*
+          * The one line on this panel that is not from 2009.
+          *
+          * The credits art is baked vector -- every letter of "CONCEPT /
+          * GRAPHICS / PROGRAMMING BY OSLO ALBET" is an outline in the SWF's own
+          * shapes, so nothing on the scroll can be reflowed and nothing under
+          * `extracted/` should be edited to make room. What there IS is 22px of
+          * empty parchment between the Box2D thanks (ends y=359) and the OK
+          * button (starts y=384), and five embedded fonts that turned out to
+          * carry the whole ASCII range rather than just the digits the timer
+          * needs. So the line is typeset at run time in the panel's own Trajan,
+          * in the panel's own gold, by the renderer that already draws the
+          * game's clocks.
+          *
+          * 12px against the panel's 14px: a later hand, saying so quietly.
+          * `__seed` is what keeps it on screen at all -- a child with no entry
+          * in the sprite manifest is skipped by drawNode unless it carries one
+          * (see buttonBoxes and drawNode in render/sprites.ts), and with no
+          * manifest placement the field draws at its own coordinates, which is
+          * exactly what is wanted here.
+          */
+         /*
+          * Set the way the rest of the scroll is set, from measurements taken
+          * off the rendered panel rather than from taste.
+          *
+          * TYPED IN MIXED CASE, and set in font 49, which together are the
+          * whole difference between a line that belongs here and one that does
+          * not. The SWF carries two faces both named Trajan Pro; 767 has
+          * ordinary lowercase and 49 draws a-z as SMALL CAPITALS. That is
+          * where "Concept/Graphics/Programming" and "For creating/porting
+          * Box2D" get their alternating tall-and-short rhythm, and setting
+          * this line in 767 -- or in either face in full capitals -- gives a
+          * flat uniform band that reads as a different typeface altogether.
+          *
+          * Which face the panel uses was settled by fitting, not by eye: the
+          * three known line widths (367, 381 and 318px on screen) agree on
+          * 18.75px of font 49 to within a quarter point, and its capitals come
+          * out 14px, which is exactly what those lines measure. 767 fits the
+          * widths too, at 27px, but would put 19px capitals on a 14px line.
+          *
+          * 16px against the panel's 18.75. That is 360px wide, between the two
+          * lines above it, with 12px capitals against their 14px: the same
+          * setting, plainly a later and quieter line.
+          *
+          * Centred on x=317, where the 2009 lines are centred, not on the
+          * stage's 320. Three pixels is invisible alone and very visible under
+          * a line of matching width.
+          *
+          * It sits in the 42px of empty parchment BETWEEN "Jan Villanueva &
+          * Oslo Albet" (ink ends y=275) and "Thanks to Erin Catto" (starts
+          * y=318), not in the 22px left at the foot of the scroll. That gap is
+          * the most room on the panel, it needs nothing moved to use it, and
+          * the reading order it produces is the right one: who made the game,
+          * who put it online, then the thanks owed to somebody else's library.
+          * Rows 291-302 leaves 16px above and 16px below, against the 12px the
+          * panel keeps between the lines inside a block -- so it reads as its
+          * own credit rather than a third line of either neighbour.
+          *
+          * Drawn twice because every letter on this scroll carries a dark amber
+          * shadow down and to the right; the SVG does it with a feOffset of
+          * 3.5px, and 2px is that offset at this size. Flat gold beside
+          * shadowed gold reads as a sticker on somebody else's poster.
+          */
+         const credit = (dx: number, dy: number, colour: number): TextField => {
+            const f = new TextField();
+            f.text = "Online multiplayer by Jayan Sirikonda";
+            f.fontId = 49;
+            f.size = 16;
+            f.align = "center";
+            f.textColor = colour;
+            f.selectable = false;
+            f.bounds = { x: 116 + dx, y: 289 + dy, w: 400, h: 22 };
+            // A child with no entry in the sprite manifest is skipped by
+            // drawNode unless it carries a seed; with no manifest placement it
+            // then draws at its own coordinates. See render/sprites.ts.
+            (f as any).__seed = { x: 0, y: 0, sx: 1, sy: 1, rot: 0 };
+            // And it waits for the scroll: the panel art is a 330 KB SVG, so on
+            // the first open this line would otherwise be on screen a beat
+            // before the parchment it is written on.
+            (f as any).__afterBase = true;
+            return f;
+         };
+         /*
+          * OK is NOT moved, and that is load-bearing.
+          *
+          * It was, briefly, to buy room at the foot of the scroll -- and the
+          * button came apart when the pointer touched it. There are two OKs on
+          * this panel: a dim one baked into the scroll art, and the button's
+          * own bright art, which the manifest places to land exactly on top of
+          * it. Shifting the clip moved only the bright one, so hovering lit a
+          * second OK seven pixels below the first. The placement is a
+          * REGISTRATION, not a position, and the room had to come from
+          * somewhere that was already empty.
+          */
+         // Both sampled off the rendered panel: its shadow, then its gold.
+         this.crd.addChild(credit(2, 2, 0x553900));
+         this.crd.addChild(credit(0, 0, 0xffcc00));
+         // Same as the instructions: the panel on top owns the pointer.
+         if(this.m_introMenu) this.m_introMenu.mouseChildren = false;
          this.crd.OKO.addEventListener(MouseEvent.MOUSE_OVER,this.__bind(this.OverSounder));
          this.crd.OKO.addEventListener(MouseEvent.CLICK,this.__bind(this.UnLoadCredits));
       }
@@ -4971,6 +5081,9 @@ export class Game extends MovieClip {
       LoadInstructions(param1: MouseEvent): any {
          this.instr = new Instructions();
          this.addChild(this.instr);
+         // The panel covers the menu, so the menu stops taking clicks: OK is
+         // the only thing on this screen. See buttonBoxes in render/sprites.ts.
+         if(this.m_introMenu) this.m_introMenu.mouseChildren = false;
          this.instr.OKO.addEventListener(MouseEvent.MOUSE_OVER,this.__bind(this.OverSounder));
          this.instr.OKO.addEventListener(MouseEvent.CLICK,this.__bind(this.UnLoadInstructions));
       }
