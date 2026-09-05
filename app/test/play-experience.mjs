@@ -69,7 +69,42 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
 
     await page.keyboard.up("ArrowRight");
     await page.keyboard.press("Escape");
-    await page.getByRole("button",{ name:"Menu",exact:true }).click();
+
+    /*
+     * The button that opened the drawer closes it again.
+     *
+     * Both of these used to only ever open: pressing Friends while the friends
+     * panel was showing re-rendered it and left it there, so Close or Escape
+     * were the only ways out. Pressing one toolbar button while the OTHER's
+     * panel is open still switches rather than closing -- that is a different
+     * gesture and it has to stay one.
+     */
+    const drawer = page.locator(".play-drawer");
+    const friendsButton = page.getByRole("button",{ name:"Friends (50)",exact:true });
+    const menuButton = page.getByRole("button",{ name:"Menu",exact:true });
+    await friendsButton.click();
+    assert(await drawer.isVisible(),"Friends opens the drawer");
+    await friendsButton.click();
+    assert(await drawer.isHidden(),"and Friends again closes it");
+    await menuButton.click();
+    assert.equal(await page.locator("#drawer-title").innerText(),"Game menu");
+    await friendsButton.click();
+    assert(await drawer.isVisible() &&
+      await page.locator("#drawer-title").innerText() === "Play together",
+      "the other button switches panels rather than closing");
+    // `aria-expanded` belongs to the control, not to the drawer: only the
+    // button whose panel is showing may claim it.
+    assert.equal(await friendsButton.getAttribute("aria-expanded"),"true");
+    assert.equal(await menuButton.getAttribute("aria-expanded"),"false");
+    await friendsButton.click();
+    assert(await drawer.isHidden());
+    assert.equal(await friendsButton.getAttribute("aria-expanded"),"false");
+    // Focus must never be left on a control inside the hidden drawer.
+    assert(await page.evaluate(
+      () => !document.querySelector(".play-drawer").contains(document.activeElement)),
+      "closing does not strand focus inside the drawer");
+
+    await menuButton.click();
     await page.getByRole("button",{ name:"Settings",exact:true }).click();
     assert(await page.evaluate(() => window.originalView === window.__fbwg.view),"settings preserves the game instance");
     await page.keyboard.press("Escape");

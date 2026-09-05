@@ -30,6 +30,9 @@ export class PlayShell {
   private full = el("button", { class: "ghost", "aria-pressed": "false" }, "Fullscreen");
   private toast = el("div", { class: "play-toast", role: "status", "aria-live": "polite" });
   private tabs!: HTMLElement;
+  // A field rather than a local, because `aria-expanded` has to be kept in step
+  // with what the drawer is actually showing -- see `syncExpanded`.
+  private menuButton = el("button", { class: "ghost", "aria-controls": "play-drawer", "aria-expanded": "false" }, "Menu");
 
   constructor(host: HTMLElement, private options: {
     canvas: HTMLCanvasElement; name: string; status: HTMLElement; mute: HTMLElement;
@@ -38,7 +41,6 @@ export class PlayShell {
   }) {
     this.screen = el("div", { class: "screen" }, options.canvas);
     const close = el("button", { class: "ghost", "aria-label": "Close panel" }, "Close");
-    const menu = el("button", { class: "ghost", "aria-controls": "play-drawer" }, "Menu");
     const tabs = el("nav", { class: "drawer-tabs", "aria-label": "Switch panel" });
     for (const [key, label] of [["friends", "Friends"], ["setup", "Match setup"], ["progress", "Progress"]] as const) {
       // `data-panel` is what `open` marks the current one with. Nothing said
@@ -65,13 +67,13 @@ export class PlayShell {
     this.root.append(
       el("header", { class: "play-toolbar" },
         el("div", { class: "play-identity" }, el("strong", {}, options.name), options.status),
-        this.friendButton, this.full, options.mute, menu),
+        this.friendButton, this.full, options.mute, this.menuButton),
       el("div", { class: "play-workspace" }, this.viewport, this.drawer),
       el("footer", { class: "play-footer" }, this.saveStatus,
         el("span", { class: "focus-hint", id: "play-keys" }, "Click the game to play · Arrows / W A D · P pauses")));
     host.append(this.root);
-    this.off.push(on(this.friendButton, "click", () => this.open(this.incoming ? "setup" : "friends")));
-    this.off.push(on(menu, "click", () => this.open("menu")));
+    this.off.push(on(this.friendButton, "click", () => this.toggle(this.friendPanel())));
+    this.off.push(on(this.menuButton, "click", () => this.toggle("menu")));
     this.off.push(on(close, "click", () => this.close()));
     this.off.push(on(this.full, "click", async () => {
       try {
@@ -115,13 +117,51 @@ export class PlayShell {
     this.screen.style.height = `${width * 3 / 4}px`;
   }
 
+  /** Which panel the Friends button stands for right now. */
+  private friendPanel(): Panel { return this.incoming ? "setup" : "friends"; }
+
+  /**
+   * Open this panel, or close the drawer when it is the one already showing.
+   *
+   * What a toolbar button that opens a drawer should do, and what the two of
+   * them did not: pressing Friends while the friends panel was open re-rendered
+   * it and left it open, so the only way out was Close or Escape. The button
+   * you pressed to get somewhere is the obvious button to press to get back.
+   *
+   * The tab strip inside the drawer deliberately does NOT do this. Those are a
+   * switch between three panels, and a tab that closed the thing it is a tab of
+   * would be a different control wearing the same clothes.
+   */
+  toggle(panel: Panel): void {
+    if (this.active === panel) { this.close(); return; }
+    // Already open on something else, so this click is a switch rather than an
+    // opening -- and the button that switched is where focus belongs when the
+    // drawer eventually closes.
+    if (this.active) this.trigger = document.activeElement as HTMLElement;
+    this.open(panel);
+  }
+
+  /**
+   * `aria-expanded` describes the control it is on, not the drawer.
+   *
+   * Both buttons point at the same region, and only one of them can be the
+   * reason it is open. Setting "true" on Friends whatever had opened it -- the
+   * Menu button, an incoming invitation -- told a screen reader that Friends
+   * was showing its panel when the panel on screen was the game menu.
+   */
+  private syncExpanded(): void {
+    this.friendButton.setAttribute(
+      "aria-expanded", String(this.active !== null && this.active === this.friendPanel()));
+    this.menuButton.setAttribute("aria-expanded", String(this.active === "menu"));
+  }
+
   open(panel: Panel): void {
     if (!this.active) this.trigger = document.activeElement as HTMLElement;
     this.offPanel?.(); this.offPanel = undefined;
     this.active = panel;
     this.root.classList.add("drawer-open");
     this.drawer.hidden = false;
-    this.friendButton.setAttribute("aria-expanded", "true");
+    this.syncExpanded();
     this.title.textContent = ({ friends: "Play together", setup: "Match setup", progress: "Your progress", menu: "Game menu", manage: "Manage friends", settings: "Settings" })[panel];
     // `aria-current` rather than `aria-selected`: these are buttons in a nav,
     // not a WAI-ARIA tablist, and claiming to be one would promise arrow-key
@@ -146,15 +186,30 @@ export class PlayShell {
     this.active = null;
     this.drawer.hidden = true;
     this.root.classList.remove("drawer-open");
-    this.friendButton.setAttribute("aria-expanded", "false");
+    this.syncExpanded();
     this.options.input(true);
-    if (focusGame) this.options.canvas.focus({ preventScroll: true });
-    else (this.trigger?.isConnected ? this.trigger : this.options.canvas).focus({ preventScroll: true });
+    // Back where you came from, unless where you came from is inside the thing
+    // that has just been hidden.
+    //
+    // `isConnected` alone does not rule that out -- a hidden subtree is still
+    // in the document -- so a trigger captured while focus was in the drawer
+    // sent focus to an invisible button and, in the browsers that refuse it,
+    // to nothing at all. The canvas is the honest fallback: it is what the
+    // drawer was covering.
+    const back = this.trigger;
+    const target = !focusGame && back?.isConnected && !this.drawer.contains(back)
+      ? back : this.options.canvas;
+    target.focus({ preventScroll: true });
   }
 
   friends(online: number): void { this.online = online; this.badge(); }
   invite(incoming: boolean): void { this.incoming = incoming; this.badge(); }
-  private badge(): void { this.friendButton.textContent = this.incoming ? "Invitation (1)" : `Friends (${this.online})`; }
+  private badge(): void {
+    this.friendButton.textContent = this.incoming ? "Invitation (1)" : `Friends (${this.online})`;
+    // An arriving invitation changes which panel this button stands for, and
+    // so changes whether it is the one currently expanded.
+    this.syncExpanded();
+  }
   notify(text: string): void { this.toast.textContent = text; this.toast.hidden = !text; }
 
   destroy(): void {
