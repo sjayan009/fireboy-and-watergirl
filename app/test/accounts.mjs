@@ -143,6 +143,20 @@ async function newPage() {
 const errorText = (page) =>
   page.locator(".error:visible").first().innerText().catch(() => "");
 
+/**
+ * Open one of Settings' rows.
+ *
+ * Settings is an accordion now -- six collapsed rows, one open at a time --
+ * so a form in there is not on the page until its row is asked for. Clicking
+ * the summary is what a person does; a test that reached into the closed
+ * section instead would be exercising markup nobody can touch.
+ */
+const openSetting = async (page, name) => {
+  const row = page.locator(`.settings-group:has(.settings-name:text-is("${name}"))`);
+  if (!await row.evaluate((d) => d.open)) await row.locator("summary").click();
+  return row;
+};
+
 try {
   // ---- sign-up validation, before anything reaches the server -------------
 
@@ -288,8 +302,10 @@ try {
 
     // ---- two-factor ------------------------------------------------------
     console.log("\ntwo-factor, from enrolling to being let back in");
-    await page.click("a[href='#/settings']");
+    await page.getByRole("button", {name:"Menu", exact:true}).click();
+    await page.getByRole("button", {name:"Settings", exact:true}).click();
     await page.waitForSelector("text=TWO-FACTOR");
+    await openSetting(page, "Two-factor");
     await page.click("button:has-text('Turn it on')");
     // Scoped to the two-factor section. A bare `code` used to be unambiguous;
     // Settings now shows the signed-in address in one too, and it comes first
@@ -358,7 +374,8 @@ try {
 
     await page.click("a[href='#/play']");
     await page.waitForSelector("#stage");
-    await page.click("button:has-text('Sign out')");
+    await page.getByRole("button", {name:"Menu", exact:true}).click();
+    await page.getByRole("button", {name:"Sign out", exact:true}).click();
     await page.waitForSelector("input[type=password]", { timeout: 20000 });
 
     await page.fill("input[type=email]", email);
@@ -381,7 +398,8 @@ try {
     // Out again, and this time pretend the phone with the app on it is not in
     // the room. The password alone gets as far as the gate and no further,
     // which is the whole point of the gate.
-    await page.click("button:has-text('Sign out')");
+    await page.getByRole("button", {name:"Menu", exact:true}).click();
+    await page.getByRole("button", {name:"Sign out", exact:true}).click();
     await page.waitForSelector("input[type=password]", { timeout: 20000 });
     await page.fill("input[type=email]", email);
     await page.fill("input[type=password]", password);
@@ -405,8 +423,10 @@ try {
     await page.waitForSelector("#stage", { timeout: 30000 });
     check("a real one lets them in", true, true);
 
-    await page.click("a[href='#/settings']");
+    await page.getByRole("button", {name:"Menu", exact:true}).click();
+    await page.getByRole("button", {name:"Settings", exact:true}).click();
     await page.waitForSelector("text=TWO-FACTOR");
+    await openSetting(page, "Two-factor");
     // Which is the cost the screen warned about: they are in, and the account
     // is back to being protected by a password alone until they say otherwise.
     await page.waitForSelector("button:has-text('Turn it on')", { timeout: 20000 });
@@ -414,14 +434,19 @@ try {
 
     // ---- renaming --------------------------------------------------------
     console.log("\nrenaming costs no second invite code");
-    await page.locator("form").first().locator("input")
-      .fill(`re${stamp % 100000}`);
-    await page.locator("form").first().locator("button[type=submit]").click();
+    const naming = await openSetting(page, "Username");
+    await naming.locator("input").fill(`re${stamp % 100000}`);
+    await naming.locator("button[type=submit]").click();
     await page.waitForTimeout(2500);
     const trouble = await errorText(page);
     check("the new name was accepted", trouble, "");
     check("and it is what the bar shows now",
-          await page.locator("form").first().locator("input").inputValue(),
+          await naming.locator("input").inputValue(),
+          `re${stamp % 100000}`);
+    // The row says what it is set to without being opened, which is the point
+    // of collapsing them.
+    check("and the row says so with the form shut",
+          await naming.locator(".settings-value").innerText(),
           `re${stamp % 100000}`);
     await page.close();
   }
