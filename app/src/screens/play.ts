@@ -29,12 +29,17 @@ import type { Transport } from "@engine/net/transport.js";
 import { LocalSave } from "@engine/game/save.js";
 import { drainOutbox, pairProgress } from "../pairsave.js";
 import type { Invite, Showing } from "../net/pairchannel.js";
-import { WatchChannel, watchTopicFor } from "../net/watchchannel.js";
+import { WatchChannel } from "../net/watchchannel.js";
 import { WatchMirror } from "../net/watch.js";
 import { auth, signOut } from "../auth.js";
 import { supabase } from "../supabase.js";
 import { clear, el, on } from "../ui/dom.js";
 import { FriendState, getLobby, Lobby, Ready } from "../lobby.js";
+import { PlayShell } from "../ui/playshell.js";
+import { PlayController, loadSelection, selectionKey } from "../playstate.js";
+import { Ranking, leaderboardCache } from "../ranking.js";
+import { MatchLease } from "../matchlease.js";
+import { MatchSharing, type SharingState } from "../sharing.js";
 
 const MUTE_KEY = "fbwg.muted";
 
@@ -73,6 +78,7 @@ const STALL_FRAMES = 52;
 const RECOVERED_FRAMES = 26;
 
 export function playScreen(host: HTMLElement): () => void {
+  const flow = new PlayController();
   const canvas = el("canvas", {
     id: "stage", width: STAGE_W, height: STAGE_H, tabindex: "0",
     // The game is pixels. Its menus, its map, its results board and its two
@@ -107,7 +113,7 @@ export function playScreen(host: HTMLElement): () => void {
     class: "status", role: "status", "aria-live": "polite",
   }, "solo");
   const mute = el("button", { class: "ghost" }, muted ? "Unmute" : "Mute");
-  const leave = el("button", { class: "ghost" }, "Leave game");
+  const leave = el("button", { class: "ghost leave" }, "Leave game");
   leave.hidden = true;
   const hand = el("button", { class: "ghost" }, "Let them pick");
   hand.hidden = true;
@@ -173,6 +179,9 @@ export function playScreen(host: HTMLElement): () => void {
   let mirror: WatchMirror | null = null;
   let watchRoom: WatchChannel | null = null;
   let sharing = false;
+  let consent: MatchSharing | null = null;
+  let watchTopic: string | null = null;
+  let watchGeneration = 0;
   /**
    * Said again every few seconds while the game is open to watchers.
    *
@@ -202,7 +211,7 @@ export function playScreen(host: HTMLElement): () => void {
    * this screen has to match a cancel against: a cancel of our own outbound
    * invitation comes back as a rejection from `Lobby.invite` instead.
    */
-  let pending: { session: string | null; abort: AbortController } | null = null;
+  let pending: { session: string | null; attempt?: string; friendId: string; abort: AbortController } | null = null;
   /** A transient line in the banner: a stall, a refusal, somebody leaving. */
   let noticeText = "";
   /** What the status line last said, so it is not rewritten 26 times a second. */
@@ -219,12 +228,44 @@ export function playScreen(host: HTMLElement): () => void {
    * for as long as the tab stayed open.
    */
   let gone = false;
+  const rankedStatus = el("span", { class: "ranked-status", role: "status", "aria-live": "polite" });
+  const ranking = new Ranking(label => { rankedStatus.textContent = label; });
+
+  /**
+   * What identifies this run to the ranking, or null when there is nothing to
+   * rank.
+   *
+   * One function rather than the same object literal in three places: the three
+   * were already identical, and `eligible` is exactly the kind of field that
+   * gets added to two of them.
+   */
+  function rankedContext() {
+    if (!match) return null;
+    return {
+      friend: match.friend.id,
+      connection: match.invite.attempt ?? match.invite.session,
+      uploader: match.iInvited,
+      eligible: view.artComplete,
+    };
+  }
 
   const view = new GameView({
     canvas,
     assets: __ASSETS__,
     save: progress.store,
-    onFrame: () => {
+    onPrepareRun: async v => {
+      // Said once per prepared scene, so a level that starts with holes in it
+      // says so rather than looking like a rendering bug somebody should
+      // report. Preparation retries what failed last time, so this clears
+      // itself the moment the art actually arrives.
+      if (!v.artComplete) {
+        notice("Some game art did not load. The level still plays, but this " +
+               "run will not be ranked.");
+      }
+      const context = rankedContext();
+      if (context && v.session) await ranking.prepare(context, v.session);
+    },
+    onState: () => {
       const next = describe();
       if (next !== lastStatus) { status.textContent = next; lastStatus = next; }
       // The game has a mute button of its own, inside the canvas, and in a
@@ -238,13 +279,30 @@ export function playScreen(host: HTMLElement): () => void {
       const playing = match !== null && (view.session?.running ?? false);
       if (playing !== inGame) {
         inGame = playing;
+        if (match) flow.set(playing ? "playing" : "between-levels");
         if (playing) lobby?.setActivity("in_game");
+      }
+      if (playing && match && view.session) {
+        const selection = view.session.selection;
+        try { localStorage.setItem(selectionKey(auth().user!.id,match.friend.id),JSON.stringify({ ...selection, iAmFireboy: view.slot === 0 })); } catch { /* optional */ }
       }
       showHand();
       showShare();
-      watchStall();
+      const context = rankedContext();
+      if (context && view.session) ranking.observe(context, view.session, view.game);
+    },
+    onFrame: () => watchStall(),
+    onConfirmed: (v, frame) => {
+      if (v.session) mirror?.confirmed(v.session,frame);
+      if (frame % 26 === 0 || v.game.children.some((c: { Rboard?: unknown }) => c.Rboard)) progress.confirm(v.game.The_cookie.data);
+      const context = rankedContext();
+      if (context && v.session) ranking.observe(context, v.session, v.game, frame);
     },
     onRefused: (why) => {
+      if (why === "preparation-failed") {
+        notice("Some game art could not load.",el("button", { class: "ghost", onclick: () => { void view.prepare().catch(() => {}); } },"Retry loading"));
+        shell.open("setup");
+      }
       if (why === "not-your-pick") {
         notice(`Waiting for ${partner?.username ?? "them"} to pick the ` +
                "next level.");
@@ -257,11 +315,10 @@ export function playScreen(host: HTMLElement): () => void {
   function describe(): string {
     const s = view.session;
     const who = partner?.username ?? "your friend";
-    if (!s) return match ? `with ${who} · reconnecting` : "solo";
-    if (!s.running) return `with ${who} · ${linkKind} · choosing a level`;
-    return `${view.slot === 0 ? "Fireboy" : "Watergirl"} · ${linkKind} · ` +
-      (s.stalled ? "waiting for the other player" : "in step") +
-      (s.desyncs ? ` · ${s.desyncs} desync(s)` : "") + cost();
+    if (!s) return match ? `Reconnecting with ${who}` : "Play solo or invite a friend";
+    if (!s.running) return `With ${who} · choosing a level`;
+    return `${view.slot === 0 ? "Fireboy" : "Watergirl"} with ${who}` +
+      (s.stalled ? " · waiting for your friend" : "") + cost();
   }
 
   /**
@@ -298,7 +355,9 @@ export function playScreen(host: HTMLElement): () => void {
     try { localStorage.setItem(MUTE_KEY, muted ? "1" : "0"); } catch { /* private */ }
   }
 
-  leave.addEventListener("click", () => endSession("You left the game."));
+  leave.addEventListener("click", () => {
+    if (confirm("Leave this game? Your friend will return to the map.")) endSession("You left the game.");
+  });
 
   /**
    * Hand the level pick to the other player.
@@ -310,9 +369,9 @@ export function playScreen(host: HTMLElement): () => void {
    * an agreed frame, which is the only thing a command would buy.
    */
   hand.addEventListener("click", () => {
-    if (!match || !lobby) return;
+    if (!match || !lobby || match.chooser !== auth().user?.id || view.session?.running) return;
     const chooser = match.friend.id;
-    lobby.handover(match.friend.id, { session: match.invite.session, chooser });
+    lobby.handover(match.friend.id, { session: match.invite.session, attempt: match.invite.attempt, chooser });
     setChooser(chooser);
   });
 
@@ -324,14 +383,36 @@ export function playScreen(host: HTMLElement): () => void {
    * is not a thing one of two people should be able to decide.
    */
   share.addEventListener("click", () => {
-    if (!match || !lobby) return;
-    setSharing(!sharing);
-    lobby.sharing(match.friend.id,
-                  { session: match.invite.session, on: sharing });
+    if (!match || !lobby || !consent) return;
+    share.disabled = true;
+    void consent.set(!consent.consent).then(() => {
+      share.disabled = false;
+      if (match) lobby?.sharing(match.friend.id, { session: match.invite.session, on: consent?.consent ?? false });
+    });
   });
+
+  function updateSharing(state: SharingState | null): void {
+    const generation = ++watchGeneration;
+    if (watchTopic !== state?.topic || !state?.shared) {
+      if (sharing) setSharing(false);
+      void watchRoom?.close(); watchRoom = null;
+    }
+    watchTopic = state?.topic ?? null;
+    if (state?.shared && match?.iInvited && !watchRoom) {
+      const topic = state.topic;
+      void WatchChannel.open(topic).then(room => {
+        if (gone || generation !== watchGeneration || !match || watchTopic !== topic) { void room.close(); return; }
+        watchRoom = room;
+        room.onViewer(() => mirror?.catchUp(view.session));
+        setSharing(true);
+      }).catch(() => { if (!gone) notice("The spectator feed could not connect."); });
+    } else if (state?.shared) setSharing(true);
+    showShare();
+  }
 
   function setSharing(on: boolean): void {
     if (!match) return;
+    if (sharing === on) return;
     sharing = on;
     mirror?.setSharing(on);
     showShare();
@@ -355,10 +436,10 @@ export function playScreen(host: HTMLElement): () => void {
    * there for why the two are not the same message.
    */
   function announceShowing(on: boolean, m = match, repeat = false): void {
-    if (!m) return;
+    if (!m || !watchTopic) return;
     const me = auth().profile?.username ?? "";
     lobby?.announceShowing({
-      topic: watchTopicFor(auth().user!.id, m.friend.id),
+      topic: watchTopic,
       players: [me, m.friend.username],
       on,
     }, repeat);
@@ -382,7 +463,7 @@ export function playScreen(host: HTMLElement): () => void {
     // Gated on the match and not on the mirror. Only the inviter carries the
     // feed, but being watched is not one of two people's decision to make: the
     // other player flips the same switch and both are told.
-    set(share, sharing ? "Stop letting friends watch" : "Let friends watch",
+    set(share, consent?.consent ? (sharing ? "Stop letting friends watch" : "Cancel sharing request") : "Let friends watch",
         match === null);
   }
 
@@ -410,26 +491,49 @@ export function playScreen(host: HTMLElement): () => void {
         !between || !view.canChooseLevel);
   }
 
-  host.append(el("div", { class: "play" },
-    el("header", { class: "bar" },
-      el("span", { class: "who" }, name),
-      status,
-      el("span", { class: "spacer" }),
-      mute,
-      hand,
-      share,
-      leave,
-      el("a", { class: "ghost", href: "#/friends" }, "Friends"),
-      el("a", { class: "ghost", href: "#/settings" }, "Settings"),
-      el("button", {
-        class: "ghost",
-        onclick: async () => { await signOut(); },
-      }, "Sign out")),
-    banner,
-    el("div", { class: "screen" }, canvas),
-    el("p", { class: "keys", id: "play-keys" },
-      "Fireboy: arrow keys. Watergirl: W, A, D. P pauses, R retries."),
-    panel, times, board));
+  const shell = new PlayShell(host, {
+    canvas, name, status, mute, banner, friends: panel, times, board,
+    input: (enabled) => view.setInputEnabled(enabled),
+    actions: [hand, share, leave, el("button", {
+      class: "ghost", onclick: async () => {
+        if (match && !confirm("Sign out and leave the game?")) return;
+        await signOut();
+      },
+    }, "Sign out")],
+  });
+  const offSave = progress.onChange(() => {
+    const error = progress.lastError ?? progress.storageError;
+    shell.saveStatus.textContent = error ? "Retry needed" : progress.waiting ? "Saving…" : "Saved";
+    shell.saveStatus.title = error ?? "Your progress";
+  });
+  shell.root.querySelector("footer")!.append(rankedStatus);
+  const otherTab = el("span", { class: "other-tab" }, "Playing in another tab. ");
+  otherTab.hidden = true;
+  const takeover = el("button", { class: "ghost" }, "Take over here");
+  otherTab.append(takeover);
+  shell.root.querySelector("footer")!.append(otherTab);
+  const lease = new MatchLease(auth().user!.id, busy => { otherTab.hidden = !busy; }, () => {
+    pending?.abort.abort(); flow.cancel(); endSession("Your match moved to another tab.");
+    notice("Your match moved to another tab.");
+  });
+  takeover.addEventListener("click", () => {
+    takeover.disabled = true;
+    void lease.takeover().then(ok => {
+      takeover.disabled = false;
+      if (ok) { shell.open("friends"); lease.release(); }
+      else notice("The other tab did not release the match. Close it and try again.");
+    });
+  });
+  on(shell.saveStatus, "click", async () => { shell.open("progress"); await progress.flushNow(); drawTimes(); });
+  shell.notify("Preparing the game…");
+  const prepare = () => {
+    void view.prepare().then(() => { if (!gone) shell.notify(""); }).catch(() => {
+      if (gone) return;
+      notice("Some game art could not be loaded.", el("button", { class: "ghost", onclick: prepare }, "Retry loading"));
+      shell.open("setup");
+    });
+  };
+  prepare();
 
   canvas.focus();
 
@@ -447,13 +551,14 @@ export function playScreen(host: HTMLElement): () => void {
 
   /** A one-line message, replacing whatever the banner was showing. */
   function notice(text: string, ...extra: (Node | string)[]): void {
+    shell.notify(text);
     noticeText = text;
     banner.hidden = false;
     clear(banner);
     banner.append(el("span", {}, text), ...extra,
       el("button", {
         class: "ghost",
-        onclick: () => { noticeText = ""; banner.hidden = true; },
+        onclick: () => { noticeText = ""; banner.hidden = true; shell.notify(""); },
       }, "Dismiss"));
   }
 
@@ -461,6 +566,7 @@ export function playScreen(host: HTMLElement): () => void {
     if (!noticeText) return;
     noticeText = "";
     banner.hidden = true;
+    shell.notify("");
   }
 
   /**
@@ -534,7 +640,10 @@ export function playScreen(host: HTMLElement): () => void {
       rows.push(el("div", { class: "row" },
         el("span", { class: "name" }, `${label} ${num}`),
         el("span", { class: "dim" }, time || "not finished"),
-        el("span", { class: "grade" }, GRADES[medal] ?? "—")));
+        // The grade carries a colour of its own. All four used to be the same
+        // orange, so the column that exists to say HOW WELL a level went said
+        // only that it had been played.
+        el("span", { class: `grade g${medal}` }, GRADES[medal] ?? "—")));
     }
 
     times.append(el("p", { class: "note" },
@@ -600,7 +709,7 @@ export function playScreen(host: HTMLElement): () => void {
       class: "ghost small",
       onclick: () => { boardOpen = !boardOpen; void drawBoard(); },
     }, boardOpen ? "Hide" : "Show");
-    board.append(el("h2", {}, "Leaderboard", toggle));
+    board.append(el("h2", {}, "Verified leaderboard", toggle));
     if (!boardOpen) return;
 
     const mode = el("select", { class: "pick" },
@@ -629,7 +738,12 @@ export function playScreen(host: HTMLElement): () => void {
     }
     const loading = el("p", { class: "note" }, "Loading…");
     board.append(loading);
-    const { data, error } = await supabase.rpc("leaderboard", { p_node: node });
+    const key = `${auth().user?.id}:${node}`;
+    const cached = leaderboardCache.get(key);
+    const { data, error } = cached && Date.now() - cached.at < 15000
+      ? { data: cached.data, error: null }
+      : await supabase.rpc("verified_leaderboard", { p_node: node });
+    if (!error) leaderboardCache.set(key, { at: Date.now(), data });
     // Anything that resolves after a newer selection has started belongs to a
     // heading that is no longer on screen.
     if (generation !== boardGeneration || gone) return;
@@ -644,14 +758,16 @@ export function playScreen(host: HTMLElement): () => void {
     }[];
     if (rows.length === 0) {
       board.append(el("p", { class: "note" },
-        "Nobody has finished this one yet."));
+        "No verified results yet. Historical personal results are preserved in your progress."));
       return;
     }
     for (const r of rows) {
       board.append(el("div", { class: r.is_mine ? "row mine" : "row" },
         el("span", { class: "rank" }, `${r.rank}.`),
         el("span", { class: "name" }, `${r.a_username} & ${r.b_username}`),
-        el("span", { class: "grade" }, r.best_time_str || "")));
+        // A time, not a grade: dimmer than the name beside it, so that the
+        // orange marking WHICH ROW IS YOURS is the only orange in the list.
+        el("span", { class: "time" }, r.best_time_str || "")));
     }
   }
 
@@ -666,7 +782,7 @@ export function playScreen(host: HTMLElement): () => void {
   // at your friends list.
   let unsubscribe: (() => void)[] = [];
 
-  getLobby().then(async (l) => {
+  getLobby().then((l) => {
     if (gone) return;
     lobby = l;
     // Anything a previous session could not finish saying. A pair result that
@@ -674,18 +790,21 @@ export function playScreen(host: HTMLElement): () => void {
     // failed, is written down rather than lost -- and this is the next
     // authenticated moment at which it can be sent. Monotonic on the server, so
     // replaying one that was in fact delivered changes nothing.
-    void drainOutbox();
+    void drainOutbox().catch(() => { /* The save status exposes the retry on its own next flush. */ });
     // The list may be stale if a friendship was accepted on another screen.
-    await l.refresh();
+    void l.refresh();
     l.setActivity("in_lobby");
-    unsubscribe.push(l.onChange((friends) => drawPanel(friends)));
+    unsubscribe.push(l.onChange((friends) => {
+      drawPanel(friends);
+      if (match && !friends.some(f => f.id === match!.friend.id && f.status === "accepted")) endSession("This friendship is no longer available.");
+    }));
     unsubscribe.push(l.onInvite((invite, from) => showInvite(invite, from)));
-    unsubscribe.push(l.onResume((invite) => void showResume(invite)));
+    unsubscribe.push(l.onResume((invite, from) => void showResume(invite, from)));
     unsubscribe.push(l.onHandover((h) => {
-      if (match && match.invite.session === h.session) setChooser(h.chooser);
+      if (match && match.invite.session === h.session && match.invite.attempt === h.attempt && h.from === match.friend.id && match.chooser === h.from && h.chooser === auth().user?.id && !view.session?.running) setChooser(h.chooser);
     }));
     unsubscribe.push(l.onSharing((x) => {
-      if (match && match.invite.session === x.session) setSharing(x.on);
+      if (match && match.invite.session === x.session && x.from === match.friend.id) void consent?.refresh();
     }));
     unsubscribe.push(l.onShowing((x) => {
       if (x.on) showing.set(x.topic, { ...x, heard: Date.now() });
@@ -712,9 +831,12 @@ export function playScreen(host: HTMLElement): () => void {
     unsubscribe.push(() => clearInterval(stale));
     // Their invitation is gone: take the banner down whether or not this side
     // had got as far as pressing anything.
-    unsubscribe.push(l.onCancel((session, from) => {
-      if (!pending || pending.session !== session) return;
+    unsubscribe.push(l.onCancel((session, from, attempt) => {
+      if (!pending || pending.session !== session || pending.friendId !== from.id || pending.attempt !== attempt) return;
+      flow.cancel();
+      pending.abort.abort();
       pending = null;
+      shell.invite(false);
       void progress.release();
       notice(`${from.username} called that off.`);
     }));
@@ -728,9 +850,11 @@ export function playScreen(host: HTMLElement): () => void {
   });
 
   function drawPanel(friends: FriendState[]): void {
-    const accepted = friends.filter((f) => f.status === "accepted");
+    shell.friends(friends.filter(f => f.status === "accepted" && f.activity !== null).length);
+    const accepted = friends.filter((f) => f.status === "accepted").sort((a, b) => Number(b.activity !== null) - Number(a.activity !== null) || a.username.localeCompare(b.username));
     clear(panel);
     panel.append(el("h2", {}, "Play together"));
+    if (lobby?.lastError) panel.append(el("p", { class: "error" }, "Friends could not refresh. ", el("button", { class: "ghost", onclick: () => { void lobby?.refresh(); } }, "Retry")));
 
     if (accepted.length === 0) {
       panel.append(el("p", { class: "note" },
@@ -747,15 +871,22 @@ export function playScreen(host: HTMLElement): () => void {
         el("span", { class: "name" }, f.username),
         el("span", { class: "dim" },
           f.activity === "in_game" ? "in a game"
-          : f.activity ? "online" : "offline"),
+          : f.activity ? "online" : f.connection === "connecting" ? "connecting" : f.connection === "unavailable" ? "unavailable" : "offline"),
         el("button", {
           // Paired with somebody is paired with somebody, level or no level:
           // between levels the session is still up and still theirs. Leaving is
           // what makes this button live again, and there is a button for that.
           class: "ghost",
-          disabled: !online || match !== null || pending !== null,
-          onclick: () => showInviteForm(f),
-        }, "Invite")));
+          // Named for the row it is in. The label is the same four letters on
+          // every one of them, and the name that says WHICH friend it invites
+          // is a sibling span -- so a screen reader walking this list heard
+          // "Invite, Invite, Invite" fifty times with no way to tell them
+          // apart. The visible text stays short; only the accessible name is
+          // the long one.
+          "aria-label": `${!online && f.connection === "unavailable" ? "Connect to" : "Invite"} ${f.username}`,
+          disabled: (!online && f.connection !== "unavailable") || match !== null || pending !== null,
+          onclick: () => { if (!online) lobby?.prioritize(f.id); else showInviteForm(f); },
+        }, !online && f.connection === "unavailable" ? "Connect" : "Invite")));
     }
 
     // Games our friends have opened. Pushed to us when they turn watching on,
@@ -771,6 +902,8 @@ export function playScreen(host: HTMLElement): () => void {
             // A class, not just the label. "Let friends watch" is also a button
             // with "watch" in it, and a text selector cannot tell them apart.
             class: "ghost watch", disabled: match !== null,
+            // Named for its row, for the same reason the invite buttons are.
+            "aria-label": `Watch ${s.players.join(" and ")}`,
             onclick: () => { location.hash = `/watch?t=${topic}`; },
           }, "Watch")));
       }
@@ -779,12 +912,22 @@ export function playScreen(host: HTMLElement): () => void {
 
   /** Choose the level and the roles, then send the invitation. */
   function showInviteForm(friend: FriendState): void {
+    if (match || pending) return;
+    flow.set("configuring");
+    lobby?.prioritize(friend.id);
+    shell.open("setup");
+    const selection = loadSelection(auth().user!.id, friend.id);
     const mode = el("select", { class: "pick" },
       ...MODES.map(([value, label]) => el("option", { value }, label)));
     const num = el("select", { class: "pick" });
     const roles = el("select", { class: "pick" },
       el("option", { value: "me" }, `${auth().profile?.username} is Fireboy`),
       el("option", { value: "them" }, `${friend.username} is Fireboy`));
+    mode.setAttribute("aria-label", "Game mode");
+    num.setAttribute("aria-label", "Level");
+    roles.setAttribute("aria-label", "Characters");
+    mode.value = selection.mode;
+    roles.value = selection.iAmFireboy ? "me" : "them";
 
     const fillNumbers = () => {
       const count = MODES.find(([v]) => v === mode.value)?.[2] ?? 1;
@@ -792,6 +935,7 @@ export function playScreen(host: HTMLElement): () => void {
         el("option", { value: String(i + 1) }, `Level ${i + 1}`)));
     };
     fillNumbers();
+    num.value = String(selection.num);
     mode.addEventListener("change", fillNumbers);
 
     const say = el("span", { class: "dim" });
@@ -803,10 +947,13 @@ export function playScreen(host: HTMLElement): () => void {
     // behind it and the game started anyway.
     const stop = el("button", { class: "ghost" }, "Cancel");
     stop.addEventListener("click", () => {
+      lease.release();
+      flow.cancel();
       if (pending) { pending.abort.abort(); pending = null; }
       void progress.release();
       banner.hidden = true;
       drawPanel(lobby?.list ?? []);
+      shell.open("friends");
     });
 
     banner.hidden = false;
@@ -818,23 +965,33 @@ export function playScreen(host: HTMLElement): () => void {
 
     on(go, "click", async () => {
       go.disabled = true;
-      const abort = new AbortController();
+      const abort = flow.start("inviting");
       // The session id belongs to the lobby, which mints it. Nothing here needs
       // it: a cancel of this invitation arrives as a rejection below.
-      pending = { session: null, abort };
+      pending = { session: null, friendId: friend.id, abort };
+      drawPanel(lobby?.list ?? []);
       try {
+        if (!await lease.acquire()) throw new Error("Playing in another tab. Use Take over here to continue.");
+        if (!flow.owns(abort) || gone) { lease.release(); return; }
         say.textContent = "loading your progress…";
-        await progress.adopt(friend.id);
+        await progress.adopt(friend.id, abort.signal);
+        await view.prepareLevel(mode.value, Number(num.value), abort.signal);
+        if (!flow.owns(abort) || gone) return;
+        try { localStorage.setItem(selectionKey(auth().user!.id, friend.id), JSON.stringify({ mode: mode.value, num: Number(num.value), iAmFireboy: roles.value === "me" })); } catch { /* optional preference */ }
         const ready = await lobby!.invite(friend.id, {
           mode: mode.value,
           num: Number(num.value),
           iAmFireboy: roles.value === "me",
           signal: abort.signal,
-          onProgress: (what) => { say.textContent = what; },
+          onProgress: (what) => { if (flow.owns(abort)) say.textContent = what; },
         });
+        if (!flow.finish(abort, "playing") || gone) { ready.transport.close(); return; }
         pending = null;
         begin(ready, ready.invite);
       } catch (e) {
+        if (!flow.owns(abort) || gone) return;
+        flow.finish(abort, "configuring");
+        lease.release();
         pending = null;
         void progress.release();
         say.textContent = (e as Error).message;
@@ -848,15 +1005,25 @@ export function playScreen(host: HTMLElement): () => void {
     if (match) return;                 // already playing
     // One at a time. Two people inviting each other in the same breath used to
     // replace one banner with the other and start two games.
-    if (pending) return;
+    if (pending) {
+      // The lower account id keeps its outbound offer; both peers make the same decision.
+      if (pending.friendId !== from.id || auth().user!.id < from.id || pending.session !== null) {
+        lobby?.decline(invite); return;
+      }
+      flow.cancel();
+      pending = null;
+      void progress.release();
+    }
 
     const mine = invite.fireboy === auth().user?.id;
     const say = el("span", { class: "dim" });
-    const yes = el("button", { class: "primary small" }, "Play");
-    const no = el("button", { class: "ghost" }, "Not now");
+    const yes = el("button", { class: "primary small" }, "Accept");
+    const no = el("button", { class: "ghost" }, "Decline");
 
-    const abort = new AbortController();
-    pending = { session: invite.session, abort };
+    const abort = flow.start("accepting");
+    pending = { session: invite.session, attempt: invite.attempt, friendId: from.id, abort };
+    shell.invite(true);
+    shell.open("setup");
 
     // "Not now" is an answer, and it now gets sent. Silence used to be the only
     // way to decline, and silence is what somebody who has walked away from
@@ -864,13 +1031,16 @@ export function playScreen(host: HTMLElement): () => void {
     // either way. After "Play" the same button is the way back out of a
     // handshake, so it stays and only changes its name.
     no.addEventListener("click", () => {
+      lease.release();
       // Said out loud, always. Aborting is what stops a handshake we may have
       // started; the decline is what stops THEM waiting, and in the usual case
       // -- the banner is up and the answer is no -- there is no handshake and
       // this is the only thing that travels at all.
       lobby?.decline(invite);
       abort.abort();
+      flow.cancel();
       pending = null;
+      shell.invite(false);
       void progress.release();
       banner.hidden = true;
       drawPanel(lobby?.list ?? []);
@@ -889,25 +1059,33 @@ export function playScreen(host: HTMLElement): () => void {
       yes.disabled = true;
       no.textContent = "Cancel";
       try {
+        if (!await lease.acquire()) throw new Error("Playing in another tab. Use Take over here to continue.");
+        if (!flow.owns(abort) || gone) { lease.release(); return; }
         // Adopted before answering, not after. Saying "ready" is what tells the
         // other side to send Start, and the level must not begin against this
         // browser's solo progress -- `Recuent` compares the run it has just
         // finished against what is stored to decide whether it was an
         // improvement, and it has to be the PAIR's best it compares against.
         say.textContent = "loading your progress…";
-        await progress.adopt(from.id);
+        await progress.adopt(from.id, abort.signal);
+        await view.prepareLevel(invite.mode, invite.num, abort.signal);
+        if (!flow.owns(abort) || gone) return;
+        flow.set("connecting");
         const ready = await lobby!.join(invite, {
           signal: abort.signal,
           onProgress: (what) => { say.textContent = what; },
         });
+        if (!flow.finish(abort, "playing") || gone) { ready.transport.close(); return; }
         pending = null;
         begin(ready, invite);
       } catch (e) {
+        if (!flow.owns(abort) || gone) return;
+        lease.release();
         pending = null;
         void progress.release();
         say.textContent = (e as Error).message;
         yes.disabled = false;
-        no.textContent = "Not now";
+        no.textContent = "Decline";
         drawPanel(lobby?.list ?? []);
       }
     });
@@ -915,26 +1093,10 @@ export function playScreen(host: HTMLElement): () => void {
 
   /** Hand the clock to the session, and start the level if we are the host. */
   function begin(ready: Ready, invite: Invite): void {
-    // Opened once per match rather than per level: it is the pair's topic, not
-    // the level's, and joining it again on every Start would be a subscription
-    // churned for nothing.
-    if (!watchRoom && ready.host) {
-      // Joining is a round trip, and the match can end inside one -- somebody
-      // leaves, the screen is navigated away from. A channel that arrives after
-      // that has nobody holding it, so it is closed here rather than assigned
-      // to a field the teardown has already read.
-      const forSession = invite.session;
-      void WatchChannel.open(watchTopicFor(auth().user!.id, ready.friend.id))
-        .then((w) => {
-          if (gone || match?.invite.session !== forSession) {
-            void w.close();
-            return;
-          }
-          watchRoom = w;
-          showShare();
-        })
-        .catch((e) => console.warn("could not open the watch topic:", e));
-    }
+    if (gone) { ready.transport.close(); return; }
+    shell.invite(false);
+    shell.notify("");
+    shell.close(true);
     linkKind = ready.kind === "webrtc" ? "direct" : "relay";
     partner = ready.friend;
     // Whoever was picking before this link died is still picking. Only a match
@@ -946,6 +1108,7 @@ export function playScreen(host: HTMLElement): () => void {
       friend: ready.friend, invite, slot: ready.slot, iInvited: ready.host,
       chooser,
     };
+    consent ??= new MatchSharing(invite.session, ready.friend.id, updateSharing);
     banner.hidden = true;
     noticeText = "";
     stalling = false;
@@ -971,6 +1134,7 @@ export function playScreen(host: HTMLElement): () => void {
     }
 
     const session = view.join(transport, ready.slot, {
+      ...(!invite.between ? { initialLevel: { mode: ready.mode, num: ready.num } } : {}),
       // The inviter picked the first level; after that it is whoever the pair
       // last agreed on, which a reconnection must not quietly undo.
       canChooseLevel: chooser === auth().user?.id,
@@ -979,7 +1143,7 @@ export function playScreen(host: HTMLElement): () => void {
       onQuit: (bySlot, forGood) => quit(bySlot, forGood),
       onLinkDown: (why) => lost(why),
     });
-    if (ready.host) session.requestStart(ready.mode, ready.num);
+    if (ready.host && !invite.between) session.requestStart(ready.mode, ready.num);
     showShare();
     canvas.focus();
     drawPanel(lobby?.list ?? []);
@@ -998,6 +1162,7 @@ export function playScreen(host: HTMLElement): () => void {
   function lost(why: string): void {
     if (!match || rebuilding) return;
     console.info("the link is gone:", why);
+    rememberLevel();
     view.dropLink();
     void reconnect();
   }
@@ -1019,6 +1184,7 @@ export function playScreen(host: HTMLElement): () => void {
     if (!match || rebuilding) return;
     const abort = new AbortController();
     rebuilding = abort;
+    flow.set("reconnecting");
     const them = match.friend.username;
 
     if (!match.iInvited) {
@@ -1053,7 +1219,7 @@ export function playScreen(host: HTMLElement): () => void {
           { ...match.invite, relay: linkKind === "relay" },
           { signal: abort.signal });
         rebuilding = null;
-        begin(ready, match.invite);
+        begin(ready, ready.invite);
         return;
       } catch (e) {
         if (abort.signal.aborted) return;
@@ -1071,8 +1237,8 @@ export function playScreen(host: HTMLElement): () => void {
   }
 
   /** The other side is rebuilding the link. Answer it, without asking anybody. */
-  async function showResume(invite: Invite): Promise<void> {
-    if (!match || match.invite.session !== invite.session) return;
+  async function showResume(invite: Invite, from: FriendState): Promise<void> {
+    if (!match || from.id !== match.friend.id || match.invite.session !== invite.session || invite.fireboy !== match.invite.fireboy || invite.from !== match.invite.from || !invite.attempt) return;
     // The inviter offers and the other side answers, the same way round as the
     // first time -- so a resume arriving HERE, at the inviter, is not an offer.
     // It is the other side saying their link is gone and asking for one.
@@ -1082,15 +1248,16 @@ export function playScreen(host: HTMLElement): () => void {
     // this side may still believe it has a perfectly good link -- and building
     // the replacement on top of it left the old session and its transport
     // running, unreferenced, for the rest of the match.
-    if (match.iInvited) { view.dropLink(); void reconnect(); return; }
-    if (rebuilding && rebuilding.signal.aborted) return;
-    const abort = rebuilding ?? new AbortController();
+    if (match.iInvited) { rememberLevel(); view.dropLink(); void reconnect(); return; }
+    rebuilding?.abort();
+    const abort = new AbortController();
     rebuilding = abort;
     // A resume can arrive before this side has even noticed the link died --
     // the peer connection fails at each end on its own schedule.
     view.dropLink();
     try {
       const ready = await lobby!.join(invite, { signal: abort.signal });
+      if (abort.signal.aborted || rebuilding !== abort || !match || match.invite.session !== invite.session) { ready.transport.close(); return; }
       rebuilding = null;
       begin(ready, invite);
     } catch (e) {
@@ -1136,6 +1303,8 @@ export function playScreen(host: HTMLElement): () => void {
    * out of a reconnection that is not coming.
    */
   function endSession(why: string): void {
+    consent?.close(); consent = null; watchGeneration++;
+    lease.release();
     if (!match) return;
     // Held, because the announcement below is addressed BY topic and the topic
     // is derived from who the two of us are. Reading `watchRoom?.topic` instead
@@ -1143,6 +1312,8 @@ export function playScreen(host: HTMLElement): () => void {
     // published an empty topic that matched nothing in anybody's list, and the
     // row for a game that had ended sat there until it aged out.
     const was = match;
+    flow.cancel();
+    flow.set("ended");
     match = null;
     inGame = false;
     rebuilding?.abort();
@@ -1183,11 +1354,29 @@ export function playScreen(host: HTMLElement): () => void {
   // has gone. Neither is guaranteed, which is why the result is also written to
   // a durable outbox -- see `pairsave.ts`.
   const onHide = () => {
+    lease.release();
     rebuilding?.abort();
     progress.beacon();
     if (view.session) view.leave();
   };
   addEventListener("pagehide", onHide);
+  const onShow = (event: PageTransitionEvent) => {
+    if (event.persisted && match) endSession("This tab was suspended. Invite your friend again to reconnect.");
+  };
+  addEventListener("pageshow", onShow);
+  const visibility = () => {
+    view.clearInput();
+    if (document.hidden) {
+      // Idempotent forced pause; returning never automatically unpauses either player.
+      view.pauseForSuspension();
+      if (consent?.consent) void consent.set(false);
+    } else {
+      void lobby?.refresh(); void consent?.refresh(); void ranking.flush();
+      if (match) notice("Press P when you are both ready to continue.");
+    }
+  };
+  document.addEventListener("visibilitychange",visibility);
+  const refreshFriends = setInterval(() => { if (!document.hidden) void lobby?.refresh(); },15000);
 
   // Tearing the view down matters: it owns a requestAnimationFrame loop, window
   // key listeners and an audio context. The LOBBY is deliberately left alone --
@@ -1195,7 +1384,16 @@ export function playScreen(host: HTMLElement): () => void {
   // to each other every time somebody opened their friends list.
   return () => {
     gone = true;
+    flow.cancel();
+    shell.destroy();
+    consent?.close(); consent = null; watchGeneration++;
+    lease.close();
+    ranking.close();
+    offSave();
     removeEventListener("pagehide", onHide);
+    removeEventListener("pageshow", onShow);
+    document.removeEventListener("visibilitychange",visibility);
+    clearInterval(refreshFriends);
     rebuilding?.abort();
     rebuilding = null;
     if (beating !== null) { clearInterval(beating); beating = null; }
@@ -1216,9 +1414,16 @@ export function playScreen(host: HTMLElement): () => void {
     // Release before destroy: it sends whatever the pair earned and puts the
     // solo progress back, and `view.destroy()` flushes what it finds.
     void progress.release();
+    progress.close();
     view.destroy();
     for (const off of unsubscribe) off();
     unsubscribe = [];
     lobby?.setActivity("online");
   };
+
+  function rememberLevel(): void {
+    if (!match || !view.session) return;
+    const current = view.session.selection;
+    match.invite = { ...match.invite, mode: current.mode, num: current.num, between: !view.session.running };
+  }
 }

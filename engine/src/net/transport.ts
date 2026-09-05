@@ -37,6 +37,8 @@ export interface Transport {
   onClosed?(fn: (why: string) => void): void;
   /** Best-effort round-trip estimate in ms, or null while unknown. */
   readonly rttMs: number | null;
+  /** Wire messages, when the transport exposes a counter. */
+  readonly sent?: number;
   close(): void;
 }
 

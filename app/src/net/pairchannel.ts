@@ -22,6 +22,7 @@
  */
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "../supabase.js";
+import { ENGINE_VERSION } from "@engine/version.js";
 
 /** What a friend is doing, as far as their client last said. */
 export type Activity = "online" | "in_lobby" | "in_game";
@@ -42,6 +43,7 @@ export interface Presence {
  */
 export interface Invite {
   session: string;
+  attempt?: string;
   mode: string;
   num: number;
   fireboy: string;
@@ -57,6 +59,7 @@ export interface Invite {
    * have since moved networks their peer connection back.
    */
   relay?: boolean;
+  between?: boolean;
 }
 
 /** Events on the wire. Kept short: they are typed on every message. */
@@ -109,6 +112,7 @@ const DOWN_GRACE_MS = 6000;
 
 export interface InviteReply {
   session: string;
+  attempt?: string;
   /**
    * False is a real answer -- "not now" -- and not merely the absence of yes.
    *
@@ -131,6 +135,7 @@ export interface InviteReply {
  */
 export interface InviteCancel {
   session: string;
+  attempt?: string;
   from: string;
 }
 
@@ -155,6 +160,7 @@ export interface InviteCancel {
  */
 export interface Sharing {
   session: string;
+  from?: string;
   on: boolean;
 }
 
@@ -177,6 +183,8 @@ export interface Showing {
 
 export interface Handover {
   session: string;
+  attempt?: string;
+  from?: string;
   /** The user id of whoever may start a level from here on. */
   chooser: string;
 }
@@ -286,8 +294,10 @@ function asInvite(payload: unknown): Invite | null {
   // any further than this function.
   return {
     session: p.session, mode: p.mode as string, num,
+    ...(isUuid(p.attempt) ? { attempt: p.attempt } : {}),
     fireboy: p.fireboy, from: p.from,
     ...(p.relay === true ? { relay: true } : {}),
+    ...(p.between === true ? { between: true } : {}),
   };
 }
 
@@ -295,21 +305,21 @@ function asReply(payload: unknown): InviteReply | null {
   const p = payload as Record<string, unknown> | null;
   if (!p || typeof p !== "object") return null;
   if (!isSession(p.session) || typeof p.accepted !== "boolean") return null;
-  return { session: p.session, accepted: p.accepted, ready: p.ready === true };
+  return { session: p.session, accepted: p.accepted, ready: p.ready === true, ...(isUuid(p.attempt) ? { attempt: p.attempt } : {}) };
 }
 
 function asCancel(payload: unknown): InviteCancel | null {
   const p = payload as Record<string, unknown> | null;
   if (!p || typeof p !== "object") return null;
   if (!isSession(p.session) || !isUuid(p.from)) return null;
-  return { session: p.session, from: p.from };
+  return { session: p.session, from: p.from, ...(isUuid(p.attempt) ? { attempt: p.attempt } : {}) };
 }
 
 function asHandover(payload: unknown): Handover | null {
   const p = payload as Record<string, unknown> | null;
   if (!p || typeof p !== "object") return null;
   if (!isSession(p.session) || !isUuid(p.chooser)) return null;
-  return { session: p.session, chooser: p.chooser };
+  return { session: p.session, chooser: p.chooser, ...(isUuid(p.attempt) ? { attempt: p.attempt } : {}) };
 }
 
 function asSharing(payload: unknown): Sharing | null {
@@ -376,6 +386,21 @@ export class PairChannel {
    * outcome than ignoring them.
    */
   private bad = 0;
+  private receipts = new Set<string>();
+  private delivery = new Map<string, ReturnType<typeof setInterval>>();
+  private budgetAt = Date.now();
+  private budget = 0;
+  private unpack(payload: unknown): { id: string; data: unknown } | null {
+    if (Date.now() - this.budgetAt > 10000) { this.budgetAt = Date.now(); this.budget = 0; }
+    if (++this.budget > 512) {
+      for (const fn of this.statusHandlers) fn("PROTOCOL_ERROR");
+      void this.close(); return null;
+    }
+    const p = payload as Record<string, unknown> | null;
+    const friend = this.topic.split(":").find(id => id !== "pair" && id !== this.me.userId);
+    if (!p || p.v !== 2 || p.build !== ENGINE_VERSION || p.from !== friend || !isUuid(p.id)) return null;
+    return { id: p.id, data: p.data };
+  }
 
   /** Note a message that did not parse. */
   rubbish(event: string): void {
@@ -490,9 +515,15 @@ export class PairChannel {
     const on = <T>(event: string, parse: (p: unknown) => T | null,
                    handlers: () => Set<(v: T) => void>) => {
       channel.on("broadcast", { event }, ({ payload }) => {
-        if (pair.tooMuchRubbish()) return;
-        const value = parse(payload);
+        if (generation !== pair.generation || pair.closing || pair.tooMuchRubbish()) return;
+        const envelope = pair.unpack(payload);
+        if (!envelope) return;
+        const value = parse(envelope.data);
         if (value === null) { pair.rubbish(event); return; }
+        void channel.send({ type: "broadcast", event: "ack", payload: { v: 2, build: ENGINE_VERSION, from: pair.me.userId, id: envelope.id } }).catch(() => {});
+        if (pair.receipts.has(envelope.id)) return;
+        pair.receipts.add(envelope.id);
+        if (pair.receipts.size > 256) pair.receipts.delete(pair.receipts.values().next().value!);
         for (const fn of handlers()) fn(value);
       });
     };
@@ -508,11 +539,21 @@ export class PairChannel {
     on(HANDOVER, asHandover, () => pair.handoverHandlers);
     on(SHARING, asSharing, () => pair.sharingHandlers);
     on(SHOWING, asShowing, () => pair.showingHandlers);
+    channel.on("broadcast", { event: "ack" }, ({ payload }) => {
+      const message = pair.unpack(payload);
+      if (!message) return;
+      const timer = pair.delivery.get(message.id);
+      if (timer !== undefined) clearInterval(timer);
+      pair.delivery.delete(message.id);
+    });
     channel.on("broadcast", { event: BYTES }, ({ payload }) => {
       // One message can carry several packets; see RealtimeTransport. The batch
       // is capped and each entry is decoded inside a catch, so a malformed
       // message costs a bounded amount of work and nothing else.
-      if (pair.tooMuchRubbish()) return;
+      if (generation !== pair.generation || pair.closing || pair.tooMuchRubbish()) return;
+      const envelope = pair.unpack(payload);
+      if (!envelope) return;
+      payload = envelope.data;
       // Counted against the peer only when the message was not the right SHAPE.
       // An empty batch is pointless rather than malformed, and counting it
       // would let a peer trip the circuit breaker with a message this client
@@ -646,7 +687,7 @@ export class PairChannel {
     if (this.closing || this.rejoinTimer !== null) return;
     // Backing off, and capped: the usual cause is a limit at the far end, and
     // hammering it is the one response guaranteed not to help.
-    const wait = Math.min(1000 * 2 ** this.attempts++, 30000);
+    const wait = Math.min(1000 * 2 ** this.attempts++, 30000) * (0.75 + Math.random() * 0.5);
     this.rejoinTimer = setTimeout(() => {
       this.rejoinTimer = null;
       if (this.closing) return;
@@ -664,6 +705,7 @@ export class PairChannel {
 
   onPresence(fn: (all: Presence[]) => void): () => void {
     this.presenceHandlers.add(fn);
+    fn(Object.values(this.live.presenceState<Presence>()).flat().map(asPresence).filter((p): p is Presence => p !== null));
     return () => this.presenceHandlers.delete(fn);
   }
 
@@ -792,6 +834,7 @@ export class PairChannel {
   private held: { event: string; payload: unknown }[] = [];
 
   send(event: string, payload: unknown): void {
+    if (this.closing) return;
     // Held rather than sent while the channel is between subscriptions. The
     // client does not refuse a send on a channel that is only joining -- it
     // quietly falls back to the REST endpoint and returns "ok", and REST
@@ -805,7 +848,21 @@ export class PairChannel {
       return;
     }
     // The result is worth looking at for the same reason.
-    void this.live.send({ type: "broadcast", event, payload })
+    const id = crypto.randomUUID();
+    const envelope = { v: 2, build: ENGINE_VERSION, from: this.me.userId, id, data: payload };
+    if (event !== BYTES && event !== SHOWING && this.delivery.size < 32) {
+      let tries = 0;
+      const timer = setInterval(() => {
+        if (++tries > 10 || this.closing) {
+          clearInterval(timer); this.delivery.delete(id);
+          if (!this.closing) for (const fn of this.statusHandlers) fn("CONTROL_TIMEOUT");
+          return;
+        }
+        if (this.live.state === "joined") void this.live.send({ type: "broadcast", event, payload: envelope }).catch(() => {});
+      }, 1000);
+      this.delivery.set(id,timer);
+    }
+    void this.live.send({ type: "broadcast", event, payload: envelope })
       .then((status) => {
         if (status !== "ok") console.warn(`${event} did not send: ${status}`);
       })
@@ -865,6 +922,8 @@ export class PairChannel {
   async close(): Promise<void> {
     if (this.closing) return;
     this.closing = true;
+    for (const timer of this.delivery.values()) clearInterval(timer);
+    this.delivery.clear(); this.receipts.clear(); this.held = []; this.heldBytes = null;
     if (this.rejoinTimer !== null) clearTimeout(this.rejoinTimer);
     this.rejoinTimer = null;
     if (this.presenceTimer !== null) clearTimeout(this.presenceTimer);

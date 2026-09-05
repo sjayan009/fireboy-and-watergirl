@@ -18,7 +18,10 @@
     "test:db": "npm run db:test",
     "test:deployed": "node app/test/deployed.mjs",
     "test:servers": "node test/servers.mjs",
-    "test:docs": "node test/docs.mjs"
+    "test:docs": "node test/docs.mjs",
+    "test:play": "node app/test/run-play.mjs",
+    "test:verifier": "node worker/test.mjs",
+    "test:play-db": "node supabase/test/production-play.mjs"
   },
   "description": "Fireboy & Watergirl: The Forest Temple, recovered from the 2009 SWF and rebuilt for online co-op.",
   "dependencies": {

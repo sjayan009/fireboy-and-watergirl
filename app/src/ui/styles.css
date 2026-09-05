@@ -12,6 +12,29 @@
   --water: #35a7d8;
   --bad: #e2564a;
   --radius: 10px;
+
+  /*
+   * The grades the results board awards, which used to be one colour.
+   *
+   * A, B, C and "never finished" were all `--fire`, so the column that exists
+   * to say how well a level went said only that a level had been played. Gold,
+   * silver and bronze are what the grades already mean to anybody who has seen
+   * a results screen, and the dash is dimmed out of the reading order entirely.
+   */
+  --gold: #f0c14b;
+  --silver: #c8c3bb;
+  --bronze: #c98a52;
+
+  /*
+   * One press duration and one settle, so nothing on screen moves on a timing
+   * nobody chose. 100ms is under the threshold where a press stops feeling
+   * attached to the finger; 260ms is the slowest thing here and only arrivals
+   * use it. Both are cut to nothing under `prefers-reduced-motion`.
+   */
+  --press: 100ms;
+  --settle: 260ms;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
   color-scheme: dark;
 }
 
@@ -41,12 +64,21 @@
  */
 html { scrollbar-gutter: stable; }
 
+/*
+ * The type scale is relative, so that somebody who has made their browser text
+ * bigger gets a bigger app rather than the same app with the words clipped.
+ *
+ * `15px` was the whole scale, and every size under it was another fixed pixel
+ * value -- which meant the browser's own text setting changed nothing at all.
+ * 0.9375rem is that same 15px at the default setting and grows with the
+ * setting; the sizes below are `em` and `rem` for the same reason.
+ */
 html, body {
   margin: 0;
   min-height: 100%;
   background: var(--bg);
   color: var(--ink);
-  font: 15px/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  font: 0.9375rem/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
 }
 
 body {
@@ -73,24 +105,37 @@ body {
   border-radius: var(--radius);
 }
 
+/*
+ * Tracking is a function of size, so there is no one value that is right here.
+ *
+ * Letters read as drifting apart the larger they are set and as crowding the
+ * smaller, so the heading tightens and the small print opens up very slightly.
+ * A single `letter-spacing` for the whole app is wrong at one end or the other.
+ */
 .card h1 {
   margin: 0 0 6px;
-  font-size: 21px;
-  letter-spacing: -0.01em;
+  font-size: 1.4rem;
+  line-height: 1.2;
+  letter-spacing: -0.018em;
 }
 
 .card h2 {
   margin: 28px 0 4px;
-  font-size: 14px;
+  font-size: 0.875rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--dim);
 }
 
-.note { margin: 8px 0 0; color: var(--dim); font-size: 13px; }
+.note {
+  margin: 8px 0 0;
+  color: var(--dim);
+  font-size: 0.8125rem;
+  letter-spacing: 0.005em;
+}
 .note a { color: var(--water); }
 .note code {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--ink);
   background: #0f0d0b;
   padding: 2px 5px;
@@ -103,7 +148,7 @@ body {
 form { margin-top: 18px; display: grid; gap: 12px; }
 
 .field { display: grid; gap: 5px; }
-.field span { font-size: 13px; color: var(--dim); }
+.field span { font-size: 0.8125rem; color: var(--dim); }
 
 .field input {
   width: 100%;
@@ -129,6 +174,102 @@ button {
 
 button:disabled { cursor: default; opacity: 0.6; }
 
+/*
+ * A focus ring on everything that can be focused.
+ *
+ * Only the text fields had one. Every button, link and picker was left with
+ * whatever the user agent draws, which on this background is a dark outline on
+ * a dark panel -- so tabbing through the header was moving an invisible
+ * cursor. `:where()` keeps this at zero specificity so the field's own ring,
+ * which is a border rather than an outline, still wins.
+ */
+:where(button, a, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--fire);
+  outline-offset: 2px;
+}
+
+/*
+ * The canvas is a tab stop and said nothing about it.
+ *
+ * `#stage` sets `outline: none` deliberately -- a ring drawn tight around the
+ * stage cuts across the picture -- so the ring goes on the frame instead, which
+ * is the thing a player sees as the edge of the game.
+ */
+.screen:has(#stage:focus-visible) { outline: none; }
+
+/* The play surface has a height budget. Secondary content scrolls in its panel. */
+html:has(.play-shell) { scrollbar-gutter: auto; overflow: hidden; }
+#app:has(.play-shell) { padding: 8px; height: 100dvh; min-height: 0; align-items: stretch; }
+.play.play-shell { width: 100%; max-width: none; height: 100%; min-height: 0; gap: 8px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.play-shell:fullscreen { padding: 8px; background: var(--bg); }
+.play-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.play-toolbar > button { min-height: 36px; }
+.play-identity { display: flex; flex-direction: column; flex: 1; min-width: 160px; font-size: 13px; }
+.play-identity .status { color: var(--dim); }
+.play-workspace { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; position: relative; }
+.game-viewport { min-width: 0; min-height: 0; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.play-shell .screen { flex: none; border: 1px solid var(--edge); border-radius: 6px; aspect-ratio: 4 / 3; outline: none; }
+.play-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--dim); font-size: 12px; }
+.play-footer .ghost { font-size: 12px; padding: 2px 8px; }
+.focus-hint { border-bottom: 2px solid transparent; }
+.play-shell:has(#stage:focus-visible) .focus-hint { color: var(--ink); border-color: var(--dim); }
+.play-drawer { position: absolute; z-index: 5; inset: 0 0 0 auto; width: min(320px, 100%); min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; box-shadow: -8px 0 24px #0005; }
+.drawer-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; }
+.drawer-heading h2 { margin: 0; font-size: 16px; }
+.drawer-tabs { display: flex; padding: 0 8px 8px; border-bottom: 1px solid var(--edge); gap: 2px; }
+.drawer-tabs .ghost { font-size: 12px; padding: 6px; }
+/*
+ * Which panel you are looking at.
+ *
+ * Two channels, not one: the underline is what a sighted reader sees, and it
+ * sits on the same edge the strip already draws so nothing moves when it
+ * appears. `aria-current` carries the same fact to a screen reader -- see
+ * `PlayShell.open`. Colour alone would say it to neither in a high-contrast
+ * mode that drops backgrounds.
+ */
+.drawer-tabs .ghost.current {
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--fire);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.drawer-content { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px; }
+.drawer-content .panel, .drawer-content .card { padding: 0; border: 0; background: transparent; max-width: none; }
+.drawer-content .panel + .panel { margin-top: 20px; }
+.drawer-content .banner { flex-direction: column; align-items: stretch; }
+.drawer-content .banner .pick { width: 100%; }
+.drawer-content .row { flex-wrap: wrap; gap: 6px; }
+.drawer-content .row .name { overflow-wrap: anywhere; }
+.menu-actions { display: grid; gap: 12px; }
+.menu-actions h3 { margin-bottom: 0; }
+.play-toast { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); padding: 8px 12px; border-radius: 6px; color: var(--ink); background: #1e1a15ee; font-size: 13px; pointer-events: none; }
+.play-toast:empty { display: none; }
+@media (min-width: 1100px) {
+  .drawer-open .play-workspace { grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; }
+  .play-drawer { position: static; width: 320px; box-shadow: none; }
+}
+@media (max-width: 600px) {
+  .play-identity { flex-basis: 100%; }
+  .play-toolbar { gap: 4px; }
+  .play-toolbar > button { flex: 1; }
+}
+
+/*
+ * Feedback on the PRESS rather than on the release.
+ *
+ * Nothing here had an `:active` state, so a button answered a click only by
+ * whatever it went on to do -- and "Send invite" does a handshake over the
+ * network before anything changes on screen, which is a second or more of a
+ * control that looks untouched. The scale is small enough to read as the
+ * surface giving way rather than as the layout moving.
+ */
+button, a.ghost {
+  transition: background-color var(--press) var(--ease),
+              border-color var(--press) var(--ease),
+              transform var(--press) var(--ease);
+}
+
+button:active:not(:disabled), a.ghost:active { transform: scale(0.97); }
+
 .primary {
   padding: 10px 14px;
   font-weight: 600;
@@ -137,22 +278,40 @@ button:disabled { cursor: default; opacity: 0.6; }
 }
 
 .primary:hover:not(:disabled) { background: #f4783f; }
+.primary:active:not(:disabled) { background: #d2551f; }
 
+/*
+ * `min-height` rather than more padding, so the target grows without the label
+ * moving. 32px is the smallest thing worth aiming at with a mouse; a coarse
+ * pointer gets the full 44 below, because this is played on phones and the
+ * tests run at a phone width for that reason.
+ */
 .ghost {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
   padding: 6px 11px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--ink);
   background: transparent;
-  border-color: var(--edge);
+  border: 1px solid var(--edge);
+  border-radius: 7px;
   text-decoration: none;
 }
 
-.ghost:hover { border-color: var(--dim); }
+.ghost:hover:not(:disabled) { border-color: var(--dim); background: #241e18; }
+.ghost:active:not(:disabled) { background: #2c251d; }
+
+@media (pointer: coarse) {
+  .ghost { min-height: 44px; padding: 6px 14px; }
+  .primary { min-height: 44px; }
+  .pick { min-height: 44px; }
+}
 
 .error {
   margin: 0;
   padding: 9px 11px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: #ffd9d4;
   background: #3a1a17;
   border: 1px solid #5c2721;
@@ -175,17 +334,80 @@ button:disabled { cursor: default; opacity: 0.6; }
   gap: 12px;
 }
 
+/*
+ * The bar had seven controls that looked identical, and one of them ends the
+ * game both people are in.
+ *
+ * They are two different kinds of thing. "Mute", "Let them pick", "Let friends
+ * watch" and "Leave game" act on the session that is running; "Friends",
+ * "Settings" and "Sign out" go somewhere else. Boxing the first group and
+ * leaving the second as plain text is the whole hierarchy -- and it is roughly
+ * what the bar looked like by accident already, because `.ghost` set a border
+ * COLOUR with no border style, so the two anchors in it drew no border at all
+ * while every button beside them did.
+ *
+ * Sticky, because the controls belong to the game and the leaderboard below is
+ * long enough to scroll them off the top; translucent so the page passing
+ * underneath still reads as one surface rather than as a strip laid over it.
+ */
 .bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-  font-size: 13px;
+  margin: -4px 0;
+  padding: 8px 0;
+  font-size: 0.8125rem;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
 }
 
 .bar .spacer { flex: 1; }
 .bar .who { font-weight: 600; }
 .bar .status { color: var(--dim); }
+
+/* The session's own controls, kept together and away from the navigation. */
+.bar .acts { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+
+/*
+ * Navigation is quieter than the controls beside it: no box, and it does not
+ * light up until it is pointed at. Leaving this screen is never the thing
+ * somebody came to this screen to do.
+ */
+/*
+ * `margin-left: auto` so that a bar too narrow to hold one line keeps the
+ * navigation on the right when it wraps, instead of dropping it to the left
+ * under the identity. On one line the spacer has already taken the slack and
+ * this does nothing.
+ */
+.bar nav { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+
+.bar nav .ghost {
+  border-color: transparent;
+  color: var(--dim);
+  padding-inline: 8px;
+}
+
+.bar nav .ghost:hover { color: var(--ink); border-color: var(--edge); }
+
+/*
+ * Leaving takes the other person's game with it, so it does not look like
+ * "Mute". Not a confirmation -- rejoining is a click and the pair are talking
+ * to each other anyway -- just a control that reads as the consequence it is.
+ */
+.bar .leave {
+  color: #f0b3aa;
+  border-color: #5c2721;
+}
+
+.bar .leave:hover:not(:disabled) {
+  color: #ffd9d4;
+  border-color: var(--bad);
+  background: #3a1a17;
+}
 
 /*
  * The stage is a fixed 640x480 that CSS scales. `image-rendering: auto` is
@@ -208,7 +430,7 @@ button:disabled { cursor: default; opacity: 0.6; }
   touch-action: none;
 }
 
-.keys { margin: 0; color: var(--dim); font-size: 13px; text-align: center; }
+.keys { margin: 0; color: var(--dim); font-size: 0.8125rem; text-align: center; }
 
 /* ---- friends, presence and invitations ----------------------------------- */
 
@@ -221,7 +443,7 @@ button:disabled { cursor: default; opacity: 0.6; }
 
 .panel h2 {
   margin: 0 0 10px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--dim);
@@ -239,7 +461,7 @@ button:disabled { cursor: default; opacity: 0.6; }
 
 .row:last-child { border-bottom: none; }
 .row .name { font-weight: 600; }
-.row .dim, .banner .dim { color: var(--dim); font-size: 13px; }
+.row .dim, .banner .dim { color: var(--dim); font-size: 0.8125rem; }
 .row button { margin-left: auto; }
 .row button + button { margin-left: 8px; }
 
@@ -252,9 +474,23 @@ button:disabled { cursor: default; opacity: 0.6; }
   flex: none;
 }
 
-.dot.online { background: var(--water); }
-.dot.in_lobby { background: var(--water); }
-.dot.in_game { background: var(--fire); }
+/*
+ * The halo, not just the hue, is what says somebody is there.
+ *
+ * Grey against blue is the whole difference between a friend who can be invited
+ * and one who cannot, and for a red-green or low-vision reader two 8px discs
+ * are two 8px discs. A ring around the live states means presence has a shape
+ * as well as a colour; the text beside it still carries the same fact in words.
+ */
+.dot.online, .dot.in_lobby {
+  background: var(--water);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--water) 20%, transparent);
+}
+
+.dot.in_game {
+  background: var(--fire);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fire) 20%, transparent);
+}
 
 /* Recovery codes, shown once and meant to be copied down by hand. */
 .codelist {
@@ -266,7 +502,7 @@ button:disabled { cursor: default; opacity: 0.6; }
 }
 
 .codelist code {
-  font-size: 15px;
+  font-size: 0.9375rem;
   letter-spacing: 1px;
 }
 
@@ -280,37 +516,147 @@ button:disabled { cursor: default; opacity: 0.6; }
 .rank { color: var(--dim); min-width: 2.5em; }
 .row.mine .name { color: var(--fire); }
 
-/* The grade a level was finished with, as the results board awards it. */
+/*
+ * The grade a level was finished with, as the results board awards it.
+ *
+ * A, B, C and "reached but never finished" were one colour, which made the
+ * column a tally of levels played rather than of how they went. The medal
+ * colours are the ones the grades already imply; the dash is dimmed, because a
+ * level you have not finished is not a result.
+ */
 .grade {
   margin-left: auto;
   font-weight: 700;
   min-width: 1.5em;
   text-align: right;
-  color: var(--fire);
+  font-variant-numeric: tabular-nums;
 }
+
+.grade.g3 { color: var(--gold); }
+.grade.g2 { color: var(--silver); }
+.grade.g1 { color: var(--bronze); }
+.grade.g0 { color: #5b5044; font-weight: 400; }
+
+/*
+ * A leaderboard time, which is not a grade and no longer borrows its colour.
+ *
+ * Every time in the list was orange and so was the name of the row that is
+ * yours, so the one mark that answers "where am I" was competing with a column
+ * of the same orange. Tabular figures because they are a column of numbers and
+ * were being read as a ragged one.
+ */
+.time {
+  margin-left: auto;
+  font-weight: 600;
+  text-align: right;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.row.mine .time { color: var(--ink); }
 
 .panel h2 button { margin-left: 12px; }
 
+/*
+ * The banner arrives rather than appearing.
+ *
+ * It sits between the header and the stage, so showing it moves the game down
+ * the page -- and an invitation, a stall and a lost connection all use it, which
+ * means that jump happens at moments somebody is already reading something
+ * else. Easing it in from the edge it is attached to makes the movement
+ * legible: it comes from the top, which is where it lives.
+ *
+ * `@starting-style` is what gives an element entering from `display: none` a
+ * frame to start from. A browser without it draws the banner exactly as before.
+ */
 .banner {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
   padding: 11px 14px;
-  font-size: 14px;
+  font-size: 0.875rem;
   background: #23303a;
   border: 1px solid #2f4553;
   border-radius: var(--radius);
+  opacity: 1;
+  transform: none;
+  transition: opacity var(--settle) var(--ease),
+              transform var(--settle) var(--ease);
+}
+
+@starting-style {
+  .banner { opacity: 0; transform: translateY(-8px); }
 }
 
 .pick {
   font: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   padding: 5px 7px;
   color: var(--ink);
   background: #100e0b;
   border: 1px solid var(--edge);
   border-radius: 6px;
+  cursor: pointer;
+  transition: border-color var(--press) var(--ease);
 }
 
-.small { padding: 6px 12px; font-size: 13px; }
+.pick:hover { border-color: var(--dim); }
+
+.small { padding: 6px 12px; font-size: 0.8125rem; }
+
+/* ---- what the reader has asked us for ------------------------------------ */
+
+/*
+ * Reduced motion is not "no feedback", it is feedback that does not travel.
+ *
+ * The press stays -- it is the only thing telling somebody the button took the
+ * click -- but it stops being a movement: the surface changes colour where it
+ * used to shrink, and the banner fades in where it used to slide.
+ */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  button:active:not(:disabled), a.ghost:active { transform: none; }
+  .ghost:active:not(:disabled) { background: #3a3129; }
+  .banner { transition: opacity 150ms linear !important; transform: none; }
+  @starting-style { .banner { transform: none; } }
+}
+
+/*
+ * A blurred bar over scrolling text is exactly what this asks us to stop doing.
+ * The chrome becomes solid, and keeps its edge so it is still a layer.
+ */
+@media (prefers-reduced-transparency: reduce) {
+  .bar {
+    background: var(--bg);
+    backdrop-filter: none;
+    border-bottom: 1px solid var(--edge);
+  }
+
+  /*
+   * The toast is the shell's version of the same mistake: it sits ON the game,
+   * which is the busiest thing on the screen, and it was letting 7% of it
+   * through. `.play-drawer` needs nothing here -- its background is already
+   * opaque and only its shadow has alpha.
+   */
+  .play-toast { background: var(--panel); border: 1px solid var(--edge); }
+}
+
+/*
+ * More contrast means the borders that were there to be barely noticed have to
+ * be seen, and the dim text has to stop being dim.
+ */
+@media (prefers-contrast: more) {
+  :root { --dim: #cbbca6; --edge: #6b5844; }
+
+  .bar { background: var(--bg); backdrop-filter: none; }
+  .ghost, .pick, .field input { border-color: var(--dim); }
+  .row { border-bottom-color: var(--edge); }
+  .grade.g0 { color: var(--dim); }
+  .bar nav .ghost { border-color: var(--edge); color: var(--ink); }
+}
