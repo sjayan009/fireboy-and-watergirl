@@ -15,7 +15,7 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
     page.on("pageerror",e => errors.push(e.message));
     await page.goto(target);
     await page.waitForFunction(() => window.__fbwg?.view?.sprites && window.__fbwg.view.prepared);
-    await page.waitForFunction(() => document.querySelector(".play-toolbar button")?.textContent === "Friends (50)");
+    await page.waitForFunction(() => document.querySelector(".tool-friends")?.textContent === "Friends (50)");
     await page.evaluate(() => { window.originalView = window.__fbwg.view; });
     for (const [width,height] of [[1024,600],[1280,720],[1366,768],[1920,1080]]) {
       await page.setViewportSize({ width,height });
@@ -29,7 +29,7 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
         assert(Math.abs(box.width / box.height - 4 / 3) < 0.02,"canvas keeps its aspect ratio");
       };
       await fit();
-      await page.getByRole("button",{ name:"Friends (50)",exact:true }).click();
+      if (await page.locator(".play-drawer").isHidden()) await page.getByRole("button",{ name:"Friends (50)",exact:true }).click();
       await fit();
       // By the accessible name, which names the FRIEND: fifty buttons reading
       // "Invite" told a screen reader nothing about which row it was on, so
@@ -87,10 +87,10 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
     await friendsButton.click();
     assert(await drawer.isHidden(),"and Friends again closes it");
     await menuButton.click();
-    assert.equal(await page.locator("#drawer-title").innerText(),"Game menu");
+    assert.equal(await page.locator("#drawer-title").innerText(),"Game Menu");
     await friendsButton.click();
     assert(await drawer.isVisible() &&
-      await page.locator("#drawer-title").innerText() === "Play together",
+      await page.locator("#drawer-title").innerText() === "Play Together",
       "the other button switches panels rather than closing");
     // `aria-expanded` belongs to the control, not to the drawer: only the
     // button whose panel is showing may claim it.
@@ -111,7 +111,7 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
      */
     const saved = page.locator(".save-status");
     await saved.click();
-    assert.equal(await page.locator("#drawer-title").innerText(),"Your progress");
+    assert.equal(await page.locator("#drawer-title").innerText(),"Your Progress");
     assert.equal(await saved.getAttribute("aria-expanded"),"true");
     await saved.click();
     assert(await drawer.isHidden(),"the save indicator closes the panel it opened");
