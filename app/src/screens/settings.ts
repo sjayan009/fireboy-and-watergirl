@@ -15,6 +15,34 @@ import {
 import { supabase } from "../supabase.js";
 import { card, el, field, form, inputOf, note, on } from "../ui/dom.js";
 
+/**
+ * One row per setting, and only one of them open.
+ *
+ * Six forms stacked down a card is four screens of scrolling in the drawer,
+ * and somebody looking for the leaderboard switch had to travel past a
+ * password field, an email field and a QR code to find it. Collapsed, the
+ * whole account fits above the fold: the summary says what each setting is
+ * SET TO right now -- the username, the address, on or off -- so most visits
+ * are answered without opening anything at all.
+ *
+ * `name` on <details> is what makes it an accordion: the browser closes the
+ * open row when another is opened, so there is never more than one form's
+ * worth of height on screen. Where that attribute is not supported the rows
+ * simply all stay open, which is the layout this screen had before.
+ */
+function group(title: string, value: Node | string, ...children: (Node | string)[]): HTMLElement {
+  const summary = el("summary", {},
+    el("span", { class: "settings-name" }, title),
+    typeof value === "string" ? el("span", { class: "settings-value" }, value) : value);
+  const row = el("details", { class: "settings-group", name: "settings" }, summary,
+    el("div", { class: "settings-body" }, ...children));
+  // An opened row whose form runs off the bottom of the drawer looks like a
+  // row that did nothing. Bring it back into view, without moving the page
+  // when it is already there.
+  on(row, "toggle", () => { if (row.hasAttribute("open")) row.scrollIntoView({ block: "nearest" }); });
+  return row;
+}
+
 export function settingsScreen(host: HTMLElement): void {
   const profile = auth().profile;
 
@@ -27,38 +55,40 @@ export function settingsScreen(host: HTMLElement): void {
   saved.hidden = true;
 
   const factors = el("div", { class: "factors" }, note("Checking…"));
+  const nameValue = el("span", { class: "settings-value" }, profile?.username ?? "Not set");
+  const twoFactorValue = el("span", { class: "settings-value" }, "Checking…");
+  const boardValue = el("span", { class: "settings-value" }, "Checking…");
 
   host.append(card("Settings",
-    el("h2", {}, "Name"),
-    note("Changing it does not cost another invite code."),
-    form({
-      submit: "Save",
-      children: [name, saved],
-      onSubmit: async () => {
-        // Already through the gate, so no code: the database only asks for one
-        // when a profile does not yet exist.
-        await claimUsername(inputOf(name).value.trim(), null);
-        saved.hidden = false;
-        // Deliberately no re-render. `claimUsername` publishes the new profile,
-        // so everything reading it updates on its own -- and rebuilding this
-        // screen would throw away the confirmation the moment it appeared,
-        // leaving a save that looks like nothing happened.
-      },
-    }),
-    el("h2", {}, "Password"),
-    passwordSection(),
-    el("h2", {}, "Email"),
-    emailSection(),
-    el("h2", {}, "Two-factor"),
-    factors,
-    el("h2", {}, "Leaderboard"),
-    boardSection(),
-    el("h2", {}, "Delete this account"),
-    dangerSection(),
+    el("div", { class: "settings-list" },
+      group("Username", nameValue,
+        note("Changing it does not cost another invite code."),
+        form({
+          submit: "Save",
+          children: [name, saved],
+          onSubmit: async () => {
+            // Already through the gate, so no code: the database only asks for
+            // one when a profile does not yet exist.
+            const claimed = inputOf(name).value.trim();
+            await claimUsername(claimed, null);
+            nameValue.textContent = claimed;
+            saved.hidden = false;
+            // Deliberately no re-render. `claimUsername` publishes the new
+            // profile, so everything reading it updates on its own -- and
+            // rebuilding this screen would throw away the confirmation the
+            // moment it appeared, leaving a save that looks like nothing
+            // happened.
+          },
+        })),
+      group("Password", "Change it", passwordSection()),
+      group("Email", auth().user?.email ?? "Not set", emailSection()),
+      group("Two-factor", twoFactorValue, factors),
+      group("Leaderboard", boardValue, boardSection(boardValue)),
+      group("Delete This Account", "", dangerSection())),
     el("p", { class: "note" },
       el("a", { href: "#/play" }, "Back to the game"))));
 
-  void drawFactors(factors);
+  void drawFactors(factors, twoFactorValue);
 }
 
 /**
@@ -68,8 +98,9 @@ export function settingsScreen(host: HTMLElement): void {
  * the board belongs to two people, and there is no half of one to publish. That
  * also means nobody can put somebody else on it.
  */
-function boardSection(): HTMLElement {
+function boardSection(value: HTMLElement): HTMLElement {
   const box = el("input", { type: "checkbox" });
+  const say = () => { value.textContent = box.checked ? "Hidden" : "Listed"; };
   const label = el("label", { class: "check" }, box,
     el("span", {}, "Keep my times off the leaderboard"));
   const said = note("Saved.");
@@ -87,10 +118,12 @@ function boardSection(): HTMLElement {
       if (error) {
         said.textContent = `Could not read this setting: ${error.message}`;
         said.hidden = false;
+        value.textContent = "Unknown";
         return;
       }
       box.checked = !!data?.hide_from_leaderboard;
       box.disabled = false;
+      say();
     });
 
   on(box, "change", async () => {
@@ -106,6 +139,7 @@ function boardSection(): HTMLElement {
       said.hidden = false;
       return;
     }
+    say();
     said.textContent = "Saved.";
     said.hidden = false;
   });
@@ -199,14 +233,16 @@ function dangerSection(): HTMLElement {
     }));
 }
 
-async function drawFactors(host: HTMLElement): Promise<void> {
+async function drawFactors(host: HTMLElement, value: HTMLElement): Promise<void> {
   let enrolled;
   try {
     enrolled = (await listFactors()).filter((f) => f.status === "verified");
   } catch (e) {
     host.replaceChildren(note((e as Error).message));
+    value.textContent = "Unknown";
     return;
   }
+  value.textContent = enrolled.length > 0 ? "On" : "Off";
 
   if (enrolled.length > 0) {
     const codes = el("div", { class: "codes" });
@@ -219,7 +255,7 @@ async function drawFactors(host: HTMLElement): Promise<void> {
         class: "ghost",
         onclick: async () => {
           for (const f of enrolled) await unenrolTotp(f.id);
-          await drawFactors(host);
+          await drawFactors(host, value);
         },
       }, "Turn it off"));
     return;
@@ -233,7 +269,7 @@ async function drawFactors(host: HTMLElement): Promise<void> {
       onclick: async (e: Event) => {
         (e.target as HTMLButtonElement).disabled = true;
         try {
-          await drawEnrolment(host);
+          await drawEnrolment(host, value);
         } catch (err) {
           host.replaceChildren(note((err as Error).message));
         }
@@ -283,7 +319,7 @@ function recoverySection(codes: HTMLElement): HTMLElement {
   return el("div", {}, left, mint);
 }
 
-async function drawEnrolment(host: HTMLElement): Promise<void> {
+async function drawEnrolment(host: HTMLElement, value: HTMLElement): Promise<void> {
   const { factorId, qr, secret } = await enrolTotp();
   const code = field("Six-digit code", {
     inputmode: "numeric", pattern: "[0-9]{6}", required: true,
@@ -306,7 +342,7 @@ async function drawEnrolment(host: HTMLElement): Promise<void> {
         // The session is `aal2` now, and only now, which is what
         // `generate_recovery_codes` requires since 0014 -- and the only moment
         // in the whole flow where the codes can be both issued and shown.
-        await drawFirstCodes(host);
+        await drawFirstCodes(host, value);
       },
     }));
 }
@@ -325,7 +361,7 @@ async function drawEnrolment(host: HTMLElement): Promise<void> {
  * moment the factor is verified, shown once, and the flow does not continue
  * until somebody says they have written them down.
  */
-async function drawFirstCodes(host: HTMLElement): Promise<void> {
+async function drawFirstCodes(host: HTMLElement, value: HTMLElement): Promise<void> {
   let fresh: string[];
   try {
     fresh = await generateRecoveryCodes();
@@ -340,7 +376,7 @@ async function drawFirstCodes(host: HTMLElement): Promise<void> {
            "authenticator means asking whoever runs this to let you back in."),
       el("button", {
         class: "ghost",
-        onclick: () => void drawFactors(host),
+        onclick: () => void drawFactors(host, value),
       }, "Back"));
     return;
   }
@@ -351,7 +387,7 @@ async function drawFirstCodes(host: HTMLElement): Promise<void> {
   acknowledged.addEventListener("change", () => {
     done.disabled = !acknowledged.checked;
   });
-  done.addEventListener("click", () => void drawFactors(host));
+  done.addEventListener("click", () => void drawFactors(host, value));
 
   host.replaceChildren(
     note("Two-factor is on. These are your ten recovery codes."),
