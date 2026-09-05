@@ -10,7 +10,14 @@
     -->
     <meta name="robots" content="noindex, nofollow" />
     <meta name="color-scheme" content="dark" />
-    <link rel="icon" href="data:," />
+    <!--
+      The paired glyph, on its own tile. SVG where it is supported, and two
+      PNGs for the places it is not: Safari's tab, and the icon iOS uses when
+      somebody keeps this on a home screen.
+    -->
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/icon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/icon-180.png" />
   </head>
   <body>
     <div id="app"></div>
