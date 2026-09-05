@@ -103,7 +103,29 @@ export class RealtimeTransport implements Transport {
    */
   send(data: Uint8Array): void {
     if (this.closed) return;
+    // Commands and negotiation unblock the next action. They must not wait for input batching.
+    if (data[0] !== 1 || data.length < 18) {
+      this.flush();
+      this.pair.sendBytes([encode(data)]);
+      this.sent++;
+      return;
+    }
+    // An input packet carries a window of history ending at `frame`, so two
+    // packets queued for the SAME frame, slot and epoch say the same thing
+    // twice and only the newer one is worth sending. That is the whole rule:
+    // strictly the same frame, never an overlap.
+    //
+    // Dropping packets whose window a later one merely covers would save more,
+    // and is deliberately not done here -- it is a change to what goes on the
+    // wire, and the netcode matrix is what would have to say it is safe.
+    const previous = this.lastInput;
+    const frame = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(2);
+    if (previous && data[1] === previous.slot && data[14] === previous.epoch && frame === previous.frame) {
+      this.queue.pop();
+    }
     this.queue.push(encode(data));
+    this.lastInput = { frame, slot: data[1], epoch: data[14] };
+    if (this.queue.length >= 32) { this.flush(); return; }
 
     const since = Date.now() - this.lastSent;
     if (since >= FLUSH_MS) { this.flush(); return; }
@@ -113,11 +135,13 @@ export class RealtimeTransport implements Transport {
       this.flush();
     }, FLUSH_MS - since);
   }
+  private lastInput: { frame: number; slot: number; epoch: number } | null = null;
 
   private flush(): void {
     if (this.closed || this.queue.length === 0) return;
     const packets = this.queue;
     this.queue = [];
+    this.lastInput = null;
     this.sent++;
     this.lastSent = Date.now();
     this.pair.sendBytes(packets);

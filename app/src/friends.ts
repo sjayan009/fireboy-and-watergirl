@@ -44,6 +44,10 @@ function fail(error: { message: string } | null): void {
 export async function listFriends(): Promise<Friend[]> {
   const me = auth().user?.id;
   if (!me) return [];
+  const joined = await supabase.rpc("list_friends");
+  if (!joined.error) return (joined.data ?? []) as Friend[];
+  // Additive migration compatibility while the prior client is still deployed.
+  if (joined.error.code !== "PGRST202") throw new Error(joined.error.message);
 
   const { data: rows, error } = await supabase
     .from("friendships")

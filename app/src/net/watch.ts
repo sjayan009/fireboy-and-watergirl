@@ -31,6 +31,8 @@
 import { Transport } from "@engine/net/transport.js";
 import { encode } from "./pairchannel.js";
 import { WatchChannel } from "./watchchannel.js";
+import type { NetSession } from "@engine/net/session.js";
+import { canonicalReplay } from "@engine/verified.js";
 
 /** Three frames at 26 Hz, as the relay uses. */
 const FLUSH_MS = 115;
@@ -40,6 +42,16 @@ export class WatchMirror implements Transport {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private on = false;
   private closed = false;
+  private wantsCatchup = false;
+  private lastCatchup = 0;
+  catchUp(session: NetSession | null): void { if (session?.running) this.wantsCatchup = true; }
+  confirmed(session: NetSession, frame: number): void {
+    if (!this.wantsCatchup || !this.on || Date.now() - this.lastCatchup < 3000) return;
+    const replay = session.replay(frame);
+    if (!replay) return;
+    this.wantsCatchup = false; this.lastCatchup = Date.now();
+    this.room()?.snapshot(canonicalReplay(replay),session.generation);
+  }
 
   /** Messages actually put on the wire, so the cost is observable. */
   sent = 0;
@@ -98,8 +110,9 @@ export class WatchMirror implements Transport {
   // ---- the copy ----------------------------------------------------------
 
   private copy(data: Uint8Array): void {
-    if (!this.on || this.closed) return;
+    if (!this.on || this.closed || !this.room()?.viewers) return;
     this.queue.push(encode(data));
+    if (this.queue.length >= 64) { this.flush(); return; }
     if (this.timer !== null) return;
     this.timer = setTimeout(() => {
       this.timer = null;

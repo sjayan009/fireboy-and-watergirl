@@ -58,6 +58,22 @@ copy — it stopped USING `p_times_str` and kept it in the signature, so the
 previous release's client goes on calling `sync_progress` with four arguments
 and gets a correct answer.
 
+### Where the second half waits
+
+"Split across two releases" needs somewhere to put the half that must not run
+yet, and `migrations/` is not it — a file there is applied by the next
+`deployed` run, which is the same as never having split it. So the contracting
+half goes in `supabase/deferred/`, which the runner does not read, and is
+applied by being moved into `migrations/` once the release it was waiting for
+is actually live. `supabase/deferred/README.md` has the procedure.
+
+The watch topic is the worked example. `20260905002813` widened
+`can_watch_pair_topic` and `can_feed_watch_topic` to accept the new
+`watch:<match>:<feed>` alongside the derived `watch:<lo>:<hi>` the previous
+release publishes to; `deferred/20260906000000_watch_topic_contract.sql` is the
+narrowing, and until it runs a feed can still be reached by naming two user ids
+rather than by holding a consent the players can withdraw.
+
 ## The schema
 
 | | |
