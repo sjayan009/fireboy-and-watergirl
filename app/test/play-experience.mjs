@@ -31,7 +31,11 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
       await fit();
       await page.getByRole("button",{ name:"Friends (50)",exact:true }).click();
       await fit();
-      await page.getByRole("button",{ name:"Invite",exact:true }).first().click();
+      // By the accessible name, which names the FRIEND: fifty buttons reading
+      // "Invite" told a screen reader nothing about which row it was on, so
+      // each one is now "Invite <username>". Matching the prefix rather than
+      // the whole string is what keeps this test from caring who is first.
+      await page.getByRole("button",{ name:/^Invite \S/ }).first().click();
       await page.getByLabel("Game mode",{ exact:true }).selectOption("puzzle");
       await page.getByLabel("Level",{ exact:true }).selectOption("2");
       await page.getByLabel("Characters",{ exact:true }).selectOption("them");
@@ -45,6 +49,24 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
     await page.keyboard.down("ArrowRight");
     await page.getByRole("button",{ name:"Friends (50)",exact:true }).click();
     assert.equal(await page.evaluate(() => window.__fbwg.view.held.size),0,"opening a panel releases held input");
+
+    /*
+     * Fifty rows, fifty distinct names, and one tab that says it is current.
+     *
+     * Both of these were the same bug in two places: the list said which
+     * friend a row was about in a span nothing associated with the button, and
+     * the tab strip said which panel was open in no way at all. Somebody
+     * reading the page through its accessibility tree got "Invite" fifty times
+     * and three identical tabs.
+     */
+    const names = await page.getByRole("button",{ name:/^Invite \S/ })
+      .evaluateAll(list => list.map(b => b.getAttribute("aria-label")));
+    assert.equal(names.length,50,"every friend row offers an invitation");
+    assert.equal(new Set(names).size,50,"and each one names the friend it invites");
+    assert.equal(
+      await page.locator(".drawer-tabs button[aria-current='true']").innerText(),
+      "Friends","the open panel's tab is the one marked current");
+
     await page.keyboard.up("ArrowRight");
     await page.keyboard.press("Escape");
     await page.getByRole("button",{ name:"Menu",exact:true }).click();

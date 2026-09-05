@@ -322,6 +322,27 @@ export class Lobby {
     });
     channel.onStatus(status => {
       const friend = this.friends.find(f => f.id === friendId);
+      // Two of these are not Realtime's, and treating them as if they were is
+      // what made them bugs.
+      //
+      // PROTOCOL_ERROR means the peer tripped the message budget and the
+      // channel closed ITSELF. Leaving it in the map left the friend reading
+      // as connected against a channel nothing was listening to, with no way
+      // back short of reloading the page -- so it is dropped here, and the
+      // refresh that follows opens a new one.
+      if (status === "PROTOCOL_ERROR") {
+        if (this.channels.get(friendId) === channel) this.channels.delete(friendId);
+        if (friend) { friend.connection = "connecting"; friend.activity = null; }
+        this.activity.delete(friendId);
+        this.announce();
+        if (!this.closing) void this.refresh();
+        return;
+      }
+      // CONTROL_TIMEOUT is one message going unacknowledged. It says something
+      // about that message and nothing about whether the friend is reachable,
+      // and marking them offline for it made a single slow round trip look
+      // like somebody leaving.
+      if (status === "CONTROL_TIMEOUT") return;
       if (friend) {
         friend.connection = status === "SUBSCRIBED" ? "connected" : "unavailable";
         if (status !== "SUBSCRIBED") { friend.activity = null; this.activity.delete(friendId); }

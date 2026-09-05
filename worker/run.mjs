@@ -54,9 +54,16 @@ async function slot(number) {
       const { rows } = await pool.query("select * from play_private.claim_replay($1)", [[...versions.keys()]]);
       if (!rows.length) { await sleep(2000); continue; }
       await execute(rows[0]);
-    } catch {
+    } catch (e) {
       // The durable lease expires; another instance can retry after a crash.
-      log("verification_retry", { slot: number });
+      //
+      // The CODE and not the message: the README promises these logs carry no
+      // database URLs, and a connection failure's message is largely the host
+      // and port it could not reach. A code still separates "nothing is
+      // listening" from "the password is wrong" from "the query was refused",
+      // which is the difference between the three operational responses --
+      // and without it this line said only that something, somewhere, failed.
+      log("verification_retry", { slot: number, code: e?.code ?? e?.name ?? "unknown" });
       if (!stopping) await sleep(2000);
     }
   }

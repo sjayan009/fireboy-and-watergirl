@@ -202,6 +202,18 @@ export class SpriteRenderer {
   get revision(): number { return assetRevision(); }
   private loadingWork = new Set<Promise<void>>();
 
+  /**
+   * Draw the tree once into a scratch canvas so every image it reaches starts
+   * downloading, then wait for those downloads to settle.
+   *
+   * Settle, not succeed. A frame that will not load is a hole in the art and
+   * `missing` counts it, but it is not a reason to refuse to run the game --
+   * the renderer has always drawn what it has and skipped what it has not, and
+   * a level that is playable with one sprite absent is better than a level
+   * nobody can start because a CDN blinked. What the count IS good for is
+   * deciding that a run must not be ranked: two peers cannot agree about a
+   * frame they are not both drawing.
+   */
   async prepare(root: DisplayObject): Promise<void> {
     if (this.failed.size) this.prefetched.clear();
     for (const key of this.failed) this.images.delete(key);
@@ -210,7 +222,7 @@ export class SpriteRenderer {
     const scratch = document.createElement("canvas");
     scratch.width = this.stageW; scratch.height = this.stageH;
     this.draw(scratch.getContext("2d")!, root);
-    await Promise.all([...this.loadingWork]);
+    await Promise.allSettled([...this.loadingWork]);
   }
 
   private scratch(which: "layer" | "maskLayer" | "filterLayer"):

@@ -110,14 +110,21 @@ export class RealtimeTransport implements Transport {
       this.sent++;
       return;
     }
-    // Every input packet covers sixteen frames; keep the newest overlapping history.
-    // A gap larger than one window retains both packets so no frame is dropped.
+    // An input packet carries a window of history ending at `frame`, so two
+    // packets queued for the SAME frame, slot and epoch say the same thing
+    // twice and only the newer one is worth sending. That is the whole rule:
+    // strictly the same frame, never an overlap.
+    //
+    // Dropping packets whose window a later one merely covers would save more,
+    // and is deliberately not done here -- it is a change to what goes on the
+    // wire, and the netcode matrix is what would have to say it is safe.
     const previous = this.lastInput;
     const frame = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(2);
-    const covered = previous && data[1] === previous.slot && data[14] === previous.epoch && frame === previous.frame;
-    if (covered) this.queue.pop();
+    if (previous && data[1] === previous.slot && data[14] === previous.epoch && frame === previous.frame) {
+      this.queue.pop();
+    }
     this.queue.push(encode(data));
-    this.lastInput = { frame, first: covered ? previous.first : Math.max(0, frame - data[15] + 1), slot: data[1], epoch: data[14] };
+    this.lastInput = { frame, slot: data[1], epoch: data[14] };
     if (this.queue.length >= 32) { this.flush(); return; }
 
     const since = Date.now() - this.lastSent;
@@ -128,7 +135,7 @@ export class RealtimeTransport implements Transport {
       this.flush();
     }, FLUSH_MS - since);
   }
-  private lastInput: { frame: number; first: number; slot: number; epoch: number } | null = null;
+  private lastInput: { frame: number; slot: number; epoch: number } | null = null;
 
   private flush(): void {
     if (this.closed || this.queue.length === 0) return;

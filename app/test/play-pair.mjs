@@ -15,7 +15,8 @@ try {
     await page.waitForFunction(()=>document.querySelector(".play-toolbar button")?.textContent === "Friends (1)");
   }
   await left.getByRole("button",{name:"Friends (1)",exact:true}).click();
-  await left.getByRole("button",{name:"Invite",exact:true}).click();
+  // "Invite <username>", not "Invite": the accessible name carries the row.
+  await left.getByRole("button",{name:/^Invite \S/}).click();
   await left.getByRole("button",{name:"Send invite",exact:true}).click();
   try { await right.getByRole("button",{name:"Accept",exact:true}).click(); }
   catch (error) {
