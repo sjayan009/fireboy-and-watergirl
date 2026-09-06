@@ -474,13 +474,21 @@ export class SpriteRenderer {
       if (skipMask && child === node.__clipMask) continue;
       if (basePending && child.__afterBase) continue;
       const place = placementFor(geom, child);
-      // A named child the frame's geometry does not place, and which never
-      // got a transform from the SWF, is already baked into the composite --
-      // JPEXS emits it as an anonymous <use> so there is nothing to recover.
-      // Drawing it again puts it at the origin at full size: that is what
-      // pasted a giant Watergirl head over the exit door at the end of a
-      // level, on top of the correctly drawn one.
-      if (geom && !place && !child.__seed) continue;
+      // A child is drawn on the frames its timeline places it on, and on no
+      // others. A named child the frame's geometry does not place is already
+      // baked into the composite -- JPEXS emits it as an anonymous <use> so
+      // there is nothing to recover. Drawing it again puts it at the origin at
+      // full size: that is what pasted a giant Watergirl head over the exit
+      // door at the end of a level, on top of the correctly drawn one.
+      //
+      // A recovered placement matrix (`__seed`) is NOT a licence to keep
+      // drawing. It says where a child goes, not which frames it is on, and it
+      // is set once at construction while `place` is per frame. Treating it as
+      // "always draw" pasted FireBoy's standing pose -- FireBoystairs' mc_1,
+      // placed on frame 1 alone -- over all 24 remaining frames of his climb
+      // out of the exit door, so his ending never appeared to animate while
+      // WaterGirl's, whose only child carries no matrix, always had.
+      if (geom && !place) continue;
       this.drawNode(ctx, child,
                     place ? this.childXform(child, place) : undefined);
     }
@@ -557,7 +565,7 @@ export class SpriteRenderer {
       }
       for (const child of node.children ?? []) {
         const place = placementFor(geom, child);
-        if (geom && !place && !child.__seed) continue;
+        if (geom && !place) continue;
         visit(child, place ? this.childXform(child, place) : undefined);
       }
       ctx.restore();
