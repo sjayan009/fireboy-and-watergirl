@@ -143,6 +143,108 @@ try {
     check("it grows by roughly the length asked for",
           Math.abs((rope.long - rope.short) - (240 - 60) * 0.8) < 30, true);
   }
+
+  console.log("\nthe stairs out of the exit door draw only the frames they are on");
+  /**
+   * FireBoystairs places mc_1 (the standing pose) on frame 1 and mc_5 (the run
+   * cycle) on frame 2; frames 3-25 are a single composite of FireBoy climbing,
+   * with no children at all. mc_1 is the one child in the whole library that
+   * carries a placement matrix from the SWF, and the renderer used to read that
+   * matrix as permission to keep drawing -- so a full standing FireBoy sat over
+   * every frame of his climb and the ending looked frozen. WaterGirl's stairs
+   * were fine only because her one child has no matrix.
+   *
+   * So: a child the current frame does not place must not change the picture.
+   * Stated about the rule rather than about this art, so it survives a
+   * re-export of the assets.
+   */
+  const stairs = await page.evaluate(async () => {
+    const D = window.__debug, g = window.game;
+    const ctx = document.getElementById("stage").getContext("2d");
+    // be the only thing driving the clock: settle() awaits, and the page's own
+    // rAF loop would otherwise run the clip on past the frame under test
+    D.autoTick(false);
+    const settle = async () => {
+      for (let i = 0; i < 80; i++) {
+        D.render();
+        if (!D.sprites.loading) break;
+        await new Promise((res) => setTimeout(res, 100));
+      }
+      D.render();
+    };
+
+    // stand both characters on their doors; the doors open over 22 frames and
+    // then level.Update swaps in the two stairs clips (shelltest does the same)
+    const cl = g.m_level.myContactListener;
+    let ender = null;
+    for (let i = 0; i < 200 && !ender; i++) {
+      cl.finish1 = 1;
+      cl.finish2 = 1;
+      D.step(1);
+      ender = g.m_level.getChildByName("ender");
+    }
+    if (!ender) return { error: "the stairs never spawned" };
+    if (!ender.mc_1) return { error: "FireBoystairs has no mc_1 child" };
+
+    // The stairs are spawned at the exit door, and the camera is still on the
+    // characters where we pinned them -- in adventure 8 that puts the door off
+    // the side of the screen, where nothing can be measured. Both are children
+    // of the level, so moving the clip onto FireBoy puts it in view without
+    // touching the coordinate space or the rule being tested.
+    const boy = g.m_level.pers1.GetUserData();
+    ender.x = boy.x;
+    ender.y = boy.y;
+
+    // far enough in that the timeline has left mc_1 behind, and well short of
+    // WaterGirlStairs' frame 35, whose script drops the results board over the
+    // whole screen and would hide any difference
+    for (let i = 0; i < 60 && ender.currentFrame < 10; i++) D.step(1);
+    const board = g.children.some((c) => c.symbol === "Recuento");
+
+    const grab = async () => {
+      await settle();
+      return ctx.getImageData(0, 0, 640, 480).data;
+    };
+    const differs = (a, b) => {
+      let n = 0;
+      for (let i = 0; i < 640 * 480; i++) {
+        const q = i * 4;
+        if (Math.abs(a[q] - b[q]) + Math.abs(a[q + 1] - b[q + 1]) +
+            Math.abs(a[q + 2] - b[q + 2]) > 30) n++;
+      }
+      return n;
+    };
+
+    const shown = await grab();
+    ender.mc_1.visible = false;
+    const hidden = await grab();
+    ender.mc_1.visible = true;
+    // control: the clip itself IS on screen, so a zero above means the rule
+    // works rather than that nothing was being drawn at all
+    ender.visible = false;
+    const gone = await grab();
+    ender.visible = true;
+
+    return {
+      frame: ender.currentFrame,
+      board,
+      mc1: differs(shown, hidden),
+      clip: differs(shown, gone),
+    };
+  });
+
+  if (stairs.error) {
+    failures++;
+    console.log("  FAIL " + stairs.error);
+  } else {
+    console.log(`  FireBoystairs on frame ${stairs.frame}: hiding mc_1 moves ` +
+                `${stairs.mc1} px, hiding the whole clip moves ${stairs.clip}`);
+    check("the results board has not covered the stage yet", stairs.board,
+          false);
+    check("the stairs clip is actually on screen", stairs.clip > 100, true);
+    check("a child this frame does not place draws nothing", stairs.mc1, 0);
+  }
+
 } finally {
   await browser.close();
   server.kill();
