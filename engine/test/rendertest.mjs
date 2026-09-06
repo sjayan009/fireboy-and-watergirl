@@ -245,6 +245,95 @@ try {
     check("a child this frame does not place draws nothing", stairs.mc1, 0);
   }
 
+
+  console.log("\nthe credits line the game typesets at run time is on the panel");
+  /**
+   * The one line on the credits scroll that is not baked into the art.
+   *
+   * Game.LoadCredits builds it at run time as a TextField added straight to the
+   * Credits clip, so it has NO entry in the sprite manifest and no placement on
+   * any frame -- its `__seed` is the only thing keeping it on screen. The rule
+   * above, which stops a manifest child being held over onto frames its
+   * timeline does not place it on, has to leave this one alone, and nothing
+   * here tested that until tightening the rule quietly took the line off the
+   * panel.
+   *
+   * A fresh page, because the checks above have a level running.
+   */
+  const credits = await (async () => {
+    const p2 = await browser.newPage();
+    p2.on("pageerror", (e) => {
+      failures++;
+      console.log("  FAIL page error: " + e.message);
+    });
+    try {
+      await p2.goto(URL_, { waitUntil: "load" });
+      await p2.waitForFunction("window.__debug && window.__debug.sprites",
+                               null, { timeout: 30000 });
+      return await p2.evaluate(async () => {
+        const D = window.__debug, g = window.game;
+        const F = await import("/dist/flash/flash.js");
+        const cv = document.getElementById("stage");
+        const ctx = cv.getContext("2d");
+        const settle = async () => {
+          for (let i = 0; i < 80; i++) {
+            D.render();
+            if (!D.sprites.loading) break;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          D.render();
+        };
+        document.getElementById("unlock").click();
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter",
+                                                           bubbles: true }));
+        D.step(30);
+        D.autoTick(false);
+        await settle();
+        const btn = g.m_introMenu && g.m_introMenu.Buttons &&
+                    g.m_introMenu.Buttons.Crediter;
+        if (!btn) return { error: "no Crediter button on the intro menu" };
+        btn.dispatchEvent(new F.MouseEvent("click", btn));
+        D.step(10);
+        await settle();
+        if (!g.crd) return { error: "the credits panel did not open" };
+
+        const fields = g.crd.children.filter(
+          (c) => typeof c.text === "string" && c.text.length > 0 &&
+                 c.__place == null);
+        if (!fields.length) return { error: "no run-time line on the panel" };
+
+        const grab = async () => {
+          await settle();
+          return ctx.getImageData(0, 0, cv.width, cv.height).data;
+        };
+        const shown = await grab();
+        fields.forEach((f) => { f.visible = false; });
+        const hidden = await grab();
+        fields.forEach((f) => { f.visible = true; });
+        let n = 0;
+        for (let i = 0; i < cv.width * cv.height; i++) {
+          const q = i * 4;
+          if (Math.abs(shown[q] - hidden[q]) +
+              Math.abs(shown[q + 1] - hidden[q + 1]) +
+              Math.abs(shown[q + 2] - hidden[q + 2]) > 30) n++;
+        }
+        return { count: fields.length, text: fields[0].text, pixels: n };
+      });
+    } finally {
+      await p2.close();
+    }
+  })();
+
+  if (credits.error) {
+    failures++;
+    console.log("  FAIL " + credits.error);
+  } else {
+    console.log(`  ${JSON.stringify(credits.text)} draws ${credits.pixels} px`);
+    // shadow then gold, the way every other letter on the scroll is drawn
+    check("the line is drawn twice", credits.count, 2);
+    check("and it is actually on the panel", credits.pixels > 500, true);
+  }
+
 } finally {
   await browser.close();
   server.kill();

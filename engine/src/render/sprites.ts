@@ -474,21 +474,28 @@ export class SpriteRenderer {
       if (skipMask && child === node.__clipMask) continue;
       if (basePending && child.__afterBase) continue;
       const place = placementFor(geom, child);
-      // A child is drawn on the frames its timeline places it on, and on no
-      // others. A named child the frame's geometry does not place is already
-      // baked into the composite -- JPEXS emits it as an anonymous <use> so
-      // there is nothing to recover. Drawing it again puts it at the origin at
-      // full size: that is what pasted a giant Watergirl head over the exit
-      // door at the end of a level, on top of the correctly drawn one.
+      // Two different children can arrive here with no placement for this
+      // frame, and they want opposite things -- `__place` is what tells them
+      // apart, because only a child built from the manifest carries one.
       //
-      // A recovered placement matrix (`__seed`) is NOT a licence to keep
-      // drawing. It says where a child goes, not which frames it is on, and it
-      // is set once at construction while `place` is per frame. Treating it as
-      // "always draw" pasted FireBoy's standing pose -- FireBoystairs' mc_1,
-      // placed on frame 1 alone -- over all 24 remaining frames of his climb
-      // out of the exit door, so his ending never appeared to animate while
-      // WaterGirl's, whose only child carries no matrix, always had.
-      if (geom && !place) continue;
+      // A MANIFEST child follows its timeline: it is drawn on the frames that
+      // place it and on no others. One the frame does not place is either
+      // baked into the composite -- JPEXS emits it as an anonymous <use>, so
+      // there is nothing to recover and drawing it again puts it at the origin
+      // at full size, which is what pasted a giant Watergirl head over the
+      // exit door -- or simply not on screen yet. Its recovered matrix says
+      // WHERE it goes, not WHICH frames it is on, and it is read once at
+      // construction while `place` is per frame, so it is no licence to keep
+      // drawing: honouring it held FireBoy's standing pose (FireBoystairs'
+      // mc_1, placed on frame 1 alone) over all 24 remaining frames of his
+      // climb out of the exit door. His ending never appeared to animate,
+      // while WaterGirl's, whose one child carries no matrix, always had.
+      //
+      // A RUNTIME child has no manifest entry to be absent from, so there is
+      // no timeline to obey and a seed is the only thing keeping it on screen:
+      // that is how Game.LoadCredits typesets its line onto the credits scroll
+      // at its own coordinates. Skipping those took the line off the panel.
+      if (geom && !place && (child.__place != null || !child.__seed)) continue;
       this.drawNode(ctx, child,
                     place ? this.childXform(child, place) : undefined);
     }
@@ -565,7 +572,7 @@ export class SpriteRenderer {
       }
       for (const child of node.children ?? []) {
         const place = placementFor(geom, child);
-        if (geom && !place) continue;
+        if (geom && !place && (child.__place != null || !child.__seed)) continue;
         visit(child, place ? this.childXform(child, place) : undefined);
       }
       ctx.restore();
