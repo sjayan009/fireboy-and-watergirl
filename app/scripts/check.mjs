@@ -17,6 +17,7 @@
  *     months later.
  */
 import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import sharp from "sharp";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -142,6 +143,35 @@ console.log("\nevery asset the manifests name is there");
   // download, with nothing else in the project noticing.
   check("the sprites were converted, not copied", raster === "webp",
         `shipped as ${raster}`);
+
+  // ---- the raster's canvas is the rect, plus an even margin ----------------
+  //
+  // `w/h/ox/oy` are read off JPEXS's SVG export, whose canvas IS the shape's
+  // bounds rect. The raster is a separate export pass and it grows the canvas
+  // when a filter bleeds outside those bounds -- symmetrically, which is the
+  // whole reason the renderer can put the registration point back by halving
+  // the difference. Nothing in the export says so, so it is asserted here: an
+  // export that padded a frame unevenly would slide that art by half
+  // the error, silently, exactly as the map's node glow slid 29px off its node
+  // before the halving existed at all.
+  const pad = [];
+  for (const [id, sprite] of Object.entries(sprites.sprites)) {
+    for (let f = 1; f <= sprite.frames; f++) {
+      const geom = sprite.geom[f - 1];
+      if (!geom || geom.children.length !== 0) continue;   // SVG base art
+      const file = join(ASSETS, "sprites", id, `${f}.${raster}`);
+      if (!existsSync(file)) continue;                     // already reported
+      const { width, height } = await sharp(file).metadata();
+      const dw = width - geom.w, dh = height - geom.h;
+      // one pixel of slack each way: the SVG canvas is fractional and the
+      // raster's is whole, so an unpadded frame lands a fraction over
+      if (dw < -1 || dh < -1 || Math.abs(dw - dh) > 1) {
+        pad.push(`${id}/${f} (${dw.toFixed(1)} x ${dh.toFixed(1)})`);
+      }
+    }
+  }
+  check("every raster frame is its rect plus a uniform margin",
+        pad.length === 0, pad.slice(0, 5).join(", "));
 
   const sounds = read("sounds.json");
   const lost = Object.entries(sounds).filter(([, where]) =>

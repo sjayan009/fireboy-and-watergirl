@@ -224,6 +224,21 @@ invisible until it wasn't:
    which silently erased the entire terrain. The key now includes a generation
    counter bumped on every image load.
 
+8. **The two exports do not agree about the canvas.** Every frame's
+   registration offset comes from the SVG pass, whose canvas *is* the shape's
+   bounds rect and whose root `<g>` translate is the origin inside it. The PNG
+   pass draws the same frame on a canvas grown to hold whatever a filter bleeds
+   outside those bounds -- a uniform margin on all four sides -- so the rect's
+   top-left is half the difference in from the image's. Blitting the raster at
+   the SVG's offset put 45 sprites down and to the right by half their pad:
+   every light in the game, the diamonds, the NEW badge, and the level map's
+   node halo, which is 29px on a gem 26px across. The halo missed its node
+   entirely and read as a stray light on the map. `rasterOrigin` in
+   `sprites.ts` halves the difference between the loaded image and the rect, so
+   it holds for the WebP the build ships as well as the PNG in `extracted/`;
+   `app/scripts/check.mjs` asserts the margin is uniform, which is the part
+   neither export states and the halving depends on.
+
 The renderer never writes to the scene graph: that tree is simulation state.
 The physics view is still one checkbox away, because sprite art hides exactly
 the kind of collision bug it was built to expose.

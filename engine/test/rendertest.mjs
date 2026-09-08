@@ -334,6 +334,135 @@ try {
     check("and it is actually on the panel", credits.pixels > 500, true);
   }
 
+  console.log("\nthe map node's glow is on the node it lights");
+  /**
+   * `Game.Glowin` lights a node by making its `Glower` child visible -- a soft
+   * halo placed at the node's own origin. It was landing beside the node.
+   *
+   * The manifest's `w/h/ox/oy` come from JPEXS's SVG export, whose canvas is
+   * the shape's bounds rect. The PNG is a separate export pass which grows the
+   * canvas symmetrically to hold whatever a filter bleeds outside those
+   * bounds, and the renderer blitted it at -ox,-oy as though the two canvases
+   * agreed. For the node halo that is 29px down and to the right, on a gem 26px
+   * across: the glow cleared the node completely and read as a stray light on
+   * the map. 45 sprites are drawn from a padded raster -- the lights, the
+   * diamonds, the NEW badge -- and every one of them was off by half its pad.
+   *
+   * Measured as two centroids from the same render rather than against a
+   * coordinate out of the manifest, because the manifest is the thing that was
+   * being misread. A fresh page: the checks above have a level running.
+   */
+  const glow = await (async () => {
+    const p3 = await browser.newPage();
+    p3.on("pageerror", (e) => {
+      failures++;
+      console.log("  FAIL page error: " + e.message);
+    });
+    try {
+      await p3.goto(URL_, { waitUntil: "load" });
+      await p3.waitForFunction("window.__debug && window.__debug.sprites",
+                               null, { timeout: 30000 });
+      return await p3.evaluate(async () => {
+        const D = window.__debug, g = window.game;
+        const F = await import("/dist/flash/flash.js");
+        const cv = document.getElementById("stage");
+        const ctx = cv.getContext("2d");
+        const settle = async () => {
+          for (let i = 0; i < 80; i++) {
+            D.render();
+            if (!D.sprites.loading) break;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+          D.render();
+        };
+        // unlock first: CreateMainMenu reads the stats as it builds the map,
+        // and a node the player has not reached is not lit at all
+        document.getElementById("unlock").click();
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter",
+                                                           bubbles: true }));
+        D.step(30);
+        D.autoTick(false);
+        await settle();
+
+        const mm = g.m_mainMenu;
+        const btn = mm && mm.b_1_8;
+        if (!btn) return { error: "no b_1_8 on the map" };
+
+        // The real roll-over, so Glowin decides what lights up -- and then ask
+        // it WHICH node it lit rather than assuming. `Translation` is the map's
+        // own node-to-level order, not mode-major: Translation[7] is "1_5", so
+        // adventure 8's button belongs to node_30.
+        btn.dispatchEvent(new F.MouseEvent("rollOver", btn));
+        let node = null;
+        for (let i = 1; i <= 32 && !node; i++) {
+          const n = mm["node_" + i];
+          if (n && n.Glower && n.Glower.visible) node = n;
+        }
+        if (!node) return { error: "Glowin lit no node" };
+
+        const grab = async () => {
+          await settle();
+          return ctx.getImageData(0, 0, cv.width, cv.height).data;
+        };
+        /** Where the pixels two renders disagree about sit, and how many. */
+        const moved = (a, b) => {
+          let n = 0, sx = 0, sy = 0;
+          for (let i = 0; i < cv.width * cv.height; i++) {
+            const q = i * 4;
+            if (Math.abs(a[q] - b[q]) + Math.abs(a[q + 1] - b[q + 1]) +
+                Math.abs(a[q + 2] - b[q + 2]) <= 30) continue;
+            n++;
+            sx += i % cv.width;
+            sy += (i / cv.width) | 0;
+          }
+          return n ? { n, x: sx / n, y: sy / n } : { n: 0, x: 0, y: 0 };
+        };
+
+        // the halo: the only thing that changes when Glower goes
+        const lit = await grab();
+        node.Glower.visible = false;
+        const unlit = await grab();
+        const halo = moved(lit, unlit);
+
+        // the gem, from the same render with the halo already gone. The time
+        // label Glowin also revealed is a sibling of the gem art and sits off
+        // to one side by the SWF's own placement, so it is hidden too.
+        const wasTime = node.Time && node.Time.visible;
+        if (node.Time) node.Time.visible = false;
+        const withNode = await grab();
+        node.visible = false;
+        const withoutNode = await grab();
+        node.visible = true;
+        if (node.Time) node.Time.visible = wasTime;
+        node.Glower.visible = true;
+        const gem = moved(withNode, withoutNode);
+
+        return {
+          halo: { n: halo.n, x: Math.round(halo.x), y: Math.round(halo.y) },
+          gem: { n: gem.n, x: Math.round(gem.x), y: Math.round(gem.y) },
+          dx: Math.round(halo.x - gem.x),
+          dy: Math.round(halo.y - gem.y),
+        };
+      });
+    } finally {
+      await p3.close();
+    }
+  })();
+
+  if (glow.error) {
+    failures++;
+    console.log("  FAIL " + glow.error);
+  } else {
+    console.log(`  halo at ${glow.halo.x},${glow.halo.y} (${glow.halo.n} px), ` +
+                `gem at ${glow.gem.x},${glow.gem.y} (${glow.gem.n} px)`);
+    check("the halo is on screen", glow.halo.n > 200, true);
+    check("the gem is on screen", glow.gem.n > 100, true);
+    // the bug put it 29px down and right; 5 leaves room for the art's own
+    // asymmetry without leaving room for a pad going unaccounted for again
+    check("the halo is centred on the node it lights",
+          Math.abs(glow.dx) <= 5 && Math.abs(glow.dy) <= 5, true);
+  }
+
 } finally {
   await browser.close();
   server.kill();
