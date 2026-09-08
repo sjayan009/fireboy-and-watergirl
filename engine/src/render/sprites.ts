@@ -151,6 +151,35 @@ function placementFor(geom: FrameGeom | undefined,
   return geom.children.find((c) => c.name === child.name);
 }
 
+/**
+ * Where a frame's registration point sits inside the image being blitted.
+ *
+ * `w/h/ox/oy` come from JPEXS's SVG export, whose canvas IS the shape's bounds
+ * rect and whose root <g> translate is the registration point inside it. The
+ * PNG is a SEPARATE JPEXS pass, and for any frame carrying a filter it grows
+ * the canvas symmetrically so the blur or shadow has room to bleed outside
+ * those bounds. Nothing reconciles the two, so blitting the raster at -ox,-oy
+ * treated the image's top-left as the rect's and put the art half the pad down
+ * and to the right: 29px for the level map's node glow, which is more than the
+ * node it belongs to is wide, so the halo sat beside the node it was meant to
+ * light. 45 sprites are drawn this way -- every glow and light in the game,
+ * the diamonds, the NEW badge on a freshly unlocked level.
+ *
+ * The size is read off the loaded image rather than baked into the manifest,
+ * so this is equally true of the WebP the build ships (sharp converts without
+ * resizing) and needs no re-export. An SVG's canvas already is the rect, so
+ * the pad rounds to nothing and this is the identity on the base-art path.
+ */
+function rasterOrigin(img: HTMLImageElement,
+                      g: { w: number; h: number; ox: number; oy: number },
+): { ox: number; oy: number } {
+  const padX = (img.naturalWidth - g.w) / 2;
+  const padY = (img.naturalHeight - g.h) / 2;
+  return padX > 0.5 || padY > 0.5
+    ? { ox: g.ox + padX, oy: g.oy + padY }
+    : { ox: g.ox, oy: g.oy };
+}
+
 export class SpriteRenderer {
   private images = new Map<string, HTMLImageElement>();
   private pending = new Set<string>();
@@ -464,8 +493,12 @@ export class SpriteRenderer {
           ? `${frame}.${this.raster}`
           : (geom.base ?? `${frame}_base.svg`);
         const img = this.image(`sprites/${sprite.id}/${file}`);
-        if (img) ctx.drawImage(img, -geom.ox, -geom.oy);
-        else basePending = true;
+        if (img) {
+          const o = rasterOrigin(img, geom);
+          ctx.drawImage(img, -o.ox, -o.oy);
+        } else {
+          basePending = true;
+        }
         this.prefetch(sprite);
       }
     }
@@ -640,7 +673,8 @@ export class SpriteRenderer {
       ctx.save();
       const [a, b, c, d, tx, ty] = p.m;
       ctx.transform(a, b, c, d, tx, ty);
-      ctx.drawImage(img, -g.ox, -g.oy);
+      const o = rasterOrigin(img, g);
+      ctx.drawImage(img, -o.ox, -o.oy);
       ctx.restore();
     }
   }
