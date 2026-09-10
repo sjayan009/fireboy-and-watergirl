@@ -238,6 +238,67 @@ export async function signIn(email: string, password: string): Promise<void> {
 }
 
 /**
+ * One button instead of a password and a trip to an inbox.
+ *
+ * The invite gate is NOT here. It is on `claim_username`, for the reason
+ * `0004_invites.sql` gives at length: sign-up happens in the browser, so
+ * anything the browser is asked to check first is not a check. So this lands in
+ * exactly the `nameless` stage an email sign-up lands in, owing exactly the same
+ * code, and adds no way past the gate -- which is why it needed no migration.
+ *
+ * Google reports the address as verified, so Supabase sets `email_confirmed_at`
+ * and the `unverified` stage does not arise. Skipped, not bypassed: the same
+ * field is being read, and it is genuinely set.
+ *
+ * There is nothing to await afterwards. This navigates away, and the session
+ * comes back as `?code=` on the bare origin -- the same shape the emailed link
+ * returns, exchanged by the same `detectSessionInUrl` at boot. See `landing`.
+ */
+export async function signInWithGoogle(): Promise<void> {
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: landing() },
+  });
+  fail(error);
+}
+
+/**
+ * Whether this account can be signed into with a password at all.
+ *
+ * An account that arrived through Google has no password, so the settings
+ * screen's offer to CHANGE one is an offer it cannot keep: the change is proved
+ * by signing in with the old password, and there is no old password to sign in
+ * with. That row has to know which question it is asking.
+ *
+ * The obvious answer is `user.identities`, which is in the session already and
+ * lists `email` for anyone who signed up with an address. It is wrong by one
+ * case, and the case is the one this whole function exists for: setting a
+ * password on a Google account does not add an email identity, so somebody who
+ * sets one goes on looking passwordless forever. Only the database knows, which
+ * is what `has_password` is for -- see the migration for the measurement behind
+ * it.
+ *
+ * A failure is answered with `true`, and the direction is chosen. "Yes, there
+ * is a password" shows the change form, which asks for the old one and refuses
+ * without it; "no" shows a form that sets a password having proved nothing. If
+ * this call cannot be trusted, the first is the harmless way to be wrong.
+ */
+export async function hasPassword(): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.rpc("has_password");
+    if (error || data === null || data === undefined) {
+      // Includes the window where this release is live and the migration is
+      // not: the function does not exist, the call errors, and the row falls
+      // back to the identity list rather than to nothing.
+      return (state.user?.identities ?? []).some((i) => i.provider === "email");
+    }
+    return data as boolean;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Things to shut down before the session ends.
  *
  * The lobby holds a websocket and announces this account as online, so it has
@@ -271,6 +332,71 @@ export async function resendVerification(email: string): Promise<void> {
     type: "signup", email,
     options: { emailRedirectTo: landing() },
   });
+  fail(error);
+}
+
+/**
+ * Whether an invitation already said yes, so the code field can go away.
+ *
+ * Only cosmetic -- `claim_username` decides, and it reads the same column
+ * itself. This is what stops an invited person being shown a field for a code
+ * nobody ever gave them.
+ *
+ * A failure answers `false`, which SHOWS the field, and the field is not
+ * `required`, so somebody who was invited and got a failed lookup can still
+ * submit it empty and be let through by the database. Both ways of being wrong
+ * end somewhere workable, which is the point of choosing this direction.
+ */
+export async function wasInvited(): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.rpc("was_invited");
+    if (error || data === null || data === undefined) return false;
+    return data as boolean;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Email a fresh sign-in link to somebody who already has an account.
+ *
+ * This is the answer to an invitation that expired, or was opened on the wrong
+ * device, or went to spam and was found a week later. Without it the only way
+ * back is asking for another invitation by hand, which is the thing being
+ * removed.
+ *
+ * ## `shouldCreateUser: false` IS the gate
+ *
+ * Left at its default, `signInWithOtp` CREATES an account for any address it is
+ * given -- which would turn this button into a public sign-up form and undo the
+ * invite gate entirely, quietly, with no error anywhere. With it off, the call
+ * does nothing at all for an address that has no account, so a stranger pressing
+ * it gets a polite message and no access.
+ *
+ * That makes the flag load-bearing rather than a preference. It must not be
+ * removed to "simplify the options object", and the screen must go on saying
+ * the same thing whether or not an account was found -- otherwise the button
+ * becomes a way to ask which addresses are members.
+ */
+export async function sendSignInLink(email: string): Promise<void> {
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: { shouldCreateUser: false, emailRedirectTo: landing() },
+  });
+  if (!error) return;
+
+  // The refusal that means "no account here" is swallowed on purpose.
+  //
+  // With `shouldCreateUser` off, an unknown address comes back as an error, and
+  // reporting it would hand the screen above the exact answer its wording
+  // exists to withhold: type an address, read the message, learn whether that
+  // person plays. Every other failure -- above all the rate limit, which says
+  // how long to wait and is worth reading -- goes through.
+  const said = `${error.code ?? ""} ${error.message}`.toLowerCase();
+  const noSuchAccount = said.includes("otp_disabled")
+    || said.includes("signups not allowed")
+    || said.includes("user not found");
+  if (noSuchAccount) return;
   fail(error);
 }
 

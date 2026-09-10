@@ -4689,9 +4689,30 @@ export class Game extends MovieClip {
           * REGISTRATION, not a position, and the room had to come from
           * somewhere that was already empty.
           */
-         // Both sampled off the rendered panel: its shadow, then its gold.
-         this.crd.addChild(credit(2, 2, 0x553900));
-         this.crd.addChild(credit(0, 0, 0xffcc00));
+         /*
+          * Orchid, where the 2009 lines are gold, and deliberately still a
+          * light face over a dark shadow.
+          *
+          * The gold was sampled off the panel: #FFCC00 at relative luminance
+          * .644 over #553900 at .049, seven to one between them. That ratio is
+          * not decoration -- it is what makes a letter look pressed into the
+          * parchment rather than printed on top of it, and every other letter
+          * on this scroll has it.
+          *
+          * A purple cannot keep the hue AND the numbers. At the gold's own
+          * lightness a violet lands near .158, seven times darker, and the dark
+          * shadow beneath it stops being visible at all: the line goes flat and
+          * reads as text laid over somebody else's art, which is the exact
+          * thing the comment above about flat gold warns against.
+          *
+          * So the LUMINANCE is what was matched and the hue is what moved.
+          * #EDA3FF sits at .514 against the gold's .644 -- close enough to
+          * carry the same weight on the panel -- over #54206F at .041, near as
+          * makes no difference to the shadow it replaces. 6.22 against the
+          * gold's 7.04, with the light-over-dark direction intact.
+          */
+         this.crd.addChild(credit(2, 2, 0x54206f));
+         this.crd.addChild(credit(0, 0, 0xeda3ff));
          // Same as the instructions: the panel on top owns the pointer.
          if(this.m_introMenu) this.m_introMenu.mouseChildren = false;
          this.crd.OKO.addEventListener(MouseEvent.MOUSE_OVER,this.__bind(this.OverSounder));

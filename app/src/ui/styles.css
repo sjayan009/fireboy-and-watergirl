@@ -98,6 +98,33 @@ form { display: grid; gap: 14px; margin-top: 20px; }
 .card .primary { min-height: 44px; }
 .card:has(.friends-hub) { max-width: 520px; }
 .card > .note:last-child { padding-top: 18px; }
+/*
+ * Sign in with Google, wearing this app's face rather than Google's.
+ *
+ * Google's own dark button is #131314 on a #8E918F hairline in Roboto Medium.
+ * Both are wrong here: #131314 is a cold black in front of the warm #1E1A15
+ * panel, and Roboto is a download in an app that deleted 550 KB of webfonts to
+ * get the first frame of a game on screen sooner. Google permits a custom
+ * button provided the mark and the wording are theirs, so the face is `.ghost`
+ * -- the secondary control this app already has -- and only the G keeps its own
+ * colours.
+ *
+ * The two overrides are both `.ghost` being asked to stand in a card. `.ghost`
+ * is a 36px control at .875rem; every control inside `.card` is 44px at 1rem,
+ * which `.card .primary` and `.card .field input` above already say. A button
+ * of a different height and type size directly over the email field would read
+ * as a lesser thing than the form it is an alternative to.
+ */
+.provider-block { margin-top: 20px; }
+.provider { width: 100%; font-size: 1rem; }
+.card .provider { min-height: 44px; }
+.google-g { flex: none; display: flex; width: 18px; height: 18px; }
+/* Hairline, label, hairline -- at the size and colour of a field's own label. */
+.or { display: flex; align-items: center; gap: 12px; margin: 14px 0; color: var(--dim); font-size: .8125rem; letter-spacing: .006em; }
+.or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--edge); }
+/* The divider already set the distance; the form's own 20px would double it. */
+.or + form { margin-top: 14px; }
+
 .qr { max-width: 100%; margin-top: 10px; background: white; padding: 8px; border-radius: 8px; }
 .codelist { padding-left: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
 .codelist code { font-size: .9375rem; }
