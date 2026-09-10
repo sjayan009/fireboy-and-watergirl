@@ -67,11 +67,6 @@ neither of those restricts who can download the game. If that matters, it has to
 be a deployment-level control (Vercel's protection, or an authenticated asset
 route), and there is not one today.
 
-```bash
-npm run invite -- --uses 5 --days 30 --note "for the group chat"
-npm run invite -- --list
-```
-
 Two-factor has ten single-use recovery codes, minted and hashed in the database
 and shown exactly once. This paragraph used to say the opposite -- that they
 were deliberately not worth a new security-sensitive surface, because everyone
