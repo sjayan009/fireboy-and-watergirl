@@ -233,6 +233,39 @@ console.log("\nand the deployment says it is not for indexing");
   check("the page asks not to be indexed", /noindex/.test(html));
 }
 
+/*
+ * The page that has to work when nothing else did.
+ *
+ * `404.html` is copied out of `public/` and served by Vercel for any path that
+ * matches nothing. It is checked here rather than trusted because everything
+ * about it is easy to break silently: rename the file and the platform quietly
+ * falls back to its own generic page, and nobody notices until somebody
+ * mistypes a URL.
+ *
+ * The script assertion is the sharper one. The deployment's CSP allows
+ * `script-src 'self'` with no `unsafe-inline`, so an inline script here would
+ * be refused and do nothing -- the page would still LOOK fine, which is exactly
+ * how it would survive review. Better to refuse to build.
+ */
+console.log("\nand there is a 404 page that can actually run");
+{
+  const path = join(DIST, "404.html");
+  check("404.html is in the build", existsSync(path));
+  if (existsSync(path)) {
+    const page = readFileSync(path, "utf8");
+    // Comments stripped first: the page EXPLAINS in prose that an inline
+    // script would be refused, so those words appear in it legitimately and a
+    // naive search finds them every time.
+    const live = page.replace(/<!--[\s\S]*?-->/g, "");
+    check("it carries no inline script the CSP would refuse",
+          !/<script\b/.test(live));
+    check("and nothing it needs comes from another origin",
+          !/(?:src|href)="https?:\/\//.test(live));
+    check("it offers a way back", /href="\/"/.test(live));
+    check("and asks not to be indexed", /noindex/.test(page));
+  }
+}
+
 console.log("\n" + (failures === 0 ? "BUILD CHECK PASSED"
                                    : `BUILD CHECK FAILED (${failures})`));
 process.exit(failures === 0 ? 0 : 1);
