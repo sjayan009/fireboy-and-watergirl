@@ -43,7 +43,10 @@ CI applies migrations — `full` before its tests, `deployed` after it has prove
 the release BUILDS and before it waits for that build to be live. Until recently
 nothing applied them at all, which is how a migration came to sit unapplied for
 days: the only tests that could have noticed handed `claim_username` an invite
-code, so they never asked the question the migration answered.
+code, so they never asked the question the migration answered. (Both the code
+and the gate it opened are gone now -- `20260910000000_open_the_gate` and
+`20260911000000_drop_the_invite_machinery` -- but the lesson that put migrations
+into CI is the reason this section exists.)
 
 Applying them automatically buys that back and introduces one rule in its place.
 **Vercel builds on push and the workflow starts on the same push, so the two
@@ -81,7 +84,7 @@ rather than by holding a consent the players can withdraw.
 | `profiles` | the public half of a user: the unique name a friend types to find them |
 | `friendships` | one row per relationship, `user_a < user_b` **enforced** so a pair cannot be stored twice |
 | `pair_progress` | one row per map node per pair — the shape `Game.as` already keeps in its SharedObject |
-| `invite_codes` / `invite_redemptions` | the gate, and who came through it |
+| `solo_progress` | one row per map node per ACCOUNT — progress earned alone, which used to live in one browser-wide `localStorage` key |
 | `mfa_recovery_codes` | ten bcrypt hashes per account, shown once |
 
 Three decisions worth knowing:
@@ -112,10 +115,11 @@ deliberate exception, because the person using one cannot reach `aal2` by
 definition.
 
 **An account with no profile is inert.** `0004` said so and `profiles_read` was
-`using (true)`, so an account that never redeemed an invite could list every
-user id in the project and go on to forge itself into a friendship.
+`using (true)`, so an account that had signed up and gone no further could list
+every user id in the project and go on to forge itself into a friendship.
 `has_profile()` is that claim as a predicate, in every policy and every
-function.
+function. It matters more now than it did: signing up needs nothing but a
+confirmed address, so reaching that state is one form away for anybody.
 
 ## Writes go through functions, not tables
 
