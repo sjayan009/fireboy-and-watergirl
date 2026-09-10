@@ -8,8 +8,8 @@ import "./ui/styles.css";
 import { startAuth } from "./auth.js";
 import { startRouter, Route } from "./router.js";
 import {
-  linkScreen, loginScreen, passwordScreen, reportSignInTrouble, resetScreen,
-  signUpScreen, troubleScreen, unlockScreen, usernameScreen, verifyScreen,
+  loginScreen, passwordScreen, reportSignInTrouble, resetScreen, signUpScreen,
+  troubleScreen, unlockScreen, usernameScreen, verifyScreen,
 } from "./screens/accounts.js";
 function lazy(load: () => Promise<Route["render"]>): Route["render"] {
   return (host) => {
@@ -34,7 +34,6 @@ const routes: Route[] = [
   { path: "/login", stages: ["out"], render: loginScreen },
   { path: "/signup", stages: ["out"], render: signUpScreen },
   { path: "/reset", stages: ["out"], render: resetScreen },
-  { path: "/link", stages: ["out"], render: linkScreen },
   // Reached from the emailed link, which arrives with a session already.
   { path: "/password", stages: ["in", "nameless"], render: passwordScreen },
   { path: "/verify", stages: ["unverified"], render: verifyScreen },
