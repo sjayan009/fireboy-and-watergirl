@@ -36,7 +36,10 @@ export function signUpScreen(host: HTMLElement): void {
         if (inputOf(pw).value.length < 8) {
           throw new Error("Use at least 8 characters.");
         }
-        await signUp(inputOf(email).value.trim(), inputOf(pw).value);
+        const address = inputOf(email).value.trim();
+        const { existing } = await signUp(address, inputOf(pw).value);
+        awaiting = address;
+        awaitingExisting = existing;
         go("/verify");
       },
       footer: note("Already have one? ", link("Sign In", "#/login")),
@@ -103,24 +106,64 @@ export function loginScreen(host: HTMLElement): void {
     })));
 }
 
+/**
+ * Where a sign-up goes, and the address it is waiting on.
+ *
+ * Held here because after `signUp` there is nothing else holding it. Email
+ * confirmation means Supabase issues NO session until the link is followed, so
+ * there is no `auth().user` to read the address off -- the account exists on
+ * the server and this browser has no proof of it.
+ *
+ * That is also the bug this fixes. `signUp` sent people to `/verify`, which
+ * admitted only the `unverified` stage; with no session the stage is still
+ * `out`, so the router turned them straight around to `/login`. Every single
+ * person who signed up with an address -- not just the duplicates, everybody --
+ * filled in the form, pressed the button and landed on the Sign In screen with
+ * no error, no message, and no idea an email had been sent. `/verify` now
+ * admits `out` as well, and this is what tells it who it is waiting for.
+ */
+let awaiting = "";
+/** Whether that address turned out to already have an account. */
+let awaitingExisting = false;
+
 export function verifyScreen(host: HTMLElement): void {
-  const address = auth().user?.email ?? "your address";
+  const address = awaiting || auth().user?.email || "";
+  const existing = awaitingExisting;
+
   host.append(card("Check your email",
-    note(`A link is on its way to ${address}. Follow it and you are in.`),
-    note("Nothing arrived? It can take a minute, and it does sometimes land " +
-         "in spam."),
+    note(address
+      ? `A link is on its way to ${address}. Follow it and you are in.`
+      : "A link is on its way. Follow it and you are in."),
+    note("It can take a minute, and it does sometimes land in spam."),
+    // The one sentence that serves both people without telling either about
+    // the other.
+    //
+    // Supabase deliberately will not say "that address is taken" -- see
+    // `signUp` -- so neither will this. But somebody who already has an account
+    // is standing here waiting for mail that is never coming, and the only
+    // thing that helps them is the door they actually need. Saying it to
+    // everybody costs the genuinely new person one line of text and costs the
+    // returning person nothing at all.
+    existing
+      ? note("Already had an account with that address? Nothing will arrive — ",
+             link("sign in instead", "#/login"),
+             ", including with Google if that is how you made it.")
+      : null,
     form({
       submit: "Send it again",
       children: [],
       onSubmit: async () => {
-        const email = auth().user?.email;
-        if (!email) throw new Error("No address to send to. Sign in again.");
-        await resendVerification(email);
+        if (!address) throw new Error("No address to send to. Start again.");
+        await resendVerification(address);
       },
       footer: el("p", { class: "note" },
         el("a", { href: "#", onclick: async (e: Event) => {
           e.preventDefault();
-          await signOut();
+          awaiting = "";
+          awaitingExisting = false;
+          // Signing out matters only when there IS a session; after a plain
+          // sign-up there is none, and this is simply the way back.
+          if (auth().session) await signOut(); else go("/signup");
         } }, "Use a different address")),
     })));
 }
