@@ -669,9 +669,14 @@ export function playScreen(host: HTMLElement): () => void {
         el("span", { class: `grade g${medal}` }, GRADES[medal] ?? "—")));
     }
 
+    // Whose progress this is, which stopped being "this browser's" when solo
+    // results moved into `solo_progress` and got an account on them. The old
+    // wording outlived the change by a release and told people their own
+    // account's medals belonged to the machine they happened to be sitting at
+    // -- which had been true, and was the bug that moved them.
     times.append(el("p", { class: "note" },
       `${done} of 32 finished` +
-      (progress.shared ? ", together" : ", on this browser")));
+      (progress.shared ? ", together" : ", on your account")));
 
     // A save that is not being saved used to look exactly like one that was.
     // `localStorage.setItem` throws on a full quota and in some private modes,
