@@ -48,7 +48,7 @@ hop of latency and needs no TURN server.
 
 ## Accounts
 
-Sign-up needs an invite code, email verification is required, and two-factor is
+Sign-up needs a confirmed email address, email verification is required, and two-factor is
 optional. The gate is not on sign-up — it cannot be, that is Supabase Auth
 running in a browser — but on `claim_username`, which redeems the code and
 creates the profile in one statement. An account with no profile cannot be
@@ -115,7 +115,7 @@ npm run app:test   # accounts and two-account play, in real browsers
 | netcode | 192 combinations of latency, jitter, loss, mode and input pattern; damaged, duplicated and stale packets |
 | rendering | a perceptual signature per level, so a mask that stops clipping -- or an encoder swap that changes the picture -- is caught |
 | database | row level security from a third account, races run in parallel, ordering fuzz |
-| the app | the emailed links, the invite gate, two-factor, and two people playing |
+| the app | the emailed links, the username rules, two-factor, Google, and two people playing |
 
 What is **not** tested here: that email actually arrives, and real NAT traversal
 between two physical networks. Both need something this machine does not have.
@@ -155,12 +155,16 @@ NAT refuses to be discovered relay over their own Realtime channel instead.
 
 ## A note on the art
 
-This ships art extracted from a commercial game. The repository is private and
-the deployment asks not to be indexed — but "asks not to be indexed" is a
-request to crawlers, and the invite gate decides who can have an ACCOUNT rather
-than who can fetch a file. The bundle, the sprites and the audio are public
-static objects to anyone who knows the URL, which is the honest description of
-what is deployed today.
+This ships art extracted from a commercial game, and the deployment is now
+open: anybody who confirms an email address can play. The invite gate that used
+to stand in front of that is gone by choice, not by accident.
+
+It never limited exposure as much as it looked like it did. It decided who could
+have an ACCOUNT, never who could fetch a file, and the bundle, the sprites and
+the audio were always public static objects to anyone who knew the URL. Removing
+it changes how many people are likely to arrive, not what is reachable. The
+deployment still asks not to be indexed, which is a request to crawlers rather
+than a control.
 
 Production source maps are off, so the source is no longer served alongside
 them. Restricting the assets themselves needs a deployment-level control that

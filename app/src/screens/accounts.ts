@@ -7,8 +7,8 @@
  */
 import {
   auth, claimUsername, redeemRecoveryCode, resendVerification, retryAuth,
-  sendPasswordReset, sendSignInLink, setPassword, signIn, signInWithGoogle,
-  signOut, signUp, listFactors, verifyTotp, wasInvited,
+  sendPasswordReset, setPassword, signIn, signInWithGoogle, signOut, signUp,
+  listFactors, verifyTotp,
 } from "../auth.js";
 import {
   card, el, field, form, googleButton, inputOf, link, note, orDivider,
@@ -23,17 +23,11 @@ export function signUpScreen(host: HTMLElement): void {
   const again = field("Repeat password", { type: "password", required: true,
                                            autocomplete: "new-password" });
 
-  // The invite note sits ABOVE the Google button, not under the form. Google is
-  // now the shortest way off this screen, and somebody who takes it before
-  // reading to the bottom would meet a demand for a code nobody warned them
-  // about -- on a screen they can no longer go back to.
-  host.append(card("Make an account",
-    note("You will need an invite code to finish, whichever way you sign up. " +
-         "Ask whoever sent you here."),
+  host.append(card("Make an Account",
     googleButton(signInWithGoogle),
     orDivider(),
     form({
-      submit: "Sign up",
+      submit: "Sign Up",
       children: [email, pw, again],
       onSubmit: async () => {
         if (inputOf(pw).value !== inputOf(again).value) {
@@ -45,7 +39,7 @@ export function signUpScreen(host: HTMLElement): void {
         await signUp(inputOf(email).value.trim(), inputOf(pw).value);
         go("/verify");
       },
-      footer: note("Already have one? ", link("Sign in", "#/login")),
+      footer: note("Already have one? ", link("Sign In", "#/login")),
     })));
 }
 
@@ -82,57 +76,30 @@ export function loginScreen(host: HTMLElement): void {
   refused.hidden = !trouble;
   trouble = "";
 
-  host.append(card("Sign in",
+  // Recovery sits under the password box, not in the footer.
+  //
+  // It is reached for at one moment only -- the password just failed, or is
+  // about to -- and the field it rescues is directly above it. In the footer it
+  // shared a line with "Make an account", which put the way OUT of a stuck
+  // sign-in next to the way to abandon signing in altogether.
+  const forgot = el("p", { class: "field-aside" },
+    link("Forgot password?", "#/reset"));
+
+  host.append(card("Sign In",
     refused,
     googleButton(signInWithGoogle),
     orDivider(),
     form({
-      submit: "Sign in",
-      children: [email, pw],
+      submit: "Sign In",
+      children: [email, pw, forgot],
       onSubmit: async () => {
         await signIn(inputOf(email).value.trim(), inputOf(pw).value);
       },
-      footer: el("p", { class: "note" },
-        link("Make an account", "#/signup"), " · ",
-        link("Forgot your password", "#/reset"), el("br"),
-        link("Email me a sign-in link", "#/link")),
-    })));
-}
-
-/**
- * A way back in for somebody who was invited and lost the link.
- *
- * An invitation is a single email, and emails expire, go to spam, and get
- * opened on the wrong device. Without this the only way back is asking to be
- * invited again by hand, which is the thing invitations were meant to stop.
- *
- * Nobody NEW can get in through here: `sendSignInLink` refuses to create
- * accounts, so an address that has never been invited receives nothing at all.
- *
- * Which is exactly why this screen says the same sentence either way. The
- * message below is not politeness -- it is the difference between a button that
- * helps an invited person and a button that answers "is this address a member
- * of this game?" for anybody who asks. `resetScreen` above says the same thing
- * for the same reason.
- */
-export function linkScreen(host: HTMLElement): void {
-  const email = field("Email", { type: "email", required: true,
-                                 autocomplete: "email" });
-  const sent = note("If that address has an account, a sign-in link is on its " +
-                    "way. The link works once and lasts an hour.");
-  sent.hidden = true;
-
-  host.append(card("Email me a sign-in link",
-    note("For an invitation that expired, or a link opened on the wrong " +
-         "device. No password needed."),
-    form({
-      submit: "Send a link",
-      children: [email, sent],
-      onSubmit: async () => {
-        await sendSignInLink(inputOf(email).value.trim());
-        sent.hidden = false;
-      },
-      footer: note(link("Back to signing in", "#/login")),
+      // Below a rule, because this is where the screen stops being about
+      // signing in. Somebody with no account cannot use anything above it, and
+      // a line of grey text was a poor way to say so.
+      footer: el("div", { class: "after-form" },
+        el("a", { class: "secondary", href: "#/signup" }, "Make an Account")),
     })));
 }
 
@@ -270,42 +237,31 @@ function recoveryScreen(host: HTMLElement): void {
 }
 
 /**
- * The last gate: a username, and an invite code unless one was not needed.
+ * The last step: a name.
  *
- * The database does both in one statement -- see `claim_username` -- so a name
- * two people want at once and a code two people spend at once both resolve to
- * exactly one winner.
+ * It used to be the last GATE, and asked for an invite code beside the name --
+ * both settled by `claim_username` in one statement, so a name two people
+ * wanted at once and a code two people spent at once each resolved to one
+ * winner. The code half is gone: this deployment is meant to be publicly
+ * playable now, and a confirmed address is the whole of what is asked.
  *
- * The code field is taken AWAY from somebody who was invited, rather than being
- * added for somebody who was not. Those are not the same: `wasInvited` is asked
- * over the network, and starting hidden would mean a lookup that never comes
- * back leaves a person holding a perfectly good code with nowhere to type it.
- * Starting visible, the same failure costs an invited person a field they can
- * ignore. The price is a brief flash of a box that then goes away, which is the
- * cheaper of the two.
- *
- * It is also NOT `required` any more. An invited person whose lookup failed
- * sees the field, has nothing to put in it, and can still submit -- and the
- * database, which reads the same column itself and does not depend on this
- * request having succeeded, lets them through.
+ * The name half still races, and `claim_username` still settles it the same
+ * way -- that was never the code's doing.
  */
 export function usernameScreen(host: HTMLElement): void {
   const name = field("Username", {
     required: true, minlength: 3, maxlength: 20, autocomplete: "username",
     pattern: "[A-Za-z0-9](_?[A-Za-z0-9]){2,19}",
   });
-  const code = field("Invite code", { autocomplete: "off" });
-  void wasInvited().then((invited) => { code.hidden = invited; });
 
   host.append(card("Pick a name",
     note("This is what a friend types to find you. 3 to 20 letters, digits " +
          "or underscores."),
     form({
       submit: "Claim it",
-      children: [name, code],
+      children: [name],
       onSubmit: async () => {
-        const typed = inputOf(code).value.trim().toUpperCase();
-        await claimUsername(inputOf(name).value.trim(), typed || null);
+        await claimUsername(inputOf(name).value.trim(), null);
         rerender();
         go("/play");
       },

@@ -8,8 +8,8 @@
  *
  * Every claim here is one the design actually rests on:
  *
- *   * a username and an invite code are each claimed in ONE statement, so a
- *     race has exactly one winner rather than two;
+ *   * a username is claimed in ONE statement, so a race for it has exactly one
+ *     winner rather than two;
  *   * `sync_progress` is monotonic and order-independent, which is what lets
  *     BOTH peers write without electing one of them;
  *   * unfriending takes the shared progress with it, because progress belongs
@@ -119,33 +119,18 @@ try {
     check("and only one profile has it", holders.body?.length ?? 0, 1);
   }
 
-  console.log("\ntwo people, the last use of one invite code");
-  {
-    const a = await makeUser("codea");
-    const b = await makeUser("codeb");
-    const code = await makeCode(1);
-    const [ra, rb] = await Promise.all([
-      rpc(a, "claim_username", { new_username: `ca${stamp % 100000}`, invite_code: code }),
-      rpc(b, "claim_username", { new_username: `cb${stamp % 100000}`, invite_code: code }),
-    ]);
-    const won = [ra, rb].filter((r) => r.status < 400).length;
-    check("exactly one of them got in", won, 1);
-
-    const row = await admin(`/rest/v1/invite_codes?code=eq.${code}&select=uses,max_uses`);
-    const [state] = await row.json();
-    check("and the code counted one use, not two",
-          [state.uses, state.max_uses], [1, 1]);
-  }
-
-  console.log("\none person, one code, sixteen requests at once");
+  console.log("\none person, sixteen requests at once");
   {
     // The race that actually happened, and it is not two people. One client
     // sending the same call several times -- a double click, a retry, a flaky
     // connection -- had every request pass `select exists (... from profiles)`
-    // before any of them had inserted the profile, and each then incremented
-    // the counter. Eight parallel calls consumed THREE uses of one code and
-    // created one profile; the redemption ledger said one and the counter said
-    // three, so the accounting was wrong in a way nothing would ever notice.
+    // before any of them had inserted the profile.
+    //
+    // When there was a gate this showed up as accounting: eight parallel calls
+    // consumed THREE uses of one code while creating one profile. The codes are
+    // gone and the race is not, so what is left to assert is the part that was
+    // always the real requirement -- sixteen retries of one intention produce
+    // one profile and one answer, rather than sixteen arguments about it.
     const u = await makeUser("barrier");
     const code = await makeCode(10);
     const wanted = `bar${stamp % 100000}`;
@@ -159,34 +144,8 @@ try {
     check("and all sixteen say the same name",
           new Set(all.map((r) => r.body?.username)).size, 1);
 
-    const row = await admin(
-      `/rest/v1/invite_codes?code=eq.${code}&select=uses`);
-    check("the code counted exactly one use", (await row.json())[0].uses, 1);
-
-    const red = await admin(
-      `/rest/v1/invite_redemptions?user_id=eq.${u.id}&select=code`);
-    check("against exactly one redemption", (await red.json()).length, 1);
-
     const holders = await api(u, `/profiles?username=eq.${wanted}&select=id`);
     check("and there is one profile", holders.body?.length ?? 0, 1);
-
-    // And the rule that was never written down: an account redeems once.
-    const second = await makeCode(5);
-    await rpc(u, "claim_username", { new_username: wanted, invite_code: second });
-    const spare = await admin(`/rest/v1/invite_codes?code=eq.${second}&select=uses`);
-    check("a second code is not spent by somebody already through the gate",
-          (await spare.json())[0].uses, 0);
-  }
-
-  console.log("\nan expired code is no code at all");
-  {
-    const u = await makeUser("expired");
-    const dead = await makeCode(5, new Date(Date.now() - 60_000).toISOString());
-    const r = await rpc(u, "claim_username",
-                        { new_username: `ex${stamp % 100000}`, invite_code: dead });
-    check("refused", r.status >= 400, true);
-    const row = await admin(`/rest/v1/invite_codes?code=eq.${dead}&select=uses`);
-    check("and not counted against it", (await row.json())[0].uses, 0);
   }
 
   console.log("\nprogress converges however the writes are ordered");

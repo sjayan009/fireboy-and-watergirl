@@ -7,7 +7,7 @@
  *   out         no session at all
  *   unverified  signed up, but the email link has not been followed
  *   locked      signed in, but a second factor is enrolled and unanswered
- *   nameless    verified, but no profile -- needs a username and an invite code
+ *   nameless    verified, but has not picked a username yet
  *   in          has a profile, and can play
  *   unavailable the answer could not be obtained at all
  *
@@ -23,8 +23,8 @@
  * assurance-level lookup returned `false`, meaning "no second factor is owed",
  * so a Supabase incident let an enrolled account past the code prompt. A failed
  * profile query returned `null`, meaning "no profile", so the same incident
- * sent an established player to the username form with an invite code they no
- * longer had. Both are the wrong direction to fail in, and both were
+ * sent an established player back to the username form to pick a name they had
+ * already chosen. Both are the wrong direction to fail in, and both were
  * indistinguishable from the truth.
  *
  * So the two questions the boot sequence asks now have three answers each, and
@@ -113,8 +113,8 @@ async function fetchProfile(id: string): Promise<Answer<Profile | null>> {
     .maybeSingle();
   // `maybeSingle` returns no error for no rows, so an error here is a real
   // one -- a failed request, or a policy that refused. "Refused" is not "you
-  // have no profile", and sending somebody to the username form on the strength
-  // of it costs them an invite code.
+  // have no profile", and sending an established player back to the username
+  // form on the strength of it is the wrong way to be wrong.
   if (error) return { ok: false, why: error.message };
   return { ok: true, value: (data as Profile) ?? null };
 }
@@ -335,71 +335,6 @@ export async function resendVerification(email: string): Promise<void> {
   fail(error);
 }
 
-/**
- * Whether an invitation already said yes, so the code field can go away.
- *
- * Only cosmetic -- `claim_username` decides, and it reads the same column
- * itself. This is what stops an invited person being shown a field for a code
- * nobody ever gave them.
- *
- * A failure answers `false`, which SHOWS the field, and the field is not
- * `required`, so somebody who was invited and got a failed lookup can still
- * submit it empty and be let through by the database. Both ways of being wrong
- * end somewhere workable, which is the point of choosing this direction.
- */
-export async function wasInvited(): Promise<boolean> {
-  try {
-    const { data, error } = await supabase.rpc("was_invited");
-    if (error || data === null || data === undefined) return false;
-    return data as boolean;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Email a fresh sign-in link to somebody who already has an account.
- *
- * This is the answer to an invitation that expired, or was opened on the wrong
- * device, or went to spam and was found a week later. Without it the only way
- * back is asking for another invitation by hand, which is the thing being
- * removed.
- *
- * ## `shouldCreateUser: false` IS the gate
- *
- * Left at its default, `signInWithOtp` CREATES an account for any address it is
- * given -- which would turn this button into a public sign-up form and undo the
- * invite gate entirely, quietly, with no error anywhere. With it off, the call
- * does nothing at all for an address that has no account, so a stranger pressing
- * it gets a polite message and no access.
- *
- * That makes the flag load-bearing rather than a preference. It must not be
- * removed to "simplify the options object", and the screen must go on saying
- * the same thing whether or not an account was found -- otherwise the button
- * becomes a way to ask which addresses are members.
- */
-export async function sendSignInLink(email: string): Promise<void> {
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: { shouldCreateUser: false, emailRedirectTo: landing() },
-  });
-  if (!error) return;
-
-  // The refusal that means "no account here" is swallowed on purpose.
-  //
-  // With `shouldCreateUser` off, an unknown address comes back as an error, and
-  // reporting it would hand the screen above the exact answer its wording
-  // exists to withhold: type an address, read the message, learn whether that
-  // person plays. Every other failure -- above all the rate limit, which says
-  // how long to wait and is worth reading -- goes through.
-  const said = `${error.code ?? ""} ${error.message}`.toLowerCase();
-  const noSuchAccount = said.includes("otp_disabled")
-    || said.includes("signups not allowed")
-    || said.includes("user not found");
-  if (noSuchAccount) return;
-  fail(error);
-}
-
 export async function sendPasswordReset(email: string): Promise<void> {
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: landing("password"),
@@ -464,11 +399,12 @@ export async function deleteAccount(): Promise<void> {
 }
 
 /**
- * Claim a username, redeeming an invite code in the same statement.
+ * Claim a username.
  *
- * Both halves are one database function on purpose: a code checked and then
- * used in a second statement is a code two people can pass at once, and a name
- * checked and then inserted is a name two people can take at once.
+ * `inviteCode` is still in the signature and still ignored by the database --
+ * see `20260910000000_open_the_gate`. It goes when the deferred half drops the
+ * argument, not before, so this release and the one before it can call the same
+ * function.
  */
 export async function claimUsername(username: string,
                                     inviteCode: string | null): Promise<Profile> {
