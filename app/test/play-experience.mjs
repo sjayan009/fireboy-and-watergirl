@@ -112,6 +112,27 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
     const saved = page.locator(".save-status");
     await saved.click();
     assert.equal(await page.locator("#drawer-title").innerText(),"Your Progress");
+
+    /*
+     * What the panel CLAIMS about where progress lives.
+     *
+     * This is here because the claim went stale and nothing noticed. Solo
+     * progress moved out of one browser-wide localStorage key and into
+     * `solo_progress`, keyed to the account -- and the line under Best Times
+     * went on saying "on this browser" for a release afterwards, telling people
+     * their own account's progress belonged to the machine they were sitting
+     * at. Every test passed the whole time, because none of them read the
+     * sentence.
+     *
+     * It is one string and it is the only place the app explains this to
+     * anybody, so it is worth an assertion of its own.
+     */
+    const summary = await page.locator(".drawer-content .note").filter({ hasText: "of 32 finished" }).innerText();
+    assert(/of 32 finished/.test(summary), `progress summary missing: ${summary}`);
+    assert(!/this browser|this device/i.test(summary),
+      `the progress panel still claims progress is browser-local: ${summary}`);
+    assert(/on your account|together/.test(summary),
+      `the progress panel should say whose progress it is: ${summary}`);
     assert.equal(await saved.getAttribute("aria-expanded"),"true");
     await saved.click();
     assert(await drawer.isHidden(),"the save indicator closes the panel it opened");
