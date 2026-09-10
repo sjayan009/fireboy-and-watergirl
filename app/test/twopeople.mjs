@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { env } from "../../supabase/connect.mjs";
+import { sweepStaleTestUsers } from "../../supabase/sweep.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP = resolve(HERE, "..");
@@ -41,6 +42,10 @@ function check(what, got, want) {
 // ---- the accounts, made the way the admin API makes them -------------------
 
 const stamp = Date.now();
+// Before anything is made: whatever a killed run left behind.
+// `finally` cannot run when a process is killed, so the only
+// reachable place to tidy those away is the start of the next run.
+await sweepStaleTestUsers("twopeople");
 const users = [];
 
 const admin = (path, init = {}) => fetch(`${API}${path}`, {
@@ -524,7 +529,7 @@ try {
 
   console.log("\nand declined, which is an answer and not silence");
   {
-    // "Not now" used to do nothing at all, so the only way to decline was to say
+    // Declining used to do nothing at all, so the only way to say no was to say
     // nothing -- which is also what somebody who has walked away from their desk
     // does. The inviter waited out two full minutes either way.
     await inviteRow(a, bob.username).click();
@@ -532,7 +537,7 @@ try {
     await a.click(".banner button:has-text('Send invite')");
     await b.waitForSelector(".banner:has-text('wants to play')", { timeout: 30000 });
 
-    await b.click(".banner button:has-text('Not now')");
+    await b.click(".banner button:has-text('Decline')");
     await a.waitForSelector(".banner:has-text('not now')", { timeout: 20000 });
     check("alice hears it, well inside the two minutes she used to wait",
           /not now/.test(await a.locator(".banner").innerText()), true);
@@ -743,6 +748,16 @@ try {
     await b.evaluate(() => {
       // Private only to TypeScript. The peer connection is the thing there is
       // to break, and closing it is what a network going away does.
+      //
+      // KNOWN FAILURE when WebRTC does not establish on the machine running
+      // this suite: the pair falls back to the relay, there is no `pc`, and
+      // this throws. That is environmental rather than a bug in the app, and it
+      // is left throwing on purpose -- an attempt to close "whatever transport
+      // there is" instead guessed at the relay's internals, found neither `pc`
+      // nor the field it expected, and turned one honest failure into four
+      // confusing ones. Whoever picks this up should start by printing
+      // `session.transport` and its constructor name; the guess is the part
+      // that was wrong, not the intent.
       const t = window.__fbwg.view.session.transport;
       if (!t.pc) throw new Error("not a peer connection -- nothing to break");
       t.pc.close();

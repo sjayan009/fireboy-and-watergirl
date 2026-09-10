@@ -23,6 +23,7 @@
  */
 import { createHmac } from "node:crypto";
 import { env } from "./connect.mjs";
+import { sweepStaleTestUsers } from "./sweep.mjs";
 
 const e = env();
 const URL_ = e.SUPABASE_URL;
@@ -95,6 +96,10 @@ function claim(token, name) {
 }
 
 const stamp = Date.now();
+// Before anything is made: whatever a killed run left behind.
+// `finally` cannot run when a process is killed, so the only
+// reachable place to tidy those away is the start of the next run.
+await sweepStaleTestUsers("mfatest");
 const users = [];
 const codes = [];
 

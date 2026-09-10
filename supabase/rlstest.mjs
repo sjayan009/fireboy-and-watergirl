@@ -29,6 +29,7 @@
  * are named after the attacker rather than after the table.
  */
 import { env, open } from "./connect.mjs";
+import { sweepStaleTestUsers } from "./sweep.mjs";
 
 const e = env();
 const URL_ = e.SUPABASE_URL;
@@ -78,6 +79,10 @@ const rpc = (user, fn, args) =>
   api(user, `/rpc/${fn}`, { method: "POST", body: JSON.stringify(args) });
 
 const stamp = Date.now();
+// Before anything is made: whatever a killed run left behind.
+// `finally` cannot run when a process is killed, so the only
+// reachable place to tidy those away is the start of the next run.
+await sweepStaleTestUsers("rlstest");
 const users = [];
 
 async function makeUser(tag) {
@@ -591,8 +596,17 @@ try {
     check("nor through the function that does the same thing",
           (await rpc(bob, "remove_friend", { their_id: alice.id })).body, false);
 
+    // Blocked answers exactly as a name nobody has does: a row of nulls, not an
+    // error. It used to raise, and raising is what `20260913010000` had to stop
+    // doing -- a raise rolls back the attempt it was just charged for, which
+    // would leave the one call that still resolves a username free to be asked
+    // forever. Indistinguishable from "no such user" is the point either way.
     const asked = await rpc(bob, "request_friend", { their_username: an });
-    check("and asking again gets him nowhere", asked.status >= 400, true);
+    check("and asking again gets him nowhere", asked.status, 200);
+    // `rpc` here hands back a PARSED body, unlike the one in realtimetest.mjs,
+    // which returns text. Two helpers of the same name, two contracts.
+    check("with the same answer a name nobody has would give",
+          asked.body?.user_a ?? null, null);
 
     // A blocked pair's progress is kept -- 0009 chose that deliberately -- and
     // is nobody's to read or write until the block is lifted.
@@ -697,6 +711,34 @@ try {
     const named = await api(hopeful, `/profiles?username=eq.${wname}&select=username`);
     check("after which there is a row, so the name can be shown",
           named.body?.[0]?.username, wname);
+  }
+
+  // ---- asking to be a friend costs something -------------------------------
+
+  console.log("\nand cannot ask to be everybody's friend");
+  {
+    // `request_friend` answers differently for a name somebody has and one
+    // nobody does, which makes it an existence oracle -- the last one, now that
+    // `profiles` is closed. Five an hour is what makes it a useless one.
+    const noisy = await makeUser("noisy");
+    await rpc(noisy, "claim_username", { new_username: `nsy${stamp % 100000}` });
+
+    const tries = [];
+    for (let i = 1; i <= 7; i++) {
+      tries.push((await rpc(noisy, "request_friend",
+                            { their_username: `ghost${stamp}${i}` })).status);
+    }
+    check("five attempts at names nobody has are allowed",
+          tries.slice(0, 5).every((s) => s < 400), true);
+    check("and the sixth is refused", tries[5] >= 400, true);
+
+    // The half that is easy to get wrong. A raise rolls its own transaction
+    // back, so an earlier version of this counted the attempt and then undid
+    // the count on its way out -- seven probes, budget still reading zero.
+    // Charging only for SUCCESS would leave probing free, which is the opposite
+    // of the point.
+    check("so a failed probe costs the same as a real request",
+          tries[6] >= 400, true);
   }
 
   // ---- the grants themselves, read out of the catalogue -------------------
