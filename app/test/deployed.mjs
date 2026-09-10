@@ -165,7 +165,6 @@ try {
 
 const stamp = Date.now();
 const users = [];
-const NOTE = "deployed-smoke";
 
 try {
   const email = `fbwg_dep_${stamp}@example.com`;
@@ -176,12 +175,6 @@ try {
   })).json();
   if (!created.id) throw new Error(`could not create a test user: ${JSON.stringify(created)}`);
   users.push(created.id);
-
-  const code = `DEP-${stamp}`.toUpperCase();
-  await admin("/rest/v1/invite_codes", {
-    method: "POST",
-    body: JSON.stringify({ code, max_uses: 1, note: NOTE }),
-  });
   const token = (await (await fetch(`${API}/auth/v1/token?grant_type=password`, {
     method: "POST",
     headers: { apikey: PUB, "content-type": "application/json" },
@@ -191,8 +184,7 @@ try {
     method: "POST",
     headers: { apikey: PUB, Authorization: `Bearer ${token}`,
                "content-type": "application/json" },
-    body: JSON.stringify({ new_username: `dp${stamp % 100000}`,
-                           invite_code: code }),
+    body: JSON.stringify({ new_username: `dp${stamp % 100000}` }),
   });
 
   const page = await browser.newPage();
@@ -268,7 +260,6 @@ try {
   for (const id of users) {
     await admin(`/auth/v1/admin/users/${id}`, { method: "DELETE" });
   }
-  await admin(`/rest/v1/invite_codes?note=eq.${NOTE}`, { method: "DELETE" });
   console.log(`\ncleaned up ${users.length} test user`);
 }
 

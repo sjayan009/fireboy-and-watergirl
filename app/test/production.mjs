@@ -116,11 +116,6 @@ try {
     body: JSON.stringify({ email, password, email_confirm: true }),
   })).json();
   users.push(created.id);
-  const code = `PROD-${stamp}`.toUpperCase();
-  await admin("/rest/v1/invite_codes", {
-    method: "POST",
-    body: JSON.stringify({ code, max_uses: 1, note: "production" }),
-  });
   const token = (await (await fetch(`${API}/auth/v1/token?grant_type=password`, {
     method: "POST",
     headers: { apikey: PUB, "content-type": "application/json" },
@@ -130,8 +125,7 @@ try {
     method: "POST",
     headers: { apikey: PUB, Authorization: `Bearer ${token}`,
                "content-type": "application/json" },
-    body: JSON.stringify({ new_username: `pr${stamp % 100000}`,
-                           invite_code: code }),
+    body: JSON.stringify({ new_username: `pr${stamp % 100000}` }),
   });
 
   const page = await browser.newPage();
@@ -196,7 +190,6 @@ try {
   for (const id of users) {
     await admin(`/auth/v1/admin/users/${id}`, { method: "DELETE" });
   }
-  await admin("/rest/v1/invite_codes?note=eq.production", { method: "DELETE" });
   console.log(`\ncleaned up ${users.length} test user`);
 }
 

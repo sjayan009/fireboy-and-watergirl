@@ -10,7 +10,6 @@
     "dev": "npm --prefix app run dev",
     "build": "npm --prefix app run build",
     "test": "npm --prefix engine test && npm run test:servers && npm run test:docs && npm run build && npm run check && npm run lint",
-    "invite": "node supabase/invite.mjs",
     "unenrol": "node supabase/unenrol.mjs",
     "app:test": "npm --prefix app test",
     "check": "npm --prefix app run check",

@@ -64,15 +64,14 @@ export function settingsScreen(host: HTMLElement): void {
   host.append(card("Settings",
     el("div", { class: "settings-list" },
       group("Username", nameValue,
-        note("Changing it does not cost another invite code."),
+        note("A friend types this to find you. Changing it takes effect at " +
+             "once, everywhere."),
         form({
           submit: "Save",
           children: [name, saved],
           onSubmit: async () => {
-            // Already through the gate, so no code: the database only asks for
-            // one when a profile does not yet exist.
             const claimed = inputOf(name).value.trim();
-            await claimUsername(claimed, null);
+            await claimUsername(claimed);
             nameValue.textContent = claimed;
             saved.hidden = false;
             // Deliberately no re-render. `claimUsername` publishes the new

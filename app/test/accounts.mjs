@@ -630,76 +630,6 @@ try {
       body: "{}",
     });
     check("and a signed-out caller is refused", asAnon.ok, false);
-
-    const invAnon = await fetch(`${API}/rest/v1/rpc/was_invited`, {
-      method: "POST",
-      headers: { apikey: PUB, "content-type": "application/json" },
-      body: "{}",
-    });
-    check("was_invited is shut to anon too", invAnon.ok, false);
-  }
-
-  // ---- an invitation, which is a code nobody types -------------------------
-
-  console.log("\nan invitation lets somebody in with no code at all");
-  {
-    const email = `fbwg_inv_${stamp}@example.com`;
-    // `generate_link` rather than `/invite`: it creates the account and sets
-    // `invited_at` exactly as inviting does, and returns the token WITHOUT
-    // sending mail to an address that does not exist.
-    const invited = await (await admin("/auth/v1/admin/generate_link", {
-      method: "POST",
-      body: JSON.stringify({ type: "invite", email, redirect_to: URL_ }),
-    })).json();
-    check("an invitation link was generated",
-          typeof invited.hashed_token === "string", true);
-    // `generate_link` nests the account it just made; fall back to a lookup
-    // rather than trusting one shape, because getting this wrong silently turns
-    // the ledger assertion below into a query for "undefined" that answers with
-    // an error object and passes for the wrong reason.
-    let who = invited.user?.id ?? invited.user_id;
-    if (!who) {
-      const all = await (await admin(
-        "/auth/v1/admin/users?page=1&per_page=1000")).json();
-      who = (all.users ?? []).find((u) => u.email === email)?.id;
-    }
-    check("the invited account exists", typeof who, "string");
-    users.push({ id: who, email, password: null, tag: "invited" });
-
-    // What the code counters looked like before any of this.
-    const before = await (await admin(
-      "/rest/v1/invite_codes?select=code,uses")).json();
-
-    const page = await newPage();
-    await page.goto(`${URL_}?token_hash=${invited.hashed_token}&type=invite`,
-                    { waitUntil: "load" });
-    await page.waitForSelector("text=Pick a name", { timeout: 20000 });
-    check("an invitation lands on the username screen",
-          page.url().includes("#/username"), true);
-
-    // The field goes away once `was_invited` answers. It starts visible on
-    // purpose -- see the comment on usernameScreen -- so this waits for the
-    // answer rather than reading it too early and calling that a pass.
-    const codeField = page.locator('label.field:has-text("Invite code")');
-    await codeField.waitFor({ state: "hidden", timeout: 15000 }).catch(() => {});
-    check("and does not ask for a code", await codeField.isVisible(), false);
-
-    await page.fill('label.field:has-text("Username") input', `inv${stamp % 100000}`);
-    await page.click("button[type=submit]");
-    await page.waitForTimeout(3000);
-    check("the name is claimed without one", page.url().includes("#/play"), true);
-
-    // No code was spent, and no redemption invented to make the ledger tidy.
-    const after = await (await admin(
-      "/rest/v1/invite_codes?select=code,uses")).json();
-    check("no invite code was spent",
-          JSON.stringify(after) === JSON.stringify(before), true);
-    const led = await (await admin(
-      `/rest/v1/invite_redemptions?user_id=eq.${who}&select=code`)).json();
-    check("and no redemption row was written",
-          Array.isArray(led) ? led.length : `not a list: ${JSON.stringify(led)}`,
-          0);
-    await page.close();
   }
 
 } catch (err) {
@@ -711,7 +641,6 @@ try {
   for (const u of users) {
     await admin(`/auth/v1/admin/users/${u.id}`, { method: "DELETE" });
   }
-  await admin("/rest/v1/invite_codes?note=eq.accounts", { method: "DELETE" });
   console.log(`\ncleaned up ${users.length} test users`);
 }
 

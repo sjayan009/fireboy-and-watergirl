@@ -304,7 +304,7 @@ export function usernameScreen(host: HTMLElement): void {
       submit: "Claim it",
       children: [name],
       onSubmit: async () => {
-        await claimUsername(inputOf(name).value.trim(), null);
+        await claimUsername(inputOf(name).value.trim());
         rerender();
         go("/play");
       },
