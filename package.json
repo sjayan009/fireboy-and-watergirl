@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "db:migrate": "node supabase/migrate.mjs",
-    "db:test": "node supabase/rlstest.mjs && node supabase/mfatest.mjs && node supabase/hardtest.mjs && node supabase/realtimetest.mjs",
+    "db:test": "node supabase/rlstest.mjs && node supabase/mfatest.mjs && node supabase/hardtest.mjs && node supabase/solotest.mjs && node supabase/realtimetest.mjs",
     "engine:test": "npm --prefix engine test",
     "lint": "eslint .",
     "serve": "node serve.mjs",
