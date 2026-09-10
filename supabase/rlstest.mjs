@@ -144,22 +144,42 @@ try {
   check("all four have sessions",
         [alice, bob, mallory, nobody].every((u) => u.token.length > 20), true);
 
-  console.log("\ninvite codes");
+  // ---- what is left of the door -------------------------------------------
+  //
+  // The invite gate is gone: `20260910000000_open_the_gate` took the code off
+  // `claim_username`, because this deployment is meant to be publicly playable.
+  // What used to be asserted here -- refused without a code, refused with a
+  // made-up one, refused with somebody else's spent one -- describes a product
+  // that no longer exists. Replaced rather than deleted, because what holds the
+  // door now is still worth a test.
+  console.log("\nthe way in, now that there is no code");
   const aliceCode = await makeCode();
   const bobCode = await makeCode();
   const malloryCode = await makeCode();
 
-  const nogate = await rpc(alice, "claim_username", { new_username: `x${stamp % 100000}` });
-  check("no profile without an invite code", nogate.status >= 400, true);
+  // A confirmed account needs nothing else. An UNCONFIRMED one never reaches
+  // this function at all -- GoTrue refuses it a token outright -- which is
+  // where email verification is enforced now.
+  const nogate = await rpc(alice, "claim_username",
+                           { new_username: `x${stamp % 100000}` });
+  check("a confirmed account claims a name with no code", nogate.status, 200);
 
+  // The argument is still in the signature and still ignored. The deployed
+  // client sends one, so it has to be accepted and do nothing -- which is the
+  // whole reason it was not dropped in the same migration.
   const guess = await rpc(alice, "claim_username", {
     new_username: `x${stamp % 100000}`, invite_code: "NOPE-NOPE-NOPE",
   });
-  check("and not with a made-up one", guess.status >= 400, true);
+  check("and a made-up code is ignored, not refused", guess.status, 200);
 
+  // The tables outlive the gate and must stay unreadable while they do.
+  // `invite_redemptions` is the record of how the first accounts arrived.
   const peekCodes = await api(alice, "/invite_codes?select=code");
-  check("a signed-in user cannot enumerate codes",
+  check("a signed-in user still cannot enumerate codes",
         Array.isArray(peekCodes.body) ? peekCodes.body.length : peekCodes.status, 0);
+  const peekRedeemed = await api(alice, "/invite_redemptions?select=code");
+  check("nor read who redeemed what",
+        Array.isArray(peekRedeemed.body) ? peekRedeemed.body.length : peekRedeemed.status, 0);
 
   console.log("\nusernames");
   const an = `alice${stamp % 100000}`;
@@ -174,12 +194,16 @@ try {
                    { new_username: bn, invite_code: bobCode })).body?.username,
         bn);
 
+  // Somebody else's spent code used to be the sharpest refusal in this file.
+  // It is now simply a string nobody reads, so what is worth asserting is that
+  // mallory gets in on her own confirmed address -- and that reusing a code
+  // does not somehow fail on its way to being ignored.
   const spent = await rpc(mallory, "claim_username", {
     new_username: `m${stamp % 100000}`, invite_code: aliceCode,
   });
-  check("a code spent by someone else is refused", spent.status >= 400, true);
+  check("somebody else's code neither helps nor blocks", spent.status, 200);
 
-  // Alice is already through the gate, so renaming costs no second code.
+  // Renaming never cost a code even when codes existed; it still does not.
   check("renaming needs no further code",
         (await rpc(alice, "claim_username", { new_username: an })).body?.username,
         an);
