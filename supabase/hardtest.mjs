@@ -33,7 +33,6 @@ function check(what, got, want) {
 
 const stamp = Date.now();
 const users = [];
-const codes = [];
 
 const admin = (path, init = {}) => fetch(`${URL_}${path}`, {
   ...init,
@@ -81,17 +80,6 @@ async function makeUser(tag) {
   return u;
 }
 
-async function makeCode(uses = 1, expiresAt = null) {
-  const code = `HARD-${stamp}-${codes.length}`;
-  await admin("/rest/v1/invite_codes", {
-    method: "POST",
-    body: JSON.stringify({ code, max_uses: uses, note: "hardtest",
-                           expires_at: expiresAt }),
-  });
-  codes.push(code);
-  return code;
-}
-
 try {
   console.log("two people, the same username, the same instant");
   {
@@ -101,8 +89,8 @@ try {
     // Issued together, so they are genuinely in flight at the same time rather
     // than one after the other.
     const [ra, rb] = await Promise.all([
-      rpc(a, "claim_username", { new_username: wanted, invite_code: await makeCode() }),
-      rpc(b, "claim_username", { new_username: wanted, invite_code: await makeCode() }),
+      rpc(a, "claim_username", { new_username: wanted }),
+      rpc(b, "claim_username", { new_username: wanted }),
     ]);
     const won = [ra, rb].filter((r) => r.status < 400).length;
     check("exactly one of them got the name", won, 1);
@@ -132,10 +120,9 @@ try {
     // always the real requirement -- sixteen retries of one intention produce
     // one profile and one answer, rather than sixteen arguments about it.
     const u = await makeUser("barrier");
-    const code = await makeCode(10);
     const wanted = `bar${stamp % 100000}`;
     const all = await Promise.all(Array.from({ length: 16 }, () =>
-      rpc(u, "claim_username", { new_username: wanted, invite_code: code })));
+      rpc(u, "claim_username", { new_username: wanted })));
 
     // Every one of them is a legitimate retry of the same intention, so every
     // one of them should succeed. Idempotent, not merely serialized.
@@ -154,8 +141,8 @@ try {
     const b = await makeUser("fuzzb");
     const an = `fa${stamp % 100000}`;
     const bn = `fb${stamp % 100000}`;
-    await rpc(a, "claim_username", { new_username: an, invite_code: await makeCode() });
-    await rpc(b, "claim_username", { new_username: bn, invite_code: await makeCode() });
+    await rpc(a, "claim_username", { new_username: an });
+    await rpc(b, "claim_username", { new_username: bn });
     await rpc(a, "request_friend", { their_username: bn });
     await rpc(b, "accept_friend", { their_id: a.id });
 
@@ -222,8 +209,8 @@ try {
     const b = await makeUser("cutb");
     const an = `xa${stamp % 100000}`;
     const bn = `xb${stamp % 100000}`;
-    await rpc(a, "claim_username", { new_username: an, invite_code: await makeCode() });
-    await rpc(b, "claim_username", { new_username: bn, invite_code: await makeCode() });
+    await rpc(a, "claim_username", { new_username: an });
+    await rpc(b, "claim_username", { new_username: bn });
     await rpc(a, "request_friend", { their_username: bn });
     await rpc(b, "accept_friend", { their_id: a.id });
     const stats = new Array(32).fill(-1);
@@ -244,8 +231,8 @@ try {
 
   console.log("\nthe whole surface, to somebody who has not signed in");
   {
-    const tables = ["profiles", "friendships", "pair_progress", "invite_codes",
-                    "invite_redemptions", "schema_migrations"];
+    const tables = ["profiles", "friendships", "pair_progress", "solo_progress",
+                    "schema_migrations"];
     const seen = [];
     for (const t of tables) {
       const r = await api(null, `/${t}?select=*&limit=1`);
@@ -255,7 +242,7 @@ try {
     check("no table gives up a row", seen, []);
 
     const writes = [
-      ["claim_username", { new_username: `anon${stamp % 10000}`, invite_code: codes[0] }],
+      ["claim_username", { new_username: `anon${stamp % 10000}` }],
       ["request_friend", { their_username: "anybody" }],
       ["accept_friend", { their_id: users[0].id }],
       ["sync_progress", { their_id: users[0].id, p_stats: new Array(32).fill(3),
@@ -290,7 +277,7 @@ try {
     const accepted = [];
     for (const name of bad) {
       const r = await rpc(u, "claim_username",
-                          { new_username: name, invite_code: await makeCode() });
+                          { new_username: name });
       if (r.status < 400) accepted.push(name);
     }
     check("every one of them refused", accepted, []);
@@ -303,8 +290,8 @@ try {
   for (const u of users) {
     await admin(`/auth/v1/admin/users/${u.id}`, { method: "DELETE" });
   }
-  await admin("/rest/v1/invite_codes?note=eq.hardtest", { method: "DELETE" });
-  console.log(`\ncleaned up ${users.length} test users and ${codes.length} codes`);
+  console.log(`
+cleaned up ${users.length} test users`);
 }
 
 console.log("\n" + (failures === 0 ? "HARD TEST PASSED"

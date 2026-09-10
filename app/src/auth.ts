@@ -430,16 +430,20 @@ export async function deleteAccount(): Promise<void> {
 /**
  * Claim a username.
  *
- * `inviteCode` is still in the signature and still ignored by the database --
- * see `20260910000000_open_the_gate`. It goes when the deferred half drops the
- * argument, not before, so this release and the one before it can call the same
- * function.
+ * One argument now, and the order matters more than it looks. PostgREST picks
+ * an overload by ARGUMENT NAME, so a client sending `invite_code` needs a
+ * function that declares one; dropping the two-argument version while anything
+ * still sends it means a 404 and nobody able to claim a name at all.
+ *
+ * This is the half that ships first. `claim_username(new_username, invite_code
+ * default null)` accepts a call that omits the second argument perfectly well,
+ * so this works against the schema as it stands today AND against the one left
+ * behind once `deferred/20260911000000_drop_the_invite_machinery` is applied.
+ * Only when THIS release is live does dropping the old signature become safe.
  */
-export async function claimUsername(username: string,
-                                    inviteCode: string | null): Promise<Profile> {
+export async function claimUsername(username: string): Promise<Profile> {
   const { data, error } = await supabase.rpc("claim_username", {
     new_username: username,
-    invite_code: inviteCode,
   });
   fail(error);
   const profile = data as Profile;

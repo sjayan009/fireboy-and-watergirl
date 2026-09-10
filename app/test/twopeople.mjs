@@ -65,15 +65,6 @@ async function makeUser(tag) {
   return u;
 }
 
-async function makeCode(n) {
-  const code = `E2E-${stamp}-${n}`;
-  await admin("/rest/v1/invite_codes", {
-    method: "POST",
-    body: JSON.stringify({ code, max_uses: 1, note: "twopeople" }),
-  });
-  return code;
-}
-
 // ---- the dev server --------------------------------------------------------
 
 async function startVite() {
@@ -120,7 +111,7 @@ try {
 const server = await startVite();
 
 /** Sign in and claim a username, exactly as a person would. */
-async function signIn(page, user, code) {
+async function signIn(page, user) {
   await page.goto(URL_, { waitUntil: "load" });
   await page.waitForSelector("input[type=email]", { timeout: 30000 });
   await page.fill("input[type=email]", user.email);
@@ -128,9 +119,9 @@ async function signIn(page, user, code) {
   await page.click("button[type=submit]");
 
   await page.waitForSelector("text=Pick a name", { timeout: 30000 });
-  const inputs = page.locator("form input");
-  await inputs.nth(0).fill(user.username);
-  await inputs.nth(1).fill(code);
+  // One field. The invite code that used to sit beside it went when the gate
+  // came down, and filling `nth(1)` now reaches whatever the form puts second.
+  await page.locator("form input").first().fill(user.username);
   await page.click("button[type=submit]");
   await page.waitForSelector("#stage", { timeout: 30000 });
 }
@@ -158,8 +149,8 @@ try {
     });
   }
 
-  await signIn(a, alice, await makeCode(0));
-  await signIn(b, bob, await makeCode(1));
+  await signIn(a, alice);
+  await signIn(b, bob);
   /**
    * Back to the game.
    *
@@ -241,7 +232,7 @@ try {
     failures++;
     console.log("  FAIL page error: " + err.message);
   });
-  await signIn(c, carol, await makeCode(2));
+  await signIn(c, carol);
   await openFriends(c);
   await c.fill("form input", alice.username);
   await c.click("button[type=submit]");
@@ -1340,7 +1331,6 @@ try {
   for (const u of users) {
     await admin(`/auth/v1/admin/users/${u.id}`, { method: "DELETE" });
   }
-  await admin("/rest/v1/invite_codes?note=eq.twopeople", { method: "DELETE" });
   console.log(`\ncleaned up ${users.length} test users`);
 }
 

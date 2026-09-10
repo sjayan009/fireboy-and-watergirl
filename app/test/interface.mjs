@@ -60,12 +60,6 @@ async function makeReadyUser(tag) {
   if (!created.id) throw new Error("could not create a user");
   users.push({ id: created.id });
 
-  const code = `UI-${stamp}-${tag}`.toUpperCase();
-  await admin("/rest/v1/invite_codes", {
-    method: "POST",
-    body: JSON.stringify({ code, max_uses: 1, note: "interface" }),
-  });
-
   const token = (await (await fetch(`${API}/auth/v1/token?grant_type=password`, {
     method: "POST",
     headers: { apikey: PUB, "content-type": "application/json" },
@@ -77,7 +71,7 @@ async function makeReadyUser(tag) {
     method: "POST",
     headers: { apikey: PUB, Authorization: `Bearer ${token}`,
                "content-type": "application/json" },
-    body: JSON.stringify({ new_username: username, invite_code: code }),
+    body: JSON.stringify({ new_username: username }),
   });
   return { email, password, username };
 }
@@ -372,7 +366,6 @@ try {
   for (const u of users) {
     await admin(`/auth/v1/admin/users/${u.id}`, { method: "DELETE" });
   }
-  await admin("/rest/v1/invite_codes?note=eq.interface", { method: "DELETE" });
   console.log(`\ncleaned up ${users.length} test users`);
 }
 
