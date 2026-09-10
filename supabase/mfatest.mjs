@@ -98,17 +98,6 @@ const stamp = Date.now();
 const users = [];
 const codes = [];
 
-async function makeCode() {
-  const code = `MFA-${stamp % 100000}-${codes.length}AA`;
-  const r = await admin("/rest/v1/invite_codes", {
-    method: "POST",
-    body: JSON.stringify({ code, max_uses: 1, note: "mfatest" }),
-  });
-  if (!r.ok) throw new Error("could not mint a code: " + (await r.text()));
-  codes.push(code);
-  return code;
-}
-
 async function makeUser(tag) {
   const email = `fbwg_mfa_${tag}_${stamp}@example.com`;
   const password = `pw_${stamp}_${tag}!A`;
@@ -159,9 +148,9 @@ try {
   const name = `mfa${stamp % 100000}`;
   const fname = `fri${stamp % 100000}`;
   await rpc(me.token, "claim_username",
-            { new_username: name, invite_code: await makeCode() });
+            { new_username: name });
   await rpc(friend.token, "claim_username",
-            { new_username: fname, invite_code: await makeCode() });
+            { new_username: fname });
   await rpc(me.token, "request_friend", { their_username: fname });
   await rpc(friend.token, "accept_friend", { their_id: me.id });
 
@@ -309,7 +298,6 @@ try {
   for (const u of users) {
     await admin(`/auth/v1/admin/users/${u.id}`, { method: "DELETE" });
   }
-  await admin("/rest/v1/invite_codes?note=eq.mfatest", { method: "DELETE" });
   console.log(`\ncleaned up ${users.length} test users and ${codes.length} codes`);
 }
 

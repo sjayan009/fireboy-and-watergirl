@@ -79,25 +79,6 @@ const rpc = (user, fn, args) =>
 
 const stamp = Date.now();
 const users = [];
-const codes = [];
-
-/**
- * Mint an invite code with the secret key.
- *
- * `invite_codes` has no RLS policies at all, so this is the only way one comes
- * into being -- which is the point, and is itself asserted below.
- */
-async function makeCode(uses = 1) {
-  const code = `TEST-${stamp % 100000}-${codes.length}AA`;
-  const r = await admin("/rest/v1/invite_codes", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({ code, max_uses: uses, note: "rlstest" }),
-  });
-  if (!r.ok) throw new Error("could not mint a code: " + (await r.text()));
-  codes.push(code);
-  return code;
-}
 
 async function makeUser(tag) {
   const email = `fbwg_${tag}_${stamp}@example.com`;
@@ -153,9 +134,6 @@ try {
   // that no longer exists. Replaced rather than deleted, because what holds the
   // door now is still worth a test.
   console.log("\nthe way in, now that there is no code");
-  const aliceCode = await makeCode();
-  const bobCode = await makeCode();
-  const malloryCode = await makeCode();
 
   // A confirmed account needs nothing else. An UNCONFIRMED one never reaches
   // this function at all -- GoTrue refuses it a token outright -- which is
@@ -164,22 +142,6 @@ try {
                            { new_username: `x${stamp % 100000}` });
   check("a confirmed account claims a name with no code", nogate.status, 200);
 
-  // The argument is still in the signature and still ignored. The deployed
-  // client sends one, so it has to be accepted and do nothing -- which is the
-  // whole reason it was not dropped in the same migration.
-  const guess = await rpc(alice, "claim_username", {
-    new_username: `x${stamp % 100000}`, invite_code: "NOPE-NOPE-NOPE",
-  });
-  check("and a made-up code is ignored, not refused", guess.status, 200);
-
-  // The tables outlive the gate and must stay unreadable while they do.
-  // `invite_redemptions` is the record of how the first accounts arrived.
-  const peekCodes = await api(alice, "/invite_codes?select=code");
-  check("a signed-in user still cannot enumerate codes",
-        Array.isArray(peekCodes.body) ? peekCodes.body.length : peekCodes.status, 0);
-  const peekRedeemed = await api(alice, "/invite_redemptions?select=code");
-  check("nor read who redeemed what",
-        Array.isArray(peekRedeemed.body) ? peekRedeemed.body.length : peekRedeemed.status, 0);
 
   console.log("\nusernames");
   const an = `alice${stamp % 100000}`;
@@ -187,34 +149,31 @@ try {
   const mn = `mal${stamp % 100000}`;
   check("alice claims a name",
         (await rpc(alice, "claim_username",
-                   { new_username: an, invite_code: aliceCode })).body?.username,
+                   { new_username: an })).body?.username,
         an);
   check("bob claims his",
         (await rpc(bob, "claim_username",
-                   { new_username: bn, invite_code: bobCode })).body?.username,
+                   { new_username: bn })).body?.username,
         bn);
 
-  // Somebody else's spent code used to be the sharpest refusal in this file.
-  // It is now simply a string nobody reads, so what is worth asserting is that
-  // mallory gets in on her own confirmed address -- and that reusing a code
-  // does not somehow fail on its way to being ignored.
+  // A third account, arriving the same way as the first two and needing nothing
+  // from either of them.
   const spent = await rpc(mallory, "claim_username", {
-    new_username: `m${stamp % 100000}`, invite_code: aliceCode,
+    new_username: `m${stamp % 100000}`,
   });
-  check("somebody else's code neither helps nor blocks", spent.status, 200);
+  check("a third confirmed account gets in on its own", spent.status, 200);
 
-  // Renaming never cost a code even when codes existed; it still does not.
-  check("renaming needs no further code",
+  check("renaming asks for nothing further",
         (await rpc(alice, "claim_username", { new_username: an })).body?.username,
         an);
 
   const taken = await rpc(mallory, "claim_username", {
-    new_username: an.toUpperCase(), invite_code: malloryCode,
+    new_username: an.toUpperCase(),
   });
   check("the same name in different case is refused", taken.status >= 400, true);
 
   const bad = await rpc(mallory, "claim_username", {
-    new_username: "no", invite_code: malloryCode,
+    new_username: "no",
   });
   check("a too-short name is refused", bad.status >= 400, true);
 
@@ -222,7 +181,7 @@ try {
   // that everything she is refused below is refused for the right reason.
   check("mallory claims hers with the code the failures did not spend",
         (await rpc(mallory, "claim_username",
-                   { new_username: mn, invite_code: malloryCode })).body?.username,
+                   { new_username: mn })).body?.username,
         mn);
 
   // A username has to be findable or nobody can add a friend.
@@ -685,10 +644,8 @@ try {
   for (const u of users) {
     await admin(`/auth/v1/admin/users/${u.id}`, { method: "DELETE" });
   }
-  for (const c of codes) {
-    await admin(`/rest/v1/invite_codes?code=eq.${c}`, { method: "DELETE" });
-  }
-  console.log(`\ncleaned up ${users.length} test users and ${codes.length} codes`);
+  console.log(`
+cleaned up ${users.length} test users`);
 }
 
 console.log("\n" + (failures === 0 ? "RLS PASSED" : `RLS FAILED (${failures})`));
