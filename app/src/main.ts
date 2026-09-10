@@ -36,7 +36,11 @@ const routes: Route[] = [
   { path: "/reset", stages: ["out"], render: resetScreen },
   // Reached from the emailed link, which arrives with a session already.
   { path: "/password", stages: ["in", "nameless"], render: passwordScreen },
-  { path: "/verify", stages: ["unverified"], render: verifyScreen },
+  // "out" as well as "unverified", and that is the whole fix for a sign-up that
+  // used to vanish. Confirmation means no session until the link is followed,
+  // so a person who has just signed up is "out" -- and this route admitting
+  // only "unverified" is what bounced every one of them to /login in silence.
+  { path: "/verify", stages: ["out", "unverified"], render: verifyScreen },
   { path: "/unlock", stages: ["locked"], render: unlockScreen },
   { path: "/username", stages: ["nameless"], render: usernameScreen },
   { path: "/play", stages: ["in"], render: lazy(async () => (await import("./screens/play.js")).playScreen) },

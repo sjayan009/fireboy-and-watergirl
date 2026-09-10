@@ -224,12 +224,33 @@ function landing(intent?: string): string {
   return intent ? `${location.origin}/?intent=${intent}` : `${location.origin}/`;
 }
 
-export async function signUp(email: string, password: string): Promise<void> {
-  const { error } = await supabase.auth.signUp({
+/**
+ * Sign up, and say whether the address was already spoken for.
+ *
+ * Supabase does not refuse a duplicate. Asked to register an address that
+ * already has a CONFIRMED account it answers `200`, sends no mail, changes
+ * nothing, and hands back a user whose `identities` list is EMPTY -- so that a
+ * stranger cannot use this form to find out who has an account here. The empty
+ * list is the only thing that distinguishes it from a real sign-up, and it is
+ * documented as the way to tell.
+ *
+ * Passed back rather than acted on, because the screen has to be careful with
+ * it: saying "that address is taken" would hand back exactly the answer
+ * Supabase just refused to give. See `verifyScreen` for the wording that is
+ * useful to both people without telling either of them about the other.
+ *
+ * Note also what this does NOT return: a session. With email confirmation on,
+ * there is no session until the link is followed, so the stage stays `out` and
+ * nothing about the auth state changes here.
+ */
+export async function signUp(email: string,
+                             password: string): Promise<{ existing: boolean }> {
+  const { data, error } = await supabase.auth.signUp({
     email, password,
     options: { emailRedirectTo: landing() },
   });
   fail(error);
+  return { existing: (data.user?.identities ?? []).length === 0 };
 }
 
 export async function signIn(email: string, password: string): Promise<void> {
@@ -332,6 +353,14 @@ export async function resendVerification(email: string): Promise<void> {
     type: "signup", email,
     options: { emailRedirectTo: landing() },
   });
+  if (!error) return;
+  // "Already confirmed" is swallowed for the same reason the sign-up screen
+  // will not say "that address is taken": this button is reachable by somebody
+  // who typed an address that already belongs to a finished account, and an
+  // error saying so turns a resend button into a way to ask who plays here.
+  // Every other failure -- the rate limit above all -- is worth reading.
+  const said = `${error.code ?? ""} ${error.message}`.toLowerCase();
+  if (said.includes("already confirmed") || said.includes("already been confirmed")) return;
   fail(error);
 }
 
