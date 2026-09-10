@@ -107,7 +107,15 @@ try {
     const won = [ra, rb].filter((r) => r.status < 400).length;
     check("exactly one of them got the name", won, 1);
 
-    const holders = await api(a, `/profiles?username=eq.${wanted}&select=id`);
+    // Asked as whoever WON, which is the only account that can answer it.
+    // Read as `a` unconditionally this was a coin flip: when `b` won, `a` came
+    // away profileless, RLS correctly showed a profileless account nothing, and
+    // the suite reported 0 profiles for a name that one person plainly holds.
+    // A test that fails half the time on the function guarding the invite gate
+    // is worse than no test, because the next real regression looks like the
+    // usual noise.
+    const winner = ra.status < 400 ? a : b;
+    const holders = await api(winner, `/profiles?username=eq.${wanted}&select=id`);
     check("and only one profile has it", holders.body?.length ?? 0, 1);
   }
 
