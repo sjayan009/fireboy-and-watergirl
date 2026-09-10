@@ -56,6 +56,20 @@ const admin = (path, init = {}) => fetch(`${API}${path}`, {
   },
 });
 
+/**
+ * Register an account that was created through the FORM for cleanup.
+ *
+ * `makeUser` pushes what it makes; a sign-up driven through the browser is made
+ * by Supabase and nothing here knows its id. Left unregistered they survived
+ * every run -- the cleanup at the bottom deletes by id and had none to delete
+ * by -- and CI quietly accumulated two accounts a time.
+ */
+async function claimForCleanup(email) {
+  const all = await (await admin("/auth/v1/admin/users?page=1&per_page=1000")).json();
+  const found = (all.users ?? []).find((u) => u.email === email);
+  if (found) users.push({ id: found.id, email, password: null, tag: "form" });
+}
+
 async function makeUser(tag) {
   const email = `fbwg_acc_${tag}_${stamp}@example.com`;
   const password = `pw_${stamp}_${tag}!A`;
@@ -212,6 +226,7 @@ try {
 
     const fresh = `fbwg_new_${stamp}@example.com`;
     const where = await signUpWith(fresh);
+    await claimForCleanup(fresh);
     check("a new address is told to check its email",
           where.includes("#/verify"), true);
     check("and told WHICH address",
@@ -230,7 +245,9 @@ try {
           await page.locator("text=Nothing will arrive").count() > 0, true);
 
     // The reverse must NOT be true, or the line becomes an enumeration oracle.
-    await signUpWith(`fbwg_new2_${stamp}@example.com`);
+    const fresh2 = `fbwg_new2_${stamp}@example.com`;
+    await signUpWith(fresh2);
+    await claimForCleanup(fresh2);
     check("a new address is NOT told that",
           await page.locator("text=Nothing will arrive").count(), 0);
     await page.close();
