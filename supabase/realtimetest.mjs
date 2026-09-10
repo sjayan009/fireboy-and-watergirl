@@ -28,7 +28,6 @@ function check(what, got, want) {
 
 const stamp = Date.now();
 const users = [];
-const codes = [];
 
 const admin = (path, init = {}) => fetch(`${URL_}${path}`, {
   ...init,
@@ -63,16 +62,6 @@ async function makeUser(tag) {
   const u = { id: created.id, email, token: s.access_token, tag };
   users.push(u);
   return u;
-}
-
-async function makeCode() {
-  const code = `RTTEST-${stamp}-${codes.length}`;
-  await admin("/rest/v1/invite_codes", {
-    method: "POST",
-    body: JSON.stringify({ code, max_uses: 1, note: "realtimetest" }),
-  });
-  codes.push(code);
-  return code;
 }
 
 /** The pair topic for two ids, in the order `friendships` stores them. */
@@ -127,7 +116,7 @@ try {
   const mn = `rtm${stamp % 100000}`;
   for (const [u, n] of [[alice, an], [bob, bn], [mallory, mn]]) {
     await rpc(u, "claim_username",
-              { new_username: n, invite_code: await makeCode() });
+              { new_username: n });
   }
   console.log("\na pending request opens nothing");
   // Deliberately a DIFFERENT pair from the one tested below. Realtime caches
@@ -244,7 +233,7 @@ try {
     // Carol knows nobody. She is the case the whole policy exists for.
     const carol = await makeUser("carol");
     await rpc(carol, "claim_username",
-              { new_username: "car" + stamp % 100000, invite_code: await makeCode() });
+              { new_username: "car" + stamp % 100000 });
     check("somebody who knows neither player is refused",
           await join(carol, watch), "refused");
 
@@ -284,7 +273,6 @@ try {
   for (const u of users) {
     await admin(`/auth/v1/admin/users/${u.id}`, { method: "DELETE" });
   }
-  await admin("/rest/v1/invite_codes?note=eq.realtimetest", { method: "DELETE" });
   console.log(`\ncleaned up ${users.length} test users`);
 }
 
