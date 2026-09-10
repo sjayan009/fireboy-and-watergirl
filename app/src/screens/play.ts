@@ -26,8 +26,8 @@
  */
 import { GameView, STAGE_W, STAGE_H } from "@engine/embed.js";
 import type { Transport } from "@engine/net/transport.js";
-import { LocalSave } from "@engine/game/save.js";
 import { drainOutbox, pairProgress } from "../pairsave.js";
+import { soloProgress } from "../solosave.js";
 import type { Invite, Showing } from "../net/pairchannel.js";
 import { WatchChannel } from "../net/watchchannel.js";
 import { WatchMirror } from "../net/watch.js";
@@ -104,7 +104,15 @@ export function playScreen(host: HTMLElement): () => void {
   // puts back is what used to make WATCHING write into somebody else's save.
   // Alone this is the browser's localStorage; in a pair session it becomes the
   // pair's shared map and then hands the solo one back.
-  const progress = pairProgress(new LocalSave("FBCookie"));
+  // Solo progress belongs to the ACCOUNT now, not to this browser -- see
+  // solosave.ts for the key that used to be shared by everybody who signed in
+  // here. `pairProgress` still wraps it: alone it is this store, and in a pair
+  // it becomes the pair's shared map and hands the solo one back afterwards.
+  const solo = soloProgress();
+  const progress = pairProgress(solo.store);
+  // Whatever this browser has, merged with whatever the account has, before the
+  // first frame puts a map on screen.
+  void solo.sync();
 
   // A live region: the connection state changes on the network's schedule
   // rather than on the reader's, so a stall, a reconnection or a friend leaving
@@ -295,7 +303,14 @@ export function playScreen(host: HTMLElement): () => void {
     onFrame: () => watchStall(),
     onConfirmed: (v, frame) => {
       if (v.session) mirror?.confirmed(v.session,frame);
-      if (frame % 26 === 0 || v.game.children.some((c: { Rboard?: unknown }) => c.Rboard)) progress.confirm(v.game.The_cookie.data);
+      if (frame % 26 === 0 || v.game.children.some((c: { Rboard?: unknown }) => c.Rboard)) {
+        progress.confirm(v.game.The_cookie.data);
+        // `confirm` is the pair path and returns early when there is no
+        // partner, so playing alone reached storage and stopped there. This is
+        // the other half: alone, the same confirmed state goes up to the
+        // account once it settles.
+        if (!progress.shared) solo.touched();
+      }
       const context = rankedContext();
       if (context && v.session) ranking.observe(context, v.session, v.game, frame);
     },
@@ -1271,6 +1286,10 @@ export function playScreen(host: HTMLElement): () => void {
     consent?.close(); consent = null; watchGeneration++;
     lease.close();
     ranking.close();
+    // One last push, then stop. Leaving the screen is the most likely moment
+    // for a level finished seconds ago to still be sitting in the settle timer.
+    void solo.sync();
+    solo.close();
     offSave();
     removeEventListener("pagehide", onHide);
     removeEventListener("pageshow", onShow);
