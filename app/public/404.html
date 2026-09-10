@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>No such room · Fireboy &amp; Watergirl</title>
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/icon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/icon-180.png" />
+    <!--
+      Self-contained on purpose, and CSS-only because it has to be.
+
+      This file is copied verbatim out of `public/` and is served by Vercel for
+      any path that matches nothing, so it cannot import the app's stylesheet --
+      by the time it is shown, there is no app. Every token below is the same
+      value `src/ui/styles.css` uses, duplicated deliberately rather than
+      reached for; a page whose whole job is to appear when things have gone
+      wrong should not depend on the build having gone right.
+
+      And there is no script. The deployment's `Content-Security-Policy` allows
+      `script-src 'self'` with no `unsafe-inline`, so an inline `<script>` would
+      be refused and silently do nothing. Everything here is CSS, which the same
+      header does allow inline. The emblem is an inline `<svg>` rather than an
+      `<img>`, which sidesteps `img-src` for the same reason it does in the app.
+    -->
+    <style>
+      :root {
+        --bg: #14110E; --panel: #1E1A15; --ink: #F2ECE0; --dim: #A99E8D;
+        --fire: #FF865B; --water: #75D5EB; --edge: #342e24;
+        --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text',
+              'Segoe UI', system-ui, Roboto, sans-serif;
+        --heading: -apple-system, BlinkMacSystemFont,
+                   'Segoe UI Variable Display', 'Segoe UI', system-ui, Roboto,
+                   sans-serif;
+        color-scheme: dark;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; min-height: 100%;
+        background: var(--bg); color: var(--ink);
+        font: 1rem/1.47 var(--ui); font-optical-sizing: auto;
+        -webkit-font-smoothing: antialiased;
+        background-image: radial-gradient(ellipse at 0 0, #241f18, transparent 60%);
+      }
+      main {
+        min-height: 100dvh; display: flex; align-items: center;
+        justify-content: center; padding: 32px 18px;
+      }
+
+      /* The card the account screens use, so this looks like the same game. */
+      .card {
+        width: 100%; max-width: 440px; padding: 34px;
+        background: var(--panel);
+        border: 1px solid #423b30; border-top: 3px solid #8a8070;
+        border-radius: 22px 6px 22px 6px;
+        box-shadow: 0 24px 80px #00000080;
+        text-align: center;
+      }
+
+      /*
+       * 4 [emblem] 4.
+       *
+       * The middle digit is the game's own paired glyph -- an ember and a pool
+       * around a shared doorway -- because a door is exactly what is missing
+       * here. It is the app's original mark, not anything extracted from the
+       * 2009 game, so it is the one piece of art this page is entitled to.
+       */
+      .code {
+        display: flex; align-items: center; justify-content: center;
+        gap: 6px; margin-bottom: 18px;
+      }
+      .code span {
+        font-family: var(--heading);
+        font-size: clamp(4rem, 18vw, 6.5rem);
+        font-weight: 700;
+        line-height: 1;
+        /* Tracking is size-specific: at this size the digits read too far
+           apart, so they are pulled in. Body copy below stays near zero. */
+        letter-spacing: -.04em;
+      }
+      .code .glyph {
+        width: clamp(3.4rem, 15vw, 5.5rem);
+        height: clamp(3.4rem, 15vw, 5.5rem);
+        display: block; flex: none;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-family: var(--heading);
+        font-size: 1.6rem; font-weight: 700; line-height: 1.15;
+        letter-spacing: -.018em;
+      }
+      p { margin: 0 0 14px; color: var(--dim); font-size: .9375rem; }
+
+      /* The status underline from the play screen: fire on the left half,
+         water on the right. Half a pixel of continuity for nothing. */
+      .seam {
+        height: 1px; margin: 22px 0;
+        background-image: linear-gradient(to right,
+          var(--fire) 0 50%, var(--water) 50% 100%);
+      }
+
+      .said {
+        margin: 0; color: var(--dim); font-size: .8125rem;
+        letter-spacing: .006em; line-height: 1.5;
+      }
+      .said b { color: var(--fire); font-weight: 600; }
+      .said i { color: var(--water); font-style: normal; font-weight: 600; }
+
+      a.back {
+        display: flex; align-items: center; justify-content: center;
+        width: 100%; min-height: 44px; margin-top: 22px;
+        padding: 9px 15px;
+        border: 1px solid transparent; border-radius: 8px;
+        background: var(--fire); color: #24170e;
+        font-size: 1rem; font-weight: 600; text-decoration: none;
+        box-shadow: inset 0 1px 0 #ffffff4d, 0 2px 0 #693c27;
+        transition: background-color 100ms, transform 100ms;
+      }
+      a.back:hover { background: #ff9e7c; }
+      /* Feedback on the press itself, not on release -- the same one pixel
+         every other control in this app moves. */
+      a.back:active { transform: translateY(1px); }
+      a.back:focus-visible { outline: 2px solid var(--water); outline-offset: 3px; }
+
+      /*
+       * It materialises rather than fading.
+       *
+       * Blur and scale move together so the card reads as something arriving
+       * with substance instead of an opacity ramp. One shot, ~420ms, and then
+       * it is still: a page that loops a slow animation forever is a page that
+       * keeps asking for attention it does not need.
+       */
+      @keyframes arrive {
+        from { opacity: 0; transform: scale(.965); filter: blur(6px); }
+        to   { opacity: 1; transform: none;        filter: blur(0); }
+      }
+      .card { animation: arrive 420ms cubic-bezier(.22,.61,.36,1) both; }
+
+      @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+      @media (prefers-reduced-motion: reduce) {
+        /* Not "no feedback" -- a gentler one. The card still appears, it just
+           does not travel or change shape to do it. A cross-fade carries the
+           same "something arrived" without moving anything through space. */
+        .card { animation: fade 200ms ease both; }
+        a.back { transition: none; }
+        a.back:active { transform: none; }
+      }
+      @media (prefers-contrast: more) {
+        :root { --dim: #efe7da; --edge: #8f8474; }
+        .card { border-color: var(--dim); }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="card">
+        <div class="code">
+          <span>4</span>
+          <!-- The paired glyph from src/ui/brand.ts, at display size. -->
+          <svg class="glyph" viewBox="0 0 48 48" fill="none"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M23 4C24 15 9 17 9 29a14 14 0 0 0 14 14V30c-6-1-6-7-3-10 1 4 3 5 3 5V4Z" fill="#FF865B"/>
+            <path d="M29 6c0 9 12 14 12 23a14 14 0 0 1-14 14V29c7-2 8-7 2-13V6Z" fill="#75D5EB"/>
+          </svg>
+          <span>4</span>
+        </div>
+
+        <h1>This door leads nowhere</h1>
+        <p>
+          The Forest Temple has 32 rooms. This is not one of them — the map
+          stops at the thirty-second door, and whatever you followed to get
+          here went somewhere else.
+        </p>
+
+        <div class="seam"></div>
+
+        <p class="said">
+          <b>Fireboy</b> will not go in the water.<br />
+          <i>Watergirl</i> will not go in the fire.<br />
+          Neither of them is going in <em>there</em>.
+        </p>
+
+        <a class="back" href="/">Back to the temple</a>
+      </div>
+    </main>
+  </body>
+</html>
