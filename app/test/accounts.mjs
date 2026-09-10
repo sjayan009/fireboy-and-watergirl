@@ -179,6 +179,63 @@ try {
     await page.close();
   }
 
+  // ---- where a sign-up actually ends up -----------------------------------
+
+  console.log("\na sign-up says what happened, either way");
+  {
+    // This is a regression test for a silence. `signUp` sent everybody to
+    // `/verify`, which admitted only the `unverified` stage -- and with email
+    // confirmation on there is no session at sign-up, so the stage is `out` and
+    // the router turned every single one of them around to `/login`. Nobody was
+    // ever told an email had been sent. It was invisible because the account
+    // really was created and the mail really was sent; only the screen was
+    // wrong.
+    const page = await newPage();
+
+    const signUpWith = async (address) => {
+      await page.goto(URL_ + "#/signup", { waitUntil: "load" });
+      await page.waitForSelector("text=Make an Account");
+      await page.fill("input[type=email]", address);
+      const pws = page.locator("input[type=password]");
+      await pws.nth(0).fill(`pw_${stamp}_trial!A`);
+      await pws.nth(1).fill(`pw_${stamp}_trial!A`);
+      await page.click("button[type=submit]");
+      // Waited on by CONDITION, not by clock. A fixed pause was long enough for
+      // the second sign-up and not the first, which made this test look like it
+      // had found a bug in the case that works.
+      await page.waitForFunction(
+        () => location.hash.includes("/verify")
+              || !!document.querySelector(".error:not([hidden])"),
+        null, { timeout: 25000 }).catch(() => {});
+      return page.url();
+    };
+
+    const fresh = `fbwg_new_${stamp}@example.com`;
+    const where = await signUpWith(fresh);
+    check("a new address is told to check its email",
+          where.includes("#/verify"), true);
+    check("and told WHICH address",
+          await page.locator(`text=${fresh}`).count() > 0, true);
+
+    // The duplicate. Supabase answers a taken address with 200, no mail and an
+    // EMPTY identities list rather than an error, so that this form cannot be
+    // used to discover who has an account. That protection is kept -- the page
+    // still says a link is on its way -- but somebody standing there waiting
+    // for mail that is not coming is given the door they actually need.
+    const taken = await makeUser("taken");
+    await signUpWith(taken.email);
+    check("a taken address reaches the same screen",
+          page.url().includes("#/verify"), true);
+    check("and is pointed at signing in instead",
+          await page.locator("text=Nothing will arrive").count() > 0, true);
+
+    // The reverse must NOT be true, or the line becomes an enumeration oracle.
+    await signUpWith(`fbwg_new2_${stamp}@example.com`);
+    check("a new address is NOT told that",
+          await page.locator("text=Nothing will arrive").count(), 0);
+    await page.close();
+  }
+
   // ---- the emailed confirmation link -------------------------------------
 
   console.log("\nthe confirmation link in the email actually works");
