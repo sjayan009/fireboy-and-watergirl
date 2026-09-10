@@ -115,6 +115,53 @@ form { display: grid; gap: 14px; margin-top: 20px; }
  * of a different height and type size directly over the email field would read
  * as a lesser thing than the form it is an alternative to.
  */
+/*
+ * The other way in, as a button rather than a sentence.
+ *
+ * "Make an Account" and "Forgot your password" used to sit side by side in one
+ * line of footer text, which made them look like the same kind of thing. They
+ * are not. One is the entire other branch of this screen -- somebody who has no
+ * account cannot do anything else here -- and the other is what you reach for
+ * when the password you HAVE will not work. Equal weight served whichever of
+ * them you did not need.
+ *
+ * ## Why not `--water` itself
+ *
+ * Measured: `--water` #75D5EB has luminance .574 against `--fire`'s .391, so a
+ * button filled with it is 47% BRIGHTER than the primary and pulls the eye
+ * first. A returning player would meet "Make an Account" before "Sign In".
+ *
+ * So this is the same hue -- H191, S75%, the app's own blue -- at L42%.
+ * #1B9EBB sits at luminance .283, which is 72% of the fire's .391: bright
+ * enough to read as Watergirl's own colour rather than a slate, dark enough
+ * that the eye still lands on Sign In first.
+ *
+ * The ink is dark, not light, and there was no choice about it. Between L36%
+ * and L42% this hue passes AA against NEITHER `--ink` nor a dark teal -- 3.56
+ * and 3.95 at L36%, both short of 4.5. The way out is a face committed to one
+ * side or the other, and the bright side is the one that looks like Watergirl.
+ * At L42% #06222A gives 5.24, and dark ink on a coloured face is what the
+ * primary does too, so the two buttons read as a pair rather than as two
+ * unrelated ideas.
+ */
+.secondary, a.secondary { display: flex; justify-content: center; align-items: center; width: 100%; min-height: 44px; padding: 9px 15px; border: 1px solid transparent; border-radius: 8px; background: #1B9EBB; color: #06222A; font-size: 1rem; font-weight: 600; text-decoration: none; box-shadow: inset 0 1px 0 #ffffff4d; }
+.secondary:hover, a.secondary:hover { background: #23B0CF; }
+/* Everything else on this card lifts a pixel when pressed; so does this. */
+a.secondary:active { transform: translateY(1px); }
+/* Its own region, below the form's own business and marked off from it. */
+.after-form { padding-top: 16px; border-top: 1px solid var(--edge); display: grid; gap: 12px; }
+.after-form .note { margin: 0; text-align: center; }
+/*
+ * Recovery, put where the thing it recovers is.
+ *
+ * A control belongs next to what it affects, and what this affects is the box
+ * directly above it -- not the account, and certainly not the sign-up link it
+ * used to share a line with. Pulled up by 6px against the form's 14px gap so it
+ * reads as belonging to the password field rather than floating between the
+ * field and the button.
+ */
+.field-aside { margin: -6px 0 0; text-align: right; font-size: .8125rem; letter-spacing: .006em; }
+
 .provider-block { margin-top: 20px; }
 .provider { width: 100%; font-size: 1rem; }
 .card .provider { min-height: 44px; }

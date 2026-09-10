@@ -1,11 +1,11 @@
 # The app
 
-A static single-page app: accounts, the invite gate, and the game.
+A static single-page app: accounts, and the game.
 
 ```bash
 npm run dev      # from the repo root; builds the engine, then serves on :5174
 npm run build    # engine, app, and the extracted assets into the REPO ROOT dist/
-npm run invite   # mint an invite code (see below)
+npm run invite -- --email you@example.com   # put somebody straight in
 ```
 
 ## Why static
@@ -36,7 +36,7 @@ show a screen the current stage is not standing in front of:
 | `out` | no session |
 | `unverified` | signed up, email link not followed |
 | `locked` | signed in, but an enrolled second factor is unanswered |
-| `nameless` | verified, but no profile -- needs a username and an invite code |
+| `nameless` | verified, but has not picked a username yet |
 | `in` | has a profile, and can play |
 
 Every one of these is also true in the database, and since migration `0013` that
@@ -49,22 +49,25 @@ screen is a convenience and not the boundary.
 The one gate that is NOT in the database is the download. The bundle and the
 extracted art are public static files; see the note in the root README.
 
-## The invite gate
+## Who can get in
 
-Sign-up itself is not gated, because it cannot be: it is Supabase Auth, it
-happens in the browser, and a check the browser is asked to make first is not a
-check. The gate is on `claim_username` instead, which redeems the code and
-creates the profile **in one statement** -- so a code two people spend at once,
-and a name two people take at once, both resolve to exactly one winner.
+Anybody who confirms an email address. There used to be an invite code on
+`claim_username`; `20260910000000_open_the_gate` took it off, because the
+deployment is meant to be publicly playable.
 
-```bash
-npm run invite -- --uses 5 --days 30 --note "for the group chat"
-npm run invite -- --list
-```
+What enforces the remaining requirement is not this app. Supabase refuses a
+session to an unconfirmed address outright -- `email_not_confirmed`, no token
+at all -- so verification is checked before any request of ours is reachable.
+Google sign-in satisfies it the same way, because Google reports the address as
+verified and Supabase records it as confirmed.
 
-Codes are minted with the secret key, straight against the database.
-`invite_codes` has no row level security policies at all, for any role, so a
-signed-in user can neither enumerate codes nor reset their use counts.
+`invite_codes`, `invite_redemptions` and `was_invited()` still exist, unread by
+anything. They hold the record of how the first accounts arrived, and dropping a
+table is the contracting half of a change -- so that half waits in
+`supabase/deferred/` rather than shipping with the release that opened the door.
+
+`npm run invite -- --email someone@example.com` also still works. It is no
+longer a gate, just the shortest way to put somebody straight into the game.
 
 ## Two-factor
 

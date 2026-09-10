@@ -2,8 +2,12 @@
  * Getting in, and being kept out.
  *
  * `twopeople.mjs` proves the happy path once two accounts exist. This proves
- * the door: the invite gate, the username rules, two-factor, and -- the part
- * that was previously untestable -- the emailed links.
+ * the door: the username rules, two-factor, the Google hand-off, and -- the
+ * part that was previously untestable -- the emailed links.
+ *
+ * There is no invite gate any more. `20260910000000_open_the_gate` removed it,
+ * and a confirmed email address is the whole of what is asked; the sections
+ * that used to prove a code was demanded now prove that nothing is.
  *
  * ## How the email flows are tested without email
  *
@@ -51,19 +55,6 @@ const admin = (path, init = {}) => fetch(`${API}${path}`, {
     "content-type": "application/json", ...(init.headers ?? {}),
   },
 });
-
-async function makeCode(n, uses = 1, expiresAt = null) {
-  // Uppercase, because the database now insists and the form uppercases what
-  // it is given. A lowercase code would be minted happily and then be
-  // unusable, which is the bug this constraint exists to prevent.
-  const code = `ACC-${stamp}-${n}`.toUpperCase();
-  await admin("/rest/v1/invite_codes", {
-    method: "POST",
-    body: JSON.stringify({ code, max_uses: uses, note: "accounts",
-                           expires_at: expiresAt }),
-  });
-  return code;
-}
 
 async function makeUser(tag) {
   const email = `fbwg_acc_${tag}_${stamp}@example.com`;
@@ -164,7 +155,7 @@ try {
   {
     const page = await newPage();
     await page.goto(URL_ + "#/signup", { waitUntil: "load" });
-    await page.waitForSelector("text=Make an account");
+    await page.waitForSelector("text=Make an Account");
 
     const fill = async (email, pw, again) => {
       await page.fill("input[type=email]", email);
@@ -184,7 +175,7 @@ try {
     // be asserting that the weaker of the two guards is the one doing the work.
     await fill("a@example.com", "abc", "abc");
     check("a short password never leaves the form",
-          await page.locator("text=Make an account").isVisible(), true);
+          await page.locator("text=Make an Account").isVisible(), true);
     await page.close();
   }
 
@@ -236,50 +227,31 @@ try {
     check("and the account is now confirmed", !!after.email_confirmed_at, true);
 
     // ---- the invite gate, from the browser -------------------------------
-    console.log("\nthe invite gate, as a person meets it");
+    console.log("\npicking a name, now that it is the only thing asked");
+    //
+    // This section used to be the invite gate: a code that does not exist, a
+    // code somebody else had spent, an expired one, each refused in turn. The
+    // gate is gone -- `20260910000000_open_the_gate` -- and a suite that goes
+    // on testing a removed feature is worse than one that does not, because it
+    // fails for the right reason and reads like a bug.
+    //
+    // What is left is the part that was always doing the work: the username
+    // rules, enforced by the browser before anything is sent, and the claim
+    // itself. There is no second field any more, which is the first assertion.
     const nameFor = (v) => page.locator("form input").nth(0).fill(v);
-    const codeFor = (v) => page.locator("form input").nth(1).fill(v);
     const submit = async () => {
       await page.click("button[type=submit]");
       await page.waitForTimeout(700);
       return errorText(page);
     };
 
-    await nameFor(`link${stamp % 100000}`);
-    await codeFor("NOPE-NOPE-NOPE");
-    check("a code that does not exist",
-          /not valid/.test(await submit()), true);
-
-    const spent = await makeCode("spent", 1);
-    const eater = await makeUser("eater");
-    await fetch(`${API}/rest/v1/rpc/claim_username`, {
-      method: "POST",
-      headers: { apikey: PUB, "content-type": "application/json",
-                 Authorization: `Bearer ${(await (await fetch(
-                   `${API}/auth/v1/token?grant_type=password`, {
-                     method: "POST",
-                     headers: { apikey: PUB, "content-type": "application/json" },
-                     body: JSON.stringify({ email: eater.email,
-                                            password: eater.password }),
-                   })).json()).access_token}` },
-      body: JSON.stringify({ new_username: `eat${stamp % 100000}`,
-                             invite_code: spent }),
-    });
-    await codeFor(spent);
-    check("a code somebody else has spent",
-          /not valid/.test(await submit()), true);
-
-    const expired = await makeCode("expired", 5,
-                                   new Date(Date.now() - 60000).toISOString());
-    await codeFor(expired);
-    check("an expired code", /not valid/.test(await submit()), true);
+    check("the username screen asks for one thing only",
+          await page.locator("form input").count(), 1);
 
     // `minlength` and `pattern` on the input mean the browser refuses to submit
     // at all, so there is no message from the server to read -- the right
     // assertion is that nothing happened, not that something was said.
-    const good = await makeCode("good");
     await nameFor("no");
-    await codeFor(good);
     await submit();
     check("a name that is too short never leaves the form",
           await page.locator("text=Pick a name").isVisible(), true);
@@ -290,14 +262,13 @@ try {
           await page.locator("text=Pick a name").isVisible(), true);
 
     await nameFor(`link${stamp % 100000}`);
-    await codeFor(good);
     const said = await submit();
     try {
       await page.waitForSelector("#stage", { timeout: 30000 });
-      check("and finally, a good name and a good code", true, true);
+      check("and a good name is all it takes", true, true);
     } catch {
       console.log(`  [where] ${page.url()}  [said] ${said}`);
-      throw new Error("a valid name and code did not get in");
+      throw new Error("a valid name did not get in");
     }
 
     // ---- two-factor ------------------------------------------------------
@@ -433,7 +404,7 @@ try {
     check("and two-factor is off, exactly as it said it would be", true, true);
 
     // ---- renaming --------------------------------------------------------
-    console.log("\nrenaming costs no second invite code");
+    console.log("\nrenaming still works");
     const naming = await openSetting(page, "Username");
     await naming.locator("input").fill(`re${stamp % 100000}`);
     await naming.locator("button[type=submit]").click();
@@ -657,43 +628,6 @@ try {
     await page.close();
   }
 
-  // ---- the way back in, and what it refuses to do --------------------------
-
-  console.log("\nthe sign-in link cannot be used to make an account");
-  {
-    // The whole gate is `shouldCreateUser: false`. If it were ever dropped,
-    // this endpoint would happily create an account for any address given to
-    // it and the invite gate would be over -- silently, with no error anywhere.
-    const countUsers = async () => {
-      const r = await (await admin(
-        "/auth/v1/admin/users?page=1&per_page=1000")).json();
-      return (r.users ?? []).length;
-    };
-    const stranger = `fbwg_stranger_${stamp}@example.com`;
-    const was = await countUsers();
-    const r = await fetch(`${API}/auth/v1/otp`, {
-      method: "POST",
-      headers: { apikey: PUB, "content-type": "application/json" },
-      body: JSON.stringify({ email: stranger, create_user: false }),
-    });
-    await r.text();
-    const now = await countUsers();
-    check("a stranger asking for a link creates no account", now, was);
-
-    // And the screen says the same thing either way, which is what stops it
-    // being a way to ask who plays. `sendSignInLink` swallows the refusal for
-    // exactly this reason, so the visible outcome must be the confirmation.
-    const page = await newPage();
-    await page.goto(URL_ + "#/link", { waitUntil: "load" });
-    await page.fill("input[type=email]", stranger);
-    await page.click("button[type=submit]");
-    await page.waitForTimeout(2500);
-    const said = await page.locator(".note:visible").allInnerTexts();
-    check("and is told the same thing as a member would be",
-          said.some((t) => t.includes("If that address has an account")), true);
-    check("with no error shown", await errorText(page), "");
-    await page.close();
-  }
 } catch (err) {
   failures++;
   console.log("  FAIL " + err.message);
