@@ -9,8 +9,8 @@
  */
 import {
   auth, changeEmail, changePassword, claimUsername, deleteAccount, enrolTotp,
-  generateRecoveryCodes, listFactors, recoveryCodesLeft, unenrolTotp,
-  verifyTotp,
+  generateRecoveryCodes, hasPassword, listFactors, recoveryCodesLeft,
+  setPassword, unenrolTotp, verifyTotp,
 } from "../auth.js";
 import { supabase } from "../supabase.js";
 import { card, el, field, form, inputOf, note, on } from "../ui/dom.js";
@@ -58,6 +58,8 @@ export function settingsScreen(host: HTMLElement): void {
   const nameValue = el("span", { class: "settings-value" }, profile?.username ?? "Not set");
   const twoFactorValue = el("span", { class: "settings-value" }, "Checking…");
   const boardValue = el("span", { class: "settings-value" }, "Checking…");
+  const passwordValue = el("span", { class: "settings-value" }, "Checking…");
+  const password = el("div", {}, note("Checking…"));
 
   host.append(card("Settings",
     el("div", { class: "settings-list" },
@@ -80,7 +82,7 @@ export function settingsScreen(host: HTMLElement): void {
             // happened.
           },
         })),
-      group("Password", "Change it", passwordSection()),
+      group("Password", passwordValue, password),
       group("Email", auth().user?.email ?? "Not set", emailSection()),
       group("Two-factor", twoFactorValue, factors),
       group("Leaderboard", boardValue, boardSection(boardValue)),
@@ -89,6 +91,22 @@ export function settingsScreen(host: HTMLElement): void {
       el("a", { href: "#/play" }, "Back to the game"))));
 
   void drawFactors(factors, twoFactorValue);
+  void drawPassword(password, passwordValue);
+}
+
+/**
+ * Fill in the password row once the database has said which one it is.
+ *
+ * Asked rather than assumed, and asked asynchronously, so the row arrives as
+ * "Checking…" exactly as two-factor and the leaderboard do. The question cannot
+ * be answered from the session -- see `hasPassword` -- and answering it wrongly
+ * produces either a form nobody can satisfy or one that sets a password without
+ * asking for anything.
+ */
+async function drawPassword(host: HTMLElement, value: HTMLElement): Promise<void> {
+  const has = await hasPassword();
+  value.textContent = has ? "Change it" : "Set a password";
+  host.replaceChildren(passwordSection(has, value));
 }
 
 /**
@@ -149,29 +167,56 @@ function boardSection(value: HTMLElement): HTMLElement {
     label, said);
 }
 
-/** Change the password, proving the old one on the way through. */
-function passwordSection(): HTMLElement {
+/**
+ * Change the password, proving the old one on the way through -- unless there
+ * is no old one.
+ *
+ * An account that arrived through Google has no password at all, and the proof
+ * `changePassword` uses is signing in with the current one. So the row as
+ * written asked such a person for a password that does not exist and rejected
+ * every answer, including the right one, which there was none of. There is no
+ * way forward from that screen.
+ *
+ * With no password enrolled the proof is dropped, and it is dropped safely for
+ * the mirror image of the reason it exists: `changePassword`'s comment says a
+ * bare `updateUser` would let a tab somebody left open replace a password they
+ * knew. Here there is no password to replace and nothing to take over -- the
+ * account is reached by Google, which this form cannot touch.
+ */
+function passwordSection(has: boolean, value: HTMLElement): HTMLElement {
   const current = field("Current password", {
     type: "password", required: true, autocomplete: "current-password",
   });
-  const next = field("New password", {
+  const next = field(has ? "New password" : "Password", {
     type: "password", required: true, minlength: 8,
     autocomplete: "new-password",
   });
-  const done = note("Changed.");
+  const done = note(has ? "Changed." : "Set. You can now sign in either way.");
   done.hidden = true;
 
-  return el("div", {}, form({
-    submit: "Change password",
-    children: [current, next, done],
-    onSubmit: async () => {
-      done.hidden = true;
-      await changePassword(inputOf(current).value, inputOf(next).value);
-      inputOf(current).value = "";
-      inputOf(next).value = "";
-      done.hidden = false;
-    },
-  }));
+  return el("div", {},
+    has ? null : note("You signed in with Google, so this account has no " +
+                      "password. Setting one ADDS a second way in; Google " +
+                      "keeps working either way."),
+    form({
+      submit: has ? "Change password" : "Set password",
+      children: [has ? current : null, next, done],
+      onSubmit: async () => {
+        done.hidden = true;
+        if (has) await changePassword(inputOf(current).value, inputOf(next).value);
+        else await setPassword(inputOf(next).value);
+        inputOf(current).value = "";
+        inputOf(next).value = "";
+        done.hidden = false;
+        // The row said "Set a password" and no longer should. Only the summary
+        // is corrected, not the whole section: rebuilding it would replace the
+        // form and take the confirmation above with it, which is the mistake
+        // the username row documents. The form goes on offering to set a
+        // password, which for the rest of this visit is a harmless thing to
+        // offer -- `setPassword` simply writes another one.
+        value.textContent = "Change it";
+      },
+    }));
 }
 
 /**
@@ -221,6 +266,22 @@ function dangerSection(): HTMLElement {
   return el("div", {},
     note("This deletes your profile, your friendships, and the progress every " +
          "pair you played with earned together. It cannot be undone."),
+    // The one thing deleting CANNOT reach.
+    //
+    // `delete_me` removes the row in `auth.users` and everything cascades from
+    // it, including the Google identity -- on this side. The permission itself
+    // lives in the person's Google account, where nothing here can touch it,
+    // so an account deleted from this screen leaves "Fireboy & Watergirl" in
+    // their list of connected apps until they take it out themselves. It is
+    // not access to anything afterwards: signing in with Google again makes a
+    // NEW account that is asked for an invite code like any other. It is a
+    // stale entry, and somebody deleting an account is exactly the person who
+    // would want to know it is there.
+    note("Signed in with Google? Deleting here does not remove this game " +
+         "from your Google account. You can do that at ",
+      el("a", { href: "https://myaccount.google.com/permissions",
+                target: "_blank", rel: "noopener noreferrer" },
+        "your Google permissions"), "."),
     form({
       submit: "Delete my account",
       children: [typed],

@@ -160,18 +160,55 @@ try {
 
   await signIn(a, alice, await makeCode(0));
   await signIn(b, bob, await makeCode(1));
+  /**
+   * Back to the game.
+   *
+   * Also not a link any more. The shell IS the play screen -- the drawer opens
+   * over it rather than replacing it -- so there is no anchor to click, and
+   * `a[href='#/play']` matched nothing in six places. Asking the router
+   * directly says what the test means and works from whichever screen the page
+   * happens to be on.
+   */
+  async function goPlay(p) {
+    await p.evaluate(() => { location.hash = "#/play"; });
+    await p.waitForSelector("#stage", { timeout: 20000 });
+  }
+
+  /**
+   * Show the friends panel, whatever state the drawer is in.
+   *
+   * There is no `#/friends` route to click any more -- friends became a TAB of
+   * the play screen's drawer when the shell was redrawn, and `a[href='#/friends']`
+   * has matched nothing since. This clicked it three times and spent thirty
+   * seconds on each.
+   *
+   * Clicking the tab unconditionally is not the fix either: a wide window opens
+   * the friends panel by itself, so a blind click would CLOSE the thing the
+   * caller is asking to see. Hence the check first.
+   */
+  async function openFriends(p) {
+    if (await p.locator("text=Send a request").count() === 0) {
+      await p.click("button.tool-friends");
+    }
+    await p.waitForSelector("text=Send a request", { timeout: 20000 });
+  }
+
+  // `.copy-name`, not `.who`. The username moved into the toolbar's identity
+  // block when the shell was redrawn in 2bcef06 and `.who` stopped existing;
+  // this went on asking for it and waiting the full thirty seconds to be told
+  // no. A selector for a class that is in no source file is not a failing
+  // test, it is an unasked one.
   check("both are signed in and named",
         await Promise.all([a, b].map((p) =>
-          p.locator(".who").innerText())),
+          p.locator(".copy-name").innerText())),
         [alice.username, bob.username]);
 
   console.log("\nthey become friends");
-  await a.click("a[href='#/friends']");
-  await a.waitForSelector("text=Send a request");
+  await openFriends(a);
   await a.fill("form input", bob.username);
   await a.click("button[type=submit]");
 
-  await b.click("a[href='#/friends']");
+  await openFriends(b);
   await b.waitForSelector("text=Waiting for You", { timeout: 20000 });
   await b.click("button:has-text('Accept')");
   // Asserting a ROW exists would prove nothing: the pending request is a row
@@ -205,8 +242,7 @@ try {
     console.log("  FAIL page error: " + err.message);
   });
   await signIn(c, carol, await makeCode(2));
-  await c.click("a[href='#/friends']");
-  await c.waitForSelector("text=Send a request");
+  await openFriends(c);
   await c.fill("form input", alice.username);
   await c.click("button[type=submit]");
   await c.waitForSelector("text=Request sent", { timeout: 30000 });
@@ -229,7 +265,7 @@ try {
   // Friends with alice and not with bob, deliberately: the watch policy admits
   // friends of EITHER player, and somebody who knew both would not tell that
   // rule apart from the stricter one.
-  await c.click("a[href='#/play']");
+  await goPlay(c);
   await c.waitForSelector("#stage");
 
   // And wait until her client agrees that she has one. The channels a person
@@ -279,8 +315,8 @@ try {
   if (!seeded.ok) throw new Error("could not seed: " + (await seeded.text()));
 
   console.log("\nand see each other come online");
-  await a.click("a[href='#/play']");
-  await b.click("a[href='#/play']");
+  await goPlay(a);
+  await goPlay(b);
   const seeEachOther = async () => {
     for (let i = 0; i < 150; i++) {
       const ok = await Promise.all([a, b].map((p) => p.evaluate(() =>
@@ -459,7 +495,7 @@ try {
    * rather than guessing at, correctly.
    */
   const inviteRow = (page, who) =>
-    page.locator(`.panel .row:has-text("${who}") button:has-text("Invite")`);
+    page.locator(`.friend-row:has-text("${who}") button.invite-friend`);
 
   /** Poll both pages with one evaluate each until they agree with `want`. */
   const until = async (read, want, tries = 60, gap = 150) => {
@@ -987,7 +1023,7 @@ try {
 
     // Closing it takes the row away again.
     await a.click("header button:has-text('Stop letting friends watch')");
-    await c.click("a[href='#/play']");
+    await goPlay(c);
     await c.waitForSelector("#stage", { timeout: 20000 });
     let gone = false;
     for (let i = 0; i < 40; i++) {
@@ -1100,7 +1136,7 @@ try {
     // Opening the friends list used to tear this screen down without a word,
     // which to the other person is indistinguishable from the game having died:
     // their partner stops moving and never starts again.
-    await b.click("a[href='#/friends']");
+    await openFriends(b);
     await a.waitForSelector(".banner:has-text('left the game')", { timeout: 20000 });
     check("alice is told",
           /left the game/.test(await a.locator(".banner").innerText()), true);
@@ -1121,15 +1157,15 @@ try {
       console.log("  [A] " + JSON.stringify(await a.evaluate((who) => ({
         friends: (window.__fbwg.lobby?.list ?? [])
           .map((f) => `${f.username}=${f.activity}`),
-        rows: [...document.querySelectorAll(".panel .row")]
+        rows: [...document.querySelectorAll(".friend-row")]
           .map((r) => r.textContent),
-        mine: [...document.querySelectorAll(".panel .row button")]
+        mine: [...document.querySelectorAll(".friend-row button")]
           .map((x) => `${x.textContent}:${x.disabled ? "off" : "on"}`),
         who,
       }), bob.username)));
     }
     check("so she can start another game", canInvite, true);
-    await b.click("a[href='#/play']");
+    await goPlay(b);
     await b.waitForSelector("#stage", { timeout: 20000 });
   }
 
@@ -1146,7 +1182,7 @@ try {
       await page.waitForSelector("#stage", { timeout: 40000 });
     }
     for (const p of [a, b]) {
-      await p.waitForSelector(".panel .row button:not([disabled])",
+      await p.waitForSelector(".friend-row button:not([disabled])",
                               { timeout: 40000 });
     }
 
@@ -1255,7 +1291,7 @@ try {
       cookie.flush();
     });
     // No wait at all: straight off the screen, well inside the 1500 ms timer.
-    await a.click("a[href='#/friends']");
+    await openFriends(a);
     await a.waitForSelector("text=Send a request", { timeout: 20000 });
     await a.waitForTimeout(3000);
     const after = await stored();
@@ -1282,7 +1318,7 @@ try {
             JSON.parse(localStorage.getItem("fbwg.pairoutbox") ?? "{}")).length),
           1);
 
-    await a.click("a[href='#/play']");
+    await goPlay(a);
     await a.waitForSelector("#stage", { timeout: 20000 });
     await a.waitForTimeout(4000);
     const replayed = await stored();

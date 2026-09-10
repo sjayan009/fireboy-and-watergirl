@@ -220,6 +220,22 @@ try {
         await page.setViewportSize({ width, height: 900 });
         await page.waitForTimeout(400);
 
+        // The drawer has to be shut before the pointer means anything here.
+        //
+        // On a wide screen the friends panel opens by itself, and it is a panel
+        // BESIDE the game. Narrow the window and the same open panel becomes a
+        // modal dialog over it, so `syncModal` marks the viewport `inert` --
+        // correctly, because that is what a modal is. This loop used to shrink
+        // a window with the panel already open and then ask why the game was
+        // not answering the mouse: it was answering exactly as designed, from
+        // behind a dialog. What is under test is the hit test's arithmetic, so
+        // the dialog is closed first and the arithmetic is asked on its own.
+        const shut = page.locator("button.close-panel");
+        if (await shut.count() && await shut.first().isVisible()) {
+          await shut.first().click();
+          await page.waitForTimeout(300);
+        }
+
         const box = await page.locator("#stage").boundingBox();
         const cursor = () => page.evaluate(
           () => document.getElementById("stage").style.cursor);
@@ -240,6 +256,26 @@ try {
         await page.waitForTimeout(250);
         check(`at ${width}px the pointer finds PLAY`,
               [overNothing, await cursor()], ["default", "pointer"]);
+      }
+
+      // Put the window back. Everything below this runs in whatever size the
+      // loop left behind, and it left 390px -- where the panels are a modal
+      // over an inert viewport and the leaderboard is not a thing you can
+      // click. That is how a stale viewport turned into a thirty-second
+      // locator timeout several tests further down, blamed on the leaderboard.
+      await page.setViewportSize({ width: 1600, height: 900 });
+      await page.waitForTimeout(500);
+
+      // And put the panels back, because closing them above is not free either.
+      // Everything below reaches into the drawer -- the leaderboard's own
+      // toggle, the select inside it -- and reached it only because a wide
+      // window opens the friends panel unasked. Having shut that to get a clean
+      // pointer reading, the drawer has to be reopened deliberately rather than
+      // left to a default that no longer applies.
+      const boardTab = page.locator("button.tool-leaderboard");
+      if (await boardTab.count()) {
+        await boardTab.first().click();
+        await page.waitForTimeout(600);
       }
 
       // What somebody arriving by keyboard or screen reader is handed.
@@ -295,10 +331,21 @@ try {
        * listener is registered after the shell's, on the same target, so it
        * sees whether the shell claimed a key that was not its to claim.
        */
-      const board = page.locator(".panel", { hasText: "Leaderboard" });
-      const toggle = board.locator("button", { hasText: /^(Show|Hide)$/ });
-      if ((await toggle.textContent()) === "Show") await toggle.click();
-      const picker = board.locator("select.pick").first();
+      // Two stale assumptions lived in this locator, and both cost thirty
+      // seconds each before saying anything useful.
+      //
+      // There is no Show/Hide: the board used to be a panel you expanded, and
+      // the drawer redesign made it a tab that is simply open when chosen. No
+      // source file has held the word "Show" since.
+      //
+      // And the panel does not say "Leaderboard" -- that is the TAB's label.
+      // The panel itself is headed "Two players. One great time." So a filter
+      // on `hasText: "Leaderboard"` matched nothing and always would have.
+      //
+      // What the test is about is a `<select>` on the same screen as a game
+      // that binds its keys to `window`, so it asks for the select directly.
+      const picker = page.locator(".drawer-content select.pick").first();
+      await picker.waitFor({ state: "visible", timeout: 15000 });
       await picker.focus();
 
       const cancelled = page.evaluate(() => new Promise((resolve) => {

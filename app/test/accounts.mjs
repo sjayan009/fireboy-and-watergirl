@@ -489,6 +489,211 @@ try {
           !== undefined, true);
     await page.close();
   }
+  // ---- Google, as far as a test can honestly reach -----------------------
+
+  console.log("\nthe Google button hands off to Supabase");
+  {
+    // Google's own sign-in page cannot be driven from a headless browser, and
+    // should not be: it is Google's to change and ours only to hand off to. So
+    // this ends exactly where our half of the flow does -- at the request that
+    // leaves the app -- and aborts it rather than walking out to
+    // accounts.google.com. What it proves is the whole of what this repo
+    // controls: that the button is on both screens, that it asks for Google,
+    // and that it names an address the project will actually redirect back to.
+    const page = await newPage();
+    let authorize = null;
+    await page.route("**/auth/v1/authorize*", (route) => {
+      authorize = route.request().url();
+      return route.abort();
+    });
+
+    for (const [screen, hash] of [["sign-in", "#/login"],
+                                  ["sign-up", "#/signup"]]) {
+      authorize = null;
+      await page.goto(URL_ + hash, { waitUntil: "load" });
+      check(`the ${screen} screen offers it`,
+            await page.locator(".provider").innerText(), "Continue with Google");
+
+      // Pressed from inside the page, and read back in the same breath.
+      //
+      // Both halves of that are forced. The handler disables the button and
+      // swaps the label SYNCHRONOUSLY, before it awaits anything, so there is
+      // nothing to wait for -- and there had better not be, because the
+      // aborted navigation below replaces this document with Chromium's error
+      // page and takes the button with it. A locator asked afterwards waits
+      // thirty seconds for an element that no longer exists.
+      const held = await page.evaluate(() => {
+        const b = document.querySelector(".provider");
+        b.click();
+        return b.disabled && b.textContent.trim() === "…";
+      });
+      check(`the ${screen} button holds the press while it leaves`, held, true);
+      await page.waitForTimeout(1500);
+
+      const asked = new URL(authorize ?? "http://nothing-was-requested/");
+      check(`the ${screen} button asks Supabase for Google`,
+            asked.searchParams.get("provider"), "google");
+      // The bare origin, not a hash route. `landing()` in auth.ts explains why
+      // at length: the session comes back as `?code=` in the QUERY, and a
+      // redirect to `origin/#/something` would arrive with the code inside the
+      // fragment, where nothing looks for it.
+      check(`the ${screen} button comes back to the app itself`,
+            asked.searchParams.get("redirect_to"), URL_);
+      // PKCE, same as the emailed links. Without a challenge the code that
+      // comes back cannot be exchanged by this browser.
+      check(`the ${screen} button uses PKCE`,
+            asked.searchParams.get("code_challenge_method"), "s256");
+    }
+    await page.close();
+  }
+
+  // ---- the question the settings row asks about passwords -----------------
+
+  console.log("\nhas_password answers for the account asking");
+  {
+    // Why this function exists rather than reading `user.identities`: setting a
+    // password on a Google account does NOT add an email identity, so the
+    // identity list says "no password" forever and the settings row goes on
+    // offering to set one that is already set. Only `auth.users` knows, and the
+    // browser cannot read that schema.
+    //
+    // The false case needs an account with no password at all, which cannot be
+    // made here -- the admin API invents a bcrypt hash for one created without
+    // a password, so it is not the same thing as an OAuth sign-up and would
+    // prove the opposite of what it looked like. That half is covered by the
+    // real Google flow; what is pinned here is the true case and the grant.
+    const u = await makeUser("haspw");
+    const tok = await (await fetch(`${API}/auth/v1/token?grant_type=password`, {
+      method: "POST",
+      headers: { apikey: PUB, "content-type": "application/json" },
+      body: JSON.stringify({ email: u.email, password: u.password }),
+    })).json();
+
+    const asUser = await (await fetch(`${API}/rest/v1/rpc/has_password`, {
+      method: "POST",
+      headers: { apikey: PUB, Authorization: `Bearer ${tok.access_token}`,
+                 "content-type": "application/json" },
+      body: "{}",
+    })).json();
+    check("an account with a password is told so", asUser, true);
+
+    // Signed out, it is not callable at all -- `authenticated` only, the same
+    // as every other definer function here.
+    const asAnon = await fetch(`${API}/rest/v1/rpc/has_password`, {
+      method: "POST",
+      headers: { apikey: PUB, "content-type": "application/json" },
+      body: "{}",
+    });
+    check("and a signed-out caller is refused", asAnon.ok, false);
+
+    const invAnon = await fetch(`${API}/rest/v1/rpc/was_invited`, {
+      method: "POST",
+      headers: { apikey: PUB, "content-type": "application/json" },
+      body: "{}",
+    });
+    check("was_invited is shut to anon too", invAnon.ok, false);
+  }
+
+  // ---- an invitation, which is a code nobody types -------------------------
+
+  console.log("\nan invitation lets somebody in with no code at all");
+  {
+    const email = `fbwg_inv_${stamp}@example.com`;
+    // `generate_link` rather than `/invite`: it creates the account and sets
+    // `invited_at` exactly as inviting does, and returns the token WITHOUT
+    // sending mail to an address that does not exist.
+    const invited = await (await admin("/auth/v1/admin/generate_link", {
+      method: "POST",
+      body: JSON.stringify({ type: "invite", email, redirect_to: URL_ }),
+    })).json();
+    check("an invitation link was generated",
+          typeof invited.hashed_token === "string", true);
+    // `generate_link` nests the account it just made; fall back to a lookup
+    // rather than trusting one shape, because getting this wrong silently turns
+    // the ledger assertion below into a query for "undefined" that answers with
+    // an error object and passes for the wrong reason.
+    let who = invited.user?.id ?? invited.user_id;
+    if (!who) {
+      const all = await (await admin(
+        "/auth/v1/admin/users?page=1&per_page=1000")).json();
+      who = (all.users ?? []).find((u) => u.email === email)?.id;
+    }
+    check("the invited account exists", typeof who, "string");
+    users.push({ id: who, email, password: null, tag: "invited" });
+
+    // What the code counters looked like before any of this.
+    const before = await (await admin(
+      "/rest/v1/invite_codes?select=code,uses")).json();
+
+    const page = await newPage();
+    await page.goto(`${URL_}?token_hash=${invited.hashed_token}&type=invite`,
+                    { waitUntil: "load" });
+    await page.waitForSelector("text=Pick a name", { timeout: 20000 });
+    check("an invitation lands on the username screen",
+          page.url().includes("#/username"), true);
+
+    // The field goes away once `was_invited` answers. It starts visible on
+    // purpose -- see the comment on usernameScreen -- so this waits for the
+    // answer rather than reading it too early and calling that a pass.
+    const codeField = page.locator('label.field:has-text("Invite code")');
+    await codeField.waitFor({ state: "hidden", timeout: 15000 }).catch(() => {});
+    check("and does not ask for a code", await codeField.isVisible(), false);
+
+    await page.fill('label.field:has-text("Username") input', `inv${stamp % 100000}`);
+    await page.click("button[type=submit]");
+    await page.waitForTimeout(3000);
+    check("the name is claimed without one", page.url().includes("#/play"), true);
+
+    // No code was spent, and no redemption invented to make the ledger tidy.
+    const after = await (await admin(
+      "/rest/v1/invite_codes?select=code,uses")).json();
+    check("no invite code was spent",
+          JSON.stringify(after) === JSON.stringify(before), true);
+    const led = await (await admin(
+      `/rest/v1/invite_redemptions?user_id=eq.${who}&select=code`)).json();
+    check("and no redemption row was written",
+          Array.isArray(led) ? led.length : `not a list: ${JSON.stringify(led)}`,
+          0);
+    await page.close();
+  }
+
+  // ---- the way back in, and what it refuses to do --------------------------
+
+  console.log("\nthe sign-in link cannot be used to make an account");
+  {
+    // The whole gate is `shouldCreateUser: false`. If it were ever dropped,
+    // this endpoint would happily create an account for any address given to
+    // it and the invite gate would be over -- silently, with no error anywhere.
+    const countUsers = async () => {
+      const r = await (await admin(
+        "/auth/v1/admin/users?page=1&per_page=1000")).json();
+      return (r.users ?? []).length;
+    };
+    const stranger = `fbwg_stranger_${stamp}@example.com`;
+    const was = await countUsers();
+    const r = await fetch(`${API}/auth/v1/otp`, {
+      method: "POST",
+      headers: { apikey: PUB, "content-type": "application/json" },
+      body: JSON.stringify({ email: stranger, create_user: false }),
+    });
+    await r.text();
+    const now = await countUsers();
+    check("a stranger asking for a link creates no account", now, was);
+
+    // And the screen says the same thing either way, which is what stops it
+    // being a way to ask who plays. `sendSignInLink` swallows the refusal for
+    // exactly this reason, so the visible outcome must be the confirmation.
+    const page = await newPage();
+    await page.goto(URL_ + "#/link", { waitUntil: "load" });
+    await page.fill("input[type=email]", stranger);
+    await page.click("button[type=submit]");
+    await page.waitForTimeout(2500);
+    const said = await page.locator(".note:visible").allInnerTexts();
+    check("and is told the same thing as a member would be",
+          said.some((t) => t.includes("If that address has an account")), true);
+    check("with no error shown", await errorText(page), "");
+    await page.close();
+  }
 } catch (err) {
   failures++;
   console.log("  FAIL " + err.message);
