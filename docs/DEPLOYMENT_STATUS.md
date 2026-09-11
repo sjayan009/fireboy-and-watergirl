@@ -1,68 +1,77 @@
-# Workers deployment status — 11 September 2026
+# Workers deployment verification — 11 September 2026
 
-Destination: <https://fireboy-and-watergirl.sjayan009.workers.dev>.
+**Published and production smoke checks passed** at
+[fireboy-and-watergirl.sjayan009.workers.dev](https://fireboy-and-watergirl.sjayan009.workers.dev).
+The tested code revision is `a80d07ef72f7e0be9d89c4bde320c34a810e10b3`.
+Subsequent documentation-only revisions retain this implementation.
 
-**Publication approved; deployment verification in progress.** The user explicitly
-approved publication and the Supabase URL corrections. The browser folder picker
-does not select directory contents, so publication uses the existing authenticated
-Git connection and Cloudflare Workers Free build integration.
+## Publication and account evidence
 
-## Verified account and existing deployment
+- Cloudflare Workers dashboard: **Free — $0 — Current plan**. The service is
+  static assets only, with no runtime bindings, variables, triggers, Logpush
+  or Tail Workers; no purchased domain; preview URLs disabled.
+- Existing Git integration deployed `main` using `npm run build` and
+  `wrangler deploy --assets=./dist`. Successful build
+  `657cb4bc-cf32-4946-8b74-2b4377f2af6e` took **1 minute 18 seconds**.
+  Live `version.txt` matched the full tested code revision.
+- Supabase organization subscription is **Free**. Site URL is
+  `https://fireboy-and-watergirl.sjayan009.workers.dev`; the redirect allow-list
+  includes `https://fireboy-and-watergirl.sjayan009.workers.dev/`. The malformed
+  entry without a scheme was removed; existing local/Vercel redirects retained.
+- Supabase's SMTP host is `smtp-relay.brevo.com`. The authenticated Brevo account
+  shows **Free, 300 emails/day**, no saved payment methods and zero prepaid email
+  or SMS credits. No plan upgrade, paid credit or payment method was added.
+- GitHub repository is private. No Actions override variables are set; `fast`
+  and `deployed` jobs on the published code were observed skipped. Retained
+  storage is 2 caches totaling 86,199,572 bytes and zero artifacts.
+- The existing linked Vercel project remains on a verified Hobby team. It is
+  not required by the selected Workers deployment.
 
-- Cloudflare Workers dashboard: **Free — $0 — Current plan**.
-- Existing service: static assets only; no runtime variables, Logpush, Tail
-  Workers or triggers. No custom domain; preview URLs disabled.
-- Git-linked to `sjayan009/fireboy-and-watergirl`, production branch `main`.
-  Build command `npm run build`; deployment uses `wrangler deploy --assets=./dist`.
-- Public Supabase URL/key configured for the build. No backend credential is
-  needed by this static host.
-- Live root responds 200, missing paths 404, hash routes 200, robots disallows
-  indexing. `version.txt` currently says `local`, which is not proof of a match
-  to this working tree.
-- Read-only deployed checks fail nine assertions: CSP/frame-ancestors, CSP
-  Supabase allowance, X-Frame-Options, X-Content-Type-Options, Referrer-Policy,
-  X-Robots-Tag, Permissions-Policy, immutable art caching and immutable bundle
-  caching. The built `_headers` supplies these policies; verify the uploader
-  applies them after publication. Missing CSP does not itself block Supabase.
-- Supabase's Site URL now points to the Workers HTTPS origin. The redirect
-  allow-list now contains `https://fireboy-and-watergirl.sjayan009.workers.dev/**`.
-  The previous malformed entry without a scheme was removed.
-- GitHub authentication is available. Remote `main` matched the audited baseline
-  `7c399f8603918997197785957bcb05b86c72b89f`. No repository Actions variables
-  are set, so the new private-repository CI gates skip hosted jobs.
+These are dated observations, not guarantees about future account changes or
+provider terms. [FREE_TIER_BUDGET.md](../FREE_TIER_BUDGET.md) gives the financial
+boundaries, daily/monthly workload calculations and capacity limitations.
 
-## Prepared artifact and checks
+## Production checks
 
-`dist/`: **2,496 files, 27,839,015 bytes**, largest **1,356,970 bytes**.
-Content fingerprint: `1df931ed0a8addd50a2435d70428976c805a86efc09e1c8023fa61566ed849b4`.
-This SHA-256 concatenates files in sorted relative-path order as
-`UTF8(path + NUL + byteLength + NUL)` followed by file bytes. It identifies the
-current uncommitted static artifact; a later build must be fingerprinted again.
+`node app/test/deployed.mjs https://fireboy-and-watergirl.sjayan009.workers.dev`
+passed with the expected commit supplied through `FBWG_COMMIT`:
 
-Passed: production build, secret/manifest/size checks, zero-cost configuration
-tests, documentation checks, lint of the hosting changes, `git diff --check`,
-and Wrangler **4.131.1** dry-run with no bindings. The browser/game performance
-and determinism results are in [BENCHMARKS.md](../BENCHMARKS.md).
+- Root/hash routes return 200; unknown paths return 404; HTML revalidates.
+- CSP permits the configured Supabase connection and denies framing;
+  X-Frame-Options, nosniff, no-referrer, noindex and camera/microphone restrictions
+  are present. Immutable art and bundle caching works. All nine previously
+  failing security/cache assertions now pass.
+- A disposable confirmed account signed in and reached the canvas. The menu
+  rendered CDN WebP art, all 17 audio files were fetchable, and no CSP refusal,
+  failed resource request or page error was observed. The test user was deleted.
+  This smoke test renders the menu; it does not claim a completed multiplayer level.
+- The production bundle contains no secret key or debug hook.
+- A separate Google OAuth initiation request returned HTTP 302 to
+  `accounts.google.com`. A human Google sign-in round trip was not performed.
 
-`wrangler.json` provides the existing account/service, static `dist/` and real
-404 routing. The packaging guard rejects runtime code, resource bindings,
-alternate environments and build hooks. Workers build versions now use
-`WORKERS_CI_COMMIT_SHA`; local builds remain labelled `local`.
+## Artifact identity and local validation
 
-## Release verification
+[Bundle evidence](benchmarks/deployment.json) records nine live JS/CSS responses.
+The tested engine bundle is **byte-identical** to production, SHA-256
+`53f9a8b306ad68c97ba28502f96e9ca5c16effc3971c1a6b75c71c2591bfe1c1`.
+CSS and the Supabase chunk also match exactly. Other app chunks match after
+normalizing only generated chunk filenames and asset release query identifiers.
+This is narrower than claiming an identical full artifact.
 
-Upload only `dist/` through the existing static-file uploader, or authenticate
-Wrangler and deploy using the reviewed configuration. Do not create temporary
-accounts, upgrade the plan, or add a Worker script. Confirm successful deployment
-in the dashboard, compare live bundle bytes with the local artifact, and run:
+The inspected **local** `dist/` had 2,496 files, 27,839,015 bytes, largest
+1,356,970 bytes. Its fingerprint was
+`1df931ed0a8addd50a2435d70428976c805a86efc09e1c8023fa61566ed849b4`,
+hashing sorted `UTF8(path + NUL + byteLength + NUL)` followed by each file's bytes.
+It does not identify the separately built Cloudflare artifact. Build guards
+recount assets and reject quota violations or runtime resources on each build.
 
-```sh
-node app/test/deployed.mjs https://fireboy-and-watergirl.sjayan009.workers.dev --static-only
-node app/test/deployed.mjs https://fireboy-and-watergirl.sjayan009.workers.dev
-```
+Local validation passed production build, static/secret/manifest checks,
+zero-cost configuration tests, documentation checks and Wrangler 4.131.1 dry-run
+without bindings. [BENCHMARKS.md](../BENCHMARKS.md) records renderer improvements,
+determinism/replay/browser tests and controlled network/failover measurements.
 
-The second command exercises live sign-in/playback with a disposable test
-account. Check OAuth separately after the redirect correction. A manual upload
-does not push source changes; the next Git build still uses remote `main`.
-Account-wide GitHub spending and the SMTP contract remain unverified, as
-recorded in [FREE_TIER_BUDGET.md](../FREE_TIER_BUDGET.md).
+Physical input-to-photon, real high-refresh hardware, remote NAT combinations,
+joint regional relay paths and provider quota refusal remain unmeasured in the
+field. The optional Durable Object relay was evaluated, not enabled. Current
+provider Free limits stop expenditure; project-wide graceful quota admission
+is not claimed implemented for the existing Supabase emergency relay.

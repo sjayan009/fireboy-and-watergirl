@@ -15,7 +15,9 @@ ranked attempts, and no public tables without RLS. The existing linked Vercel
 project is on a verified Hobby team. On the supplied Workers destination, the
 Cloudflare dashboard shows **Free — $0 — Current plan**, and confirms that the
 Worker has only static assets (no runtime variables, bindings or triggers).
-GitHub billing settings and the SMTP service's pricing remain external checks.
+Supabase uses Brevo SMTP; its authenticated account shows Free, 300 emails/day,
+no saved payment methods and zero prepaid credits. Private GitHub hosted jobs
+are disabled, and the published release's jobs were observed skipped.
 
 ## Static delivery
 
@@ -48,7 +50,7 @@ local build says `local`. Validate local uploads against their asset hashes,
 since that marker does not identify an uncommitted working tree.
 
 Supabase's Site URL and redirect allow-list were corrected with user approval
-to the Workers HTTPS origin and `https://fireboy-and-watergirl.sjayan009.workers.dev/**`.
+to the Workers HTTPS origin and `https://fireboy-and-watergirl.sjayan009.workers.dev/`.
 The app uses the origin root with optional intent query parameters.
 
 The inspected final artifact contained 2,496 files. Recount every final
@@ -105,9 +107,12 @@ machine is required or provisioned. Only Always Free resources qualify; trial
 credits and upgrading a tenancy are excluded.
 [Oracle limits](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
 
-Google OAuth already works as an email-free sign-in route. Email sign-up/reset
-requires a verified non-expiring $0 SMTP contract. Supabase's default sender is
-for testing and restricted to team addresses. Keep confirmation/MFA checks.
+Google OAuth is implemented as an email-free sign-in route; production initiation
+redirects to Google. The audit did not complete a human Google sign-in round trip.
+Existing email sign-up/reset uses verified Brevo Free, with a 300-email daily
+allowance and no expiry or automatic paid capacity. Keep its account on Free,
+without paid credits. Supabase's default sender is for testing and restricted
+to team addresses. Keep confirmation/MFA checks.
 [SMTP limits](https://supabase.com/docs/guides/auth/auth-smtp)
 
 Hosted CI now runs for public repositories or when the owner has set
@@ -116,6 +121,7 @@ controls. Private CI otherwise remains disabled; checks can run locally.
 The variable is an operator attestation, not an API-enforced billing setting.
 [GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
 
-The budget records unresolved account/deployment checks. No provider promises
+The budget and [deployment record](DEPLOYMENT_STATUS.md) distinguish observed
+account settings from remaining physical-device/WAN checks. No provider promises
 an unchanged free offer forever. If terms change, disable or migrate the
 integration while retaining the $0 constraint.

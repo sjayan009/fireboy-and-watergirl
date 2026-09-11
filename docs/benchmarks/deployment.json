@@ -1,0 +1,107 @@
+{
+  "site": "https://fireboy-and-watergirl.sjayan009.workers.dev",
+  "checkedAt": "2026-09-11T19:24:31.933Z",
+  "commit": "a80d07ef72f7e0be9d89c4bde320c34a810e10b3",
+  "normalization": "Only generated chunk filenames and the asset release query identifier are normalized. All other bytes must match.",
+  "files": [
+    {
+      "local": "engine-CXsFNvy0.js",
+      "live": "engine-CXsFNvy0.js",
+      "status": 200,
+      "sha256": "53f9a8b306ad68c97ba28502f96e9ca5c16effc3971c1a6b75c71c2591bfe1c1",
+      "byteMatch": true,
+      "matchIgnoringBuildAssetIds": true
+    },
+    {
+      "local": "friends-C7jfT7es.js",
+      "live": "friends-CeRzUxrL.js",
+      "status": 200,
+      "sha256": "ecb6f9956ff65d1d8706558ac5d654ea7bc8f772893e86badfd5a9cbd7c32dc6",
+      "byteMatch": false,
+      "matchIgnoringBuildAssetIds": true
+    },
+    {
+      "local": "index-DTEpA_Et.css",
+      "live": "index-DTEpA_Et.css",
+      "status": 200,
+      "sha256": "0bef25e5404b954e2ccfadac692d0dca0168046d7df36062fd876f7b7bb6c997",
+      "byteMatch": true,
+      "matchIgnoringBuildAssetIds": true
+    },
+    {
+      "local": "index-MVidbEhH.js",
+      "live": "index-D6CIvi6b.js",
+      "status": 200,
+      "sha256": "e3d84f5cd347a3e5c0c7966b9ac10fc573b52a0e352fde10a44e998d6bbfba01",
+      "byteMatch": false,
+      "matchIgnoringBuildAssetIds": true
+    },
+    {
+      "local": "leaderboard-B-F_GtsW.js",
+      "live": "leaderboard-BMgQJlY9.js",
+      "status": 200,
+      "sha256": "396edf1086867f6e3d750acf319fea28aae9552e77bf7e7153dba84a43bb1fda",
+      "byteMatch": false,
+      "matchIgnoringBuildAssetIds": true
+    },
+    {
+      "local": "play-B6EIOEnb.js",
+      "live": "play-By83jnNx.js",
+      "status": 200,
+      "sha256": "58ba455602ebf618f8b154889060c532b4622589244412654a04cd36f3922d83",
+      "byteMatch": false,
+      "matchIgnoringBuildAssetIds": true
+    },
+    {
+      "local": "settings-KcG3VRHB.js",
+      "live": "settings-D8NBpQof.js",
+      "status": 200,
+      "sha256": "e088979f2458b287190c3d05e91b1e83514cbdd24a15385ad347c17dc402d4e2",
+      "byteMatch": false,
+      "matchIgnoringBuildAssetIds": true
+    },
+    {
+      "local": "supabase-vE8Vslc6.js",
+      "live": "supabase-vE8Vslc6.js",
+      "status": 200,
+      "sha256": "5dbe25a5d9e4eed7c47980d1448bde200ff2bf3b07834fe4681078e3d2b497bc",
+      "byteMatch": true,
+      "matchIgnoringBuildAssetIds": true
+    },
+    {
+      "local": "watch-Cc9AT3QB.js",
+      "live": "watch-Cjd6LR6u.js",
+      "status": 200,
+      "sha256": "38943363d1a9222bce0354472c5f56ae9244abd2188f083283f47f24c3c8f6c4",
+      "byteMatch": false,
+      "matchIgnoringBuildAssetIds": true
+    }
+  ],
+  "productionSmoke": {
+    "passed": true,
+    "expectedCommitMatched": true,
+    "disposableAccountCleanedUp": true,
+    "menuRendered": true,
+    "audioResources": 17,
+    "cspRefusals": 0,
+    "pageErrors": 0,
+    "fullMultiplayerLevelTested": false
+  },
+  "googleOAuth": {
+    "initiationStatus": 302,
+    "redirectHost": "accounts.google.com",
+    "humanRoundTripTested": false
+  },
+  "hostedCI": {
+    "privateRepository": true,
+    "overrideVariables": 0,
+    "releaseJobsSkipped": [
+      "fast",
+      "deployed"
+    ],
+    "cacheCount": 2,
+    "cacheBytes": 86199572,
+    "artifactCount": 0,
+    "artifactBytes": 0
+  }
+}
