@@ -528,6 +528,15 @@ export class GameView {
       // Rollback: your own character answers on the very next frame, exactly as
       // in single-player, and the peer's input is predicted and corrected.
       rollback: true,
+      // Two browsers on two machines do not advance time together, and nothing
+      // used to reconcile that: the peer whose clock wandered ahead was the one
+      // that hit the edge of the window and sat there waiting, while the other
+      // side saw a perfectly healthy game. See `reckon` in the session.
+      timeSync: true,
+      // And when the link genuinely cannot fit inside the window, buy frames of
+      // it with input delay rather than stalling. Zero on any healthy pair,
+      // which is nearly all of them now the window is thirty frames.
+      adaptiveDelay: true,
       slot, transport, host: new GameHost(this.game, (frame) => this.onConfirmed?.(this, frame), () => this.prepareScene(), () => this.prepared),
       mayReceiveStart: (mode,num) => {
         if (this.session?.runSerial === 0 && o.initialLevel) return mode === o.initialLevel.mode && num === o.initialLevel.num;

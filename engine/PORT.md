@@ -607,9 +607,13 @@ Four things that are less obvious than they look:
 - **A frame's input is decided once.** Even if the session then stalls for a
   second, the peer has already been told what frame `F + 3` holds; revising it
   would mean the two simulations disagree.
-- **Every packet repeats the last 16 frames.** 48 bits of redundancy removes
+- **Every packet repeats the last 32 frames.** 96 bits of redundancy removes
   acknowledgement, retransmission and ordering from the protocol entirely. At
-  25% packet loss the sessions still never desync.
+  25% packet loss the sessions still never desync. It was 16, which made the
+  redundancy only 1.14 times the rollback window it caps -- where GGPO runs
+  eight times as deep -- so a burst of loss at the edge of the window could not
+  be healed. Sixteen more frames is sixteen more bytes; the window doubled with
+  it, to 1154 ms.
 - **Pause, retry and quit ride the same channel as input**, taking effect on an
   agreed frame. Applying one locally the moment the key is pressed is the
   easiest way to desync this game, and it is the one place local UI touches
@@ -630,7 +634,7 @@ one method each way.
 | the rendezvous channel | the fallback, when a peer connection cannot be had |
 
 The data channel is unreliable on purpose. Retransmission is the wrong tool
-when every packet already repeats the last 16 frames: SCTP would hold newer
+when every packet already repeats the last 32 frames: SCTP would hold newer
 input behind older input that no longer matters, and head-of-line blocking is
 exactly what a lockstep session cannot afford.
 

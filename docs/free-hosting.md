@@ -29,13 +29,23 @@ Free rate and monthly allowance. Actual transport sends must be measured;
 the release cannot claim the 100-player all-relay target on Supabase Free.
 
 230 ms is the interval a pair starts on, not the only one they can be on. A
-pair that stalls twice in a match is moved to 115 ms for the rest of it --
-because 230 ms of a 539 ms rollback window is spent before a packet has left
-the browser, and two people far enough apart are stalled by the arithmetic
-rather than by their connection. Such a pair sends about twice as much, so the
-figure above is a floor: the worst case is an all-relay population that is also
-all stalling, at roughly 870 sends/second. Measure the real mix before sizing
-anything on either number.
+pair whose measured input age eats more than 60% of its rollback window is
+moved to 115 ms until it drops back under 40% -- because that wait is spent
+before a packet has left the browser, and two people far enough apart are
+stalled by the arithmetic rather than by their connection. Such a pair sends
+about twice as much, so the figure above is a floor: the worst case is an
+all-relay population that is also all struggling, at roughly 870 sends/second.
+Measure the real mix before sizing anything on either number.
+
+Two things changed how often that is reached. The rollback window went from 14
+frames to 30 -- 538 ms to 1154 ms -- because the input redundancy it is capped
+by went from 16 frames to 32, which costs sixteen bytes a packet and about six
+tenths of a millisecond of re-simulation in the worst case measured. And a pair
+that still does not fit buys frames of window with **input delay** before it
+buys them with messages, because a frame of delay costs 38.5 ms of feel and no
+quota at all. The 115 ms interval is now the last lever rather than the first,
+which should make an all-relay population cheaper than the floor above rather
+than dearer.
 
 The same workload on Durable Objects would use about 78,261 incoming request
 units/hour before connection setup, signalling and spectators. That leaves
