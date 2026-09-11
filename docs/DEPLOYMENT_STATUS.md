@@ -21,9 +21,12 @@ Subsequent documentation-only revisions retain this implementation.
 - Supabase's SMTP host is `smtp-relay.brevo.com`. The authenticated Brevo account
   shows **Free, 300 emails/day**, no saved payment methods and zero prepaid email
   or SMS credits. No plan upgrade, paid credit or payment method was added.
-- GitHub repository is private. No Actions override variables are set; `fast`
-  and `deployed` jobs on the published code were observed skipped. Retained
-  storage is 2 caches totaling 86,199,572 bytes and zero artifacts.
+- GitHub repository is private. CI was initially gated off; it was restored
+  on 11 September after verifying the existing account-wide Actions $0 budget
+  with Stop usage enabled. `FBWG_ZERO_DOLLAR_ACTIONS=1` is now configured, and
+  all five workflows were dispatched. The account had used 573 of 2,000
+  included minutes, with $0 billable usage. The earlier storage snapshot was
+  2 caches totaling 86,199,572 bytes and zero artifacts.
 - The existing linked Vercel project remains on a verified Hobby team. It is
   not required by the selected Workers deployment.
 
