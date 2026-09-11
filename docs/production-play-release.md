@@ -90,10 +90,14 @@ under the selected free plan and activation remain an operations check.
 6. Wire collected operational events into the chosen host's monitoring, verify
    production response headers, deploy the additive migration and worker,
    enable the exact supported engine version, then promote the client together.
-7. Once the promoted client is live — checked against `/version.txt`, not
+7. ~~Once the promoted client is live — checked against `/version.txt`, not
    against `main` — move `supabase/deferred/20260906000000_watch_topic_contract.sql`
-   into `migrations/`. Until it runs, a spectator feed is still reachable by
-   naming two user ids instead of by holding a withdrawable consent.
+   into `migrations/`.~~ **Done.** The client stopped publishing to the derived
+   topic in `8be6ef6`, which is on `main`, so the narrowing was moved into
+   `migrations/` and a spectator feed can no longer be reached by naming two
+   user ids instead of by holding a withdrawable consent. The gate is kept here
+   struck through rather than deleted, because the ORDER is the reusable part:
+   the client half goes first and is confirmed live before the schema half runs.
 
 ## Release compatibility
 

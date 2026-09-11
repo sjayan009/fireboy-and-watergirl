@@ -101,9 +101,26 @@ export async function listFriends(): Promise<Friend[]> {
  */
 
 export async function request(username: string): Promise<void> {
-  const { error } = await supabase.rpc("request_friend",
-                                       { their_username: username });
+  const { data, error } = await supabase.rpc("request_friend",
+                                             { their_username: username });
   fail(error);
+  // A name nobody has comes back as NULL rather than as an error, and it has to:
+  // `request_friend` charges an attempt against an hourly budget, and a raise
+  // would roll that charge back along with everything else in the transaction --
+  // leaving the one call in this project that will still resolve a username free
+  // to be asked over and over. See `20260913010000_charge_failed_requests`.
+  //
+  // The sentence below is also what somebody blocked by that person sees, on
+  // purpose: being blocked must not be distinguishable from not existing.
+  //
+  // Tested for by a FIELD rather than by the row. The function is declared
+  // `returns public.friendships`, so a NULL comes back over PostgREST as a row
+  // whose every column is null -- an object, and a truthy one. `!data` would
+  // never have fired, and the caller would have been told the request went
+  // through.
+  if (!(data as { user_a?: string } | null)?.user_a) {
+    throw new Error("No player with that name.");
+  }
 }
 
 export async function accept(theirId: string): Promise<void> {
