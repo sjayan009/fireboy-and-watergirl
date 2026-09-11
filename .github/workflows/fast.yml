@@ -52,11 +52,11 @@ jobs:
 
       - run: npm ci
 
-      - name: free hosting constraints, server boundaries, and documentation
-        run: npm run test:free && npm run test:servers && npm run test:docs
-
       - name: the engine, on its own
         run: npm --prefix engine test
+
+      - name: free hosting constraints, server boundaries, and documentation
+        run: npm run test:free && npm run test:servers && npm run test:docs
 
       # Here rather than in `full`, because it is seconds and because it is the
       # thing that decides whether a score is real. It needs no browser and no
