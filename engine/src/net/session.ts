@@ -58,6 +58,7 @@ import { type Replay, encodeInputs, parseReplay } from "../verified.js";
 import { ENGINE_VERSION } from "../version.js";
 import {
   Command, HISTORY, Kind, decode, encodeCommand, encodeInput,
+  type InputPacket,
 } from "./protocol.js";
 
 /** 0 drives Fireboy (input bits 0-2), 1 drives Watergirl (bits 3-5). */
@@ -111,6 +112,31 @@ export interface SessionOptions {
   rollback?: boolean;
   /** Frames of input delay. 0 under rollback; 3 at 26 Hz is about 115 ms. */
   delay?: number;
+  /**
+   * Let the session choose the input delay from what it measures.
+   *
+   * Off by default, and off entirely when `delay` is given: a caller that named
+   * a number meant it. On, the delay is re-chosen between levels from the
+   * measured round trip, jitter and the transport's own batching -- zero on a
+   * link that does not need it, so the "your own input lands on the very next
+   * frame" property that rollback exists for survives on every healthy pair.
+   */
+  adaptiveDelay?: boolean;
+  /**
+   * Keep the two clocks together by dilating this peer's timestep.
+   *
+   * Rollback only. See `dilation` for what it does and why it is one-sided.
+   */
+  timeSync?: boolean;
+  /**
+   * The monotonic clock, in ms. Defaults to `performance.now`.
+   *
+   * Injected so the round-trip measurement can be driven by a test's virtual
+   * clock: the netcode harness advances time in fixed steps and never sleeps,
+   * so a session reading the wall clock would measure nothing but its own
+   * execution speed.
+   */
+  now?: () => number;
   /**
    * How far back a correction may reach. Beyond this the session waits.
    *
@@ -242,13 +268,92 @@ const OUTBOX_MAX = 64;
  */
 const CATCHUP_FRAMES = 8;
 
+/**
+ * How far ahead a command is scheduled, in frames.
+ *
+ * Its own number, and it did not used to be: this was `maxRollback`, which
+ * conflated two things that only looked alike. The rollback window is how far
+ * a peer may run ahead of the input it has confirmed; this is how long a pause
+ * takes to happen. Widening the first to thirty frames therefore made every
+ * Retry and every Quit take 1154 ms instead of 538 -- a second and a sixth
+ * between pressing R and the level rebuilding, which is very much noticed.
+ *
+ * Fourteen frames, 538 ms, which is what shipped and what the shell tests are
+ * written against. It is safe at any window because a command arriving late is
+ * not a problem under rollback -- it forces a correction exactly as a
+ * mispredicted input does, and the only frame that truly cannot be reached is
+ * one behind the snapshot, which sits `snapLag` frames back rather than
+ * `maxRollback`. Under lockstep a peer runs at most `delay + 1` frames ahead,
+ * so fourteen is generous there too.
+ */
+const COMMAND_LEAD = 14;
+
+/**
+ * How many advantage samples are averaged before anything is done about them.
+ *
+ * Twenty-six is one second at 26 Hz, and it is the same order as every other
+ * implementation of this: GGPO smooths over 40 frames, ggrs over 30, GekkoNet
+ * over 26. The window is a filter against a noisy estimate rather than a
+ * memory of the connection -- too short and the clock chases jitter, too long
+ * and it answers a drift that finished half a second ago.
+ */
+const ADVANTAGE_WINDOW = 26;
+
+/**
+ * How much drift is worth correcting, and where the correction saturates.
+ *
+ * In MILLISECONDS, which is the whole point. GGPO acts above three frames and
+ * caps at nine, but those are 60 Hz frames -- 50 ms and 150 ms. Inheriting the
+ * frame COUNT here, where a frame is 38.5 ms, would mean doing nothing until
+ * 115 ms of drift had built up and then correcting for a third of a second.
+ * The numbers that transfer are the times.
+ */
+const DRIFT_DEADBAND_MS = 50;
+const DRIFT_FULL_MS = 150;
+
+/**
+ * The most this peer's clock may be slowed, as a fraction.
+ *
+ * Five per cent, which is what Overwatch is described as using (a 16 ms
+ * command frame dilated to 15.2 ms) and which sits under every measured
+ * threshold for noticing a speed change: the tightest figure found is a 9%
+ * just-noticeable difference under forced-choice discrimination, and 18% when
+ * nobody is told to look for it.
+ *
+ * One-sided, and that is deliberate. GGPO only ever asks the peer that is
+ * AHEAD to give time back -- `if (advantage >= radvantage) return 0` -- and
+ * both peers running that rule converge on their own. Speeding the laggard up
+ * as well would double the correction and let the two of them chase each other
+ * around the target, which is the oscillation this exists to remove.
+ */
+const MAX_DILATION = 0.05;
+
+/**
+ * A round trip this session will believe, in ms.
+ *
+ * The measurement rides on packets rather than on a timer, so a sample can be
+ * nonsense for ordinary reasons -- a peer that was paused, a clock that was
+ * stepped, a packet that sat in a batch queue behind a tab switch. Anything
+ * outside this is dropped rather than smoothed, because one absurd sample
+ * dragged through an average is an absurd average.
+ */
+const MAX_PLAUSIBLE_RTT_MS = 5000;
+
+/** RFC 3550's smoothing constant for interarrival jitter: J += (|D| - J)/16. */
+const JITTER_GAIN = 16;
+
 export class NetSession {
   readonly slot: Slot;
   private readonly other: Slot;
   private readonly transport: Transport;
   private readonly host: SessionHost;
   private readonly rollbackOn: boolean;
-  private readonly delay: number;
+  /** Mutable under `adaptiveDelay`, which re-chooses it between levels. */
+  private delay: number;
+  private readonly fixedDelay: boolean;
+  private readonly adaptiveDelay: boolean;
+  private readonly timeSyncOn: boolean;
+  private readonly now: () => number;
   private readonly maxRollback: number;
   private readonly snapLag: number;
   private readonly timeStep: number;
@@ -331,6 +436,22 @@ export class NetSession {
   private lastRemote = 0;
   /** The next frame we have not yet decided our own input for. */
   private nextLocal = 0;
+
+  // ---- clock measurement -------------------------------------------------
+
+  /** Ring of our own advantage samples, and of the peer's, for the average. */
+  private localAdv: number[] = new Array(ADVANTAGE_WINDOW).fill(0);
+  private remoteAdv: number[] = new Array(ADVANTAGE_WINDOW).fill(0);
+  private advAt = 0;
+  /** The newest stamp heard from the peer, and when we heard it. */
+  private heardStamp = 0;
+  private heardAt = 0;
+  /** The peer's newest frame, as the packet said, for the advantage estimate. */
+  private lastRemoteFrame = -1;
+  /** When that arrived, so the estimate can be aged forward between packets. */
+  private lastRemoteAt = 0;
+  /** Previous transit delta, for the RFC 3550 jitter estimator. */
+  private lastTransit: number | null = null;
   /** What this player is pressing right now, three bits. */
   private localBits = 0;
   private acc = 0;
@@ -362,8 +483,72 @@ export class NetSession {
   captures = 0;
   /** Full replays, which should stay at zero and are a bug if they do not. */
   rebuilds = 0;
-  /** How far ahead of us the peer's newest input is, in frames. */
+  /**
+   * How far ahead of us the peer's newest input is, in frames.
+   *
+   * Kept for the connection readout. `advantage` below is the SIGNED version
+   * that the clock is actually regulated on -- this one is clamped at zero and
+   * therefore throws away the half of the signal that matters.
+   */
   lead = 0;
+
+  // ---- what the link is doing, which nothing used to be able to see -------
+
+  /**
+   * Round trip in ms, or null until a packet has come back with an echo.
+   *
+   * Measured off the input packets themselves rather than a ping: each packet
+   * carries the sender's clock, the newest stamp it had from us, and how long
+   * it held that before answering, so the round trip falls out as
+   * `now - echo - held` with the one-way legs left unmeasured. That is NTP's
+   * delay with the offset dropped, and dropping it is not laziness -- the
+   * offset half needs the forward and reverse paths to be equal, which on a
+   * real connection they are not, and no amount of arithmetic recovers it
+   * without a third clock. Every shipped game accepts RTT/2 here; so does this.
+   *
+   * It costs no messages, which on the relay is the only reason it is
+   * affordable at all.
+   */
+  rttMs: number | null = null;
+  /** Interarrival jitter by RFC 3550's estimator, in ms. */
+  jitterMs = 0;
+  /**
+   * How many frames BEHIND the peer this session believes it is.
+   *
+   * Negative means ahead. See `Timing.advantage` for why the sign reads
+   * backwards. Smoothed over `ADVANTAGE_WINDOW`.
+   */
+  advantage = 0;
+  /** The same figure as the peer last reported it, from their side. */
+  remoteAdvantage = 0;
+  /**
+   * The dilation currently applied to this peer's clock, as a rate.
+   *
+   * 1 is real time. Below 1 means this peer is ahead and giving time back.
+   * Never above 1; see `MAX_DILATION`.
+   */
+  dilation = 1;
+  /**
+   * How old the peer's input is by the time it can be used, in ms.
+   *
+   * Their batching plus a one-way network leg plus a jitter allowance. This is
+   * the number the rollback window has to cover, and until it existed every
+   * claim about whether a pair could play was arithmetic on constants.
+   */
+  inputAgeMs = 0;
+  /**
+   * That age as a fraction of the window. Above 1 the pair stalls constantly.
+   *
+   * Read by the page to decide whether to spend messages on a shorter batch --
+   * see `hurry` on the transport.
+   */
+  get pressure(): number {
+    return this.windowMs > 0 ? this.inputAgeMs / this.windowMs : 0;
+  }
+  /** How much delay the rollback window can absorb, in ms. */
+  get windowMs(): number { return this.maxRollback * this.timeStep * 1000; }
+  /** Frames of input delay in force, which `adaptiveDelay` may have chosen. */
+  get inputDelay(): number { return this.delay; }
   /**
    * The transport has reported itself gone.
    *
@@ -401,17 +586,33 @@ export class NetSession {
     // diverge from the game it is watching whenever somebody was already
     // holding a key when the level began.
     this.delay = o.delay ?? (this.rollbackOn || this.observer ? 0 : 3);
-    // Fourteen frames, 539 ms. It was ten, which was chosen against a direct
-    // peer connection and is too tight for a relayed pair: a peer stalls once
-    // the other's input is delayed by more than this window, and a relayed
-    // pair's delay is the batching interval plus a server hop each way. At ten
-    // frames, batching at 230 ms started stalling pairs from 310 ms round trip.
+    // A caller that named a delay meant it, and nothing here may move it.
+    this.fixedDelay = o.delay !== undefined;
+    // Adaptive delay is a rollback idea: under lockstep the delay already IS
+    // the whole latency strategy and moving it underneath a running pair would
+    // change which frames each of them is allowed to run.
+    this.adaptiveDelay = (o.adaptiveDelay ?? false) && this.rollbackOn &&
+                         !this.fixedDelay && !this.observer;
+    this.timeSyncOn = (o.timeSync ?? false) && this.rollbackOn && !this.observer;
+    this.now = o.now ?? (() => performance.now());
+    // Thirty frames, 1154 ms. It has been ten and then fourteen, each chosen
+    // against the redundancy of the day: a peer stalls once the other's input
+    // is delayed by more than this window, and a relayed pair's delay is the
+    // batching interval plus a server hop each way. At ten frames, batching at
+    // 230 ms started stalling pairs from 310 ms round trip; at fourteen, from
+    // about 620 ms.
     //
-    // The ceiling is HISTORY. Every input packet repeats the last sixteen
+    // The ceiling is HISTORY. Every input packet repeats the last thirty-two
     // frames, so a peer allowed to run further ahead of `confirmed` than that
-    // could leave a hole no single packet can fill. Fourteen keeps two frames
+    // could leave a hole no single packet can fill. Thirty keeps two frames
     // of margin, and costs 0.04 ms per extra frame re-simulated.
-    this.maxRollback = o.maxRollback ?? 14;
+    //
+    // It was fourteen, against a sixteen-frame history -- a ratio of 1.14,
+    // where GGPO runs eight times as much redundancy as rollback depth. The
+    // history doubled (see `HISTORY`) and this doubled with it, which is 1154
+    // ms of budget instead of 538 for sixteen bytes a packet and six tenths of
+    // a millisecond of re-simulation in the worst case measured.
+    this.maxRollback = Math.min(o.maxRollback ?? 30, HISTORY - 2);
     this.timeStep = o.timeStep ?? 1 / 26;
     this.hashEvery = o.hashEvery ?? 8;
     this.solo = o.solo ?? false;
@@ -499,6 +700,15 @@ export class NetSession {
     this.mode = mode;
     this.num = num;
     this.epoch = (this.epoch + 1) & 0xff;
+    // BEFORE the log is reset, and only here.
+    //
+    // Between levels is the one moment the delay can move without anybody
+    // feeling it change under their hands, and `resetLog` pre-fills the first
+    // `delay` frames -- so the number has to be settled before it runs. What
+    // the link was doing on the last level is the best guess available for
+    // this one, and on the very first level there is no measurement yet, which
+    // is why zero is the starting answer rather than a cautious one.
+    this.chooseDelay();
     this.host.start(mode, num);
     this.started = true;
     this.heard = false;
@@ -528,6 +738,18 @@ export class NetSession {
     this.stalls = 0;
     this.owed = -1;
     this.snapFrame = -1;
+    // Frame-relative, so a level that restarts the count invalidates them.
+    // The round trip and the jitter are NOT reset: those are properties of the
+    // connection and survive the level, which is what lets `chooseDelay` above
+    // know anything at all about the link on the level it is starting.
+    this.lastRemoteFrame = -1;
+    this.lastRemoteAt = 0;
+    this.localAdv.fill(0);
+    this.remoteAdv.fill(0);
+    this.advAt = 0;
+    this.advantage = 0;
+    this.remoteAdvantage = 0;
+    this.dilation = 1;
     // The first `delay` frames have no decided input, so both peers agree in
     // advance that they are neutral. Without this a lockstep session deadlocks
     // on frame 0 waiting for input nobody was ever going to send.
@@ -659,11 +881,138 @@ export class NetSession {
     for (const [f, h] of this.hashes) {
       if (f >= hashFrame) { hashFrame = f; hash = parseInt(h, 16) >>> 0; }
     }
+    const now = this.now();
     this.transport.send(encodeInput({
       kind: Kind.Input, slot: this.slot, epoch: this.epoch,
       frame: newest, bits, hashFrame, hash,
+      timing: {
+        advantage: this.advantage,
+        sent: Math.round(now) >>> 0,
+        // Zero until we have heard anything, which `receive` reads as "no
+        // sample here" rather than as a round trip of `now`.
+        echo: this.heardStamp,
+        held: this.heardStamp ? Math.max(0, Math.round(now - this.heardAt)) : 0,
+      },
     }));
+  }
 
+  /**
+   * Fold one packet's timing into what we believe about the link.
+   *
+   * Three separate things arrive together because they ride the same bytes: a
+   * round trip, a jitter estimate, and the peer's own opinion of who is ahead.
+   */
+  private measure(p: InputPacket): void {
+    const t = p.timing;
+    if (!t) return;
+    const now = this.now();
+    // Remember their stamp so the next packet we send can echo it back.
+    this.heardStamp = t.sent;
+    this.heardAt = now;
+    this.remoteAdvantage = t.advantage;
+
+    if (t.echo) {
+      // `echo` is OUR clock, handed back. `held` is the time it sat at their
+      // end, which is theirs to report and not ours to verify -- so an absurd
+      // answer is dropped rather than smoothed into the average.
+      const rtt = now - t.echo - t.held;
+      if (rtt >= 0 && rtt <= MAX_PLAUSIBLE_RTT_MS) {
+        // Smoothed the same way as the jitter below, for the same reason: one
+        // sample off a batching relay says very little.
+        this.rttMs = this.rttMs === null ? rtt : this.rttMs + (rtt - this.rttMs) / 8;
+      }
+    }
+
+    // RFC 3550 A.8. `D` is how much the gap between two packets' arrivals
+    // differs from the gap between their departures, which is jitter with the
+    // path's constant delay cancelled out and no clock offset needed.
+    const transit = now - t.sent;
+    if (this.lastTransit !== null) {
+      const d = Math.abs(transit - this.lastTransit);
+      if (d <= MAX_PLAUSIBLE_RTT_MS) {
+        this.jitterMs += (d - this.jitterMs) / JITTER_GAIN;
+      }
+    }
+    this.lastTransit = transit;
+  }
+
+  /**
+   * How far behind the peer we are, in frames, and what that costs.
+   *
+   * The estimate is ggrs's rather than GGPO's: GGPO projects the peer's
+   * current frame with the FULL round trip, which double-counts the return
+   * leg, and ggrs corrects it to a half. With no round trip measured yet the
+   * projection degenerates to GekkoNet's -- just the newest frame they sent --
+   * which is the honest answer when the link has not told us anything.
+   */
+  private reckon(): void {
+    if (this.lastRemoteFrame < 0) return;
+    const stepMs = this.timeStep * 1000;
+    const oneWay = this.rttMs === null ? 0 : this.rttMs / 2;
+    // Aged forward, not frozen at the packet.
+    //
+    // Packets do not arrive every frame. On the relay they arrive every 230 ms
+    // -- six frames -- so an estimate pinned to the newest one sweeps six
+    // frames into the past between arrivals and snaps back when the next lands.
+    // The average of that sawtooth is three frames of advantage that does not
+    // exist, which was enough to hold the regulator at its cap and slow a pair
+    // whose clocks were already identical.
+    //
+    // Clamped, because a link that has gone quiet must not be read as a peer
+    // sprinting away: after a second of silence the estimate stops growing and
+    // waits for news.
+    const since = Math.min(Math.max(this.now() - this.lastRemoteAt, 0), 1000);
+    const remoteNow = this.lastRemoteFrame + (oneWay + since) / stepMs;
+    const sample = remoteNow - this.frame;
+    this.localAdv[this.advAt % ADVANTAGE_WINDOW] = sample;
+    this.remoteAdv[this.advAt % ADVANTAGE_WINDOW] = this.remoteAdvantage;
+    this.advAt++;
+    let mine = 0, theirs = 0;
+    for (let i = 0; i < ADVANTAGE_WINDOW; i++) {
+      mine += this.localAdv[i];
+      theirs += this.remoteAdv[i];
+    }
+    this.advantage = mine / ADVANTAGE_WINDOW;
+    const smoothedRemote = theirs / ADVANTAGE_WINDOW;
+
+    // What the window has to cover: their batching, a one-way leg, and enough
+    // jitter allowance that an ordinary bad moment is not a stall. Two
+    // deviations rather than Jacobson's four -- four is sized for a
+    // retransmission timer, where being early is a wasted packet; here being
+    // early is a frame of input delay nobody asked for.
+    const pacing = this.transport.pacingMs ?? 0;
+    this.inputAgeMs = pacing + oneWay + 2 * this.jitterMs;
+
+    if (!this.timeSyncOn) return;
+    // GGPO's rule, exactly: only the peer that is AHEAD gives time back, and
+    // it gives back half the gap so the two of them meet in the middle rather
+    // than trading the lead.
+    const ahead = (smoothedRemote - this.advantage) / 2;
+    const driftMs = ahead * stepMs;
+    if (driftMs <= DRIFT_DEADBAND_MS) { this.dilation = 1; return; }
+    const over = Math.min(1, (driftMs - DRIFT_DEADBAND_MS) /
+                             (DRIFT_FULL_MS - DRIFT_DEADBAND_MS));
+    this.dilation = 1 - MAX_DILATION * over;
+  }
+
+  /**
+   * Choose the input delay from what the link is actually doing.
+   *
+   * Called between levels only. Each frame of delay buys one frame of window --
+   * their input for frame F leaves at their frame F-D, so it lands D frames
+   * earlier and `confirmed` advances that much sooner -- and costs one frame of
+   * lag between this player pressing a key and seeing it. Zero unless the
+   * measured age genuinely does not fit, because that lag is the thing rollback
+   * was built to remove.
+   */
+  private chooseDelay(): void {
+    if (!this.adaptiveDelay) return;
+    const stepMs = this.timeStep * 1000;
+    const needed = Math.ceil(this.inputAgeMs / stepMs);
+    // Four frames of headroom: the estimate is an average and the thing it is
+    // protecting against is the tail.
+    const over = needed - (this.maxRollback - 4);
+    this.delay = Math.max(0, Math.min(2, over));
   }
 
   /**
@@ -734,7 +1083,11 @@ export class NetSession {
     // the time the packet lands. Input is worth shaving frames off; a command
     // is not -- nobody notices 400 ms on a pause, and a command that arrives
     // for a frame already behind the snapshot cannot be applied at all.
-    const at = this.frame + this.delay + this.maxRollback;
+    //
+    // `COMMAND_LEAD`, not `maxRollback`: see the note on the constant for why
+    // those are different numbers even though this line held the second one
+    // for a long time.
+    const at = this.frame + this.delay + COMMAND_LEAD;
     if (!this.queueCommand(at, command, a, b)) return;
     if (this.solo) return;
     const packet = encodeCommand({
@@ -834,6 +1187,11 @@ export class NetSession {
         if (g !== undefined && g !== p.bits[i]) this.owe(f);
       }
       this.lead = Math.max(0, p.frame - this.frame);
+      if (p.frame > this.lastRemoteFrame) {
+        this.lastRemoteFrame = p.frame;
+        this.lastRemoteAt = this.now();
+      }
+      this.measure(p);
       this.advanceConfirmed();
       if (p.hashFrame > 0) this.checkHash(p.hashFrame, p.hash);
       return;
@@ -987,7 +1345,20 @@ export class NetSession {
     this.drainOutbox();
     this.settle();
     this.scheduleLocal();
-    this.acc += Math.min(dt, 0.25);          // clamp after a tab stall
+    this.reckon();
+    // Dilated, not stepped.
+    //
+    // `dilation` scales the clock this session spends, never the `dt` handed to
+    // `step` -- the simulation's timestep is fixed and determinism rests on it
+    // being identical on both machines. What changes is only HOW OFTEN a frame
+    // runs, which is a local pacing decision and not shared state.
+    //
+    // At five per cent, a peer a frame ahead gives it back over about twenty
+    // frames, which is under a second and under every threshold anyone has
+    // measured for noticing a speed change. Dropping the frame instead -- what
+    // GGPO does -- would be a 38.5 ms hitch here, because a frame at 26 Hz is
+    // more than twice a fighting game's.
+    this.acc += Math.min(dt, 0.25) * this.dilation;   // clamp after a tab stall
 
     // A generous cap: a peer coming back from a stall should be able to catch
     // up quickly, and stepping is far cheaper than rendering.

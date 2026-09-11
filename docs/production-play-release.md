@@ -19,7 +19,17 @@ the supplied Supabase project, and no paid resources were provisioned.
 - Deferred engine loading, parallel manifests, shared resource requests,
   bounded decode concurrency, required art preparation and retry, conditional
   rendering and input suspension. Relay batching starts at 230ms and halves to
-  115ms for a pair that has stalled twice in a match.
+  115ms for a pair whose measured input age eats more than 60% of its rollback
+  window.
+- Clock synchronisation between peers. Input packets carry a trailer — appended
+  after the body checksum so a client built before it ignores it and a pair
+  survives a deploy — holding the sender's clock, the newest stamp it had from
+  us and how long it held it (a round trip for no messages), its own frame
+  advantage, and the back half of the input history. The peer that is ahead
+  dilates its own timestep by at most 5% until the two are level; the one behind
+  does nothing, which is GGPO's rule and is what makes both sides converge
+  instead of chasing each other. The rollback window went from 14 frames to 30
+  on the back of the redundancy going from 16 to 32.
 - Server-side match sharing consent and rotating authorization, confirmed
   spectator catch-up, authorized friend-list RPC,
   durable replay registration/acknowledgement/queue, and isolated Node verifier.

@@ -125,6 +125,16 @@ export class RealtimeTransport implements Transport {
   get waitMs(): number { return this.flushMs; }
 
   /**
+   * The same number, under the name the session asks for it by.
+   *
+   * This is most of a relayed pair's delay budget and nothing above the
+   * transport used to know it existed: the session reasoned about round trips
+   * and the page reasoned about stalls, while 230 ms of a 538 ms window was
+   * being spent in a queue neither could see.
+   */
+  get pacingMs(): number { return this.flushMs; }
+
+  /**
    * Realtime gives no round-trip figure, and measuring one would mean sending
    * pings that cost messages for a number nothing depends on. The session's
    * prediction window is fixed, and the UI can say "relay" without a millisecond

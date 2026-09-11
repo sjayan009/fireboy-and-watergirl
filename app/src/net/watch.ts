@@ -90,6 +90,9 @@ export class WatchMirror implements Transport {
    */
   hurry(on: boolean): void { this.inner.hurry?.(on); }
 
+  /** The players' own link, not the mirror's: see `hurry` above. */
+  get pacingMs(): number | undefined { return this.inner.pacingMs; }
+
   send(data: Uint8Array): void {
     this.inner.send(data);
     this.copy(data);

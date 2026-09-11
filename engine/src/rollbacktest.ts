@@ -341,9 +341,15 @@ console.log("\na peer that runs too far ahead waits rather than guessing wildly"
     peers[0].session.tick(STEP);          // peer 1 does not tick
   }
   const ahead = peers[0].session.frame - at;
-  check("it ran ahead, but only as far as the window allows", ahead <= 14, true);
+  // Against the session's OWN window rather than a number copied out of it.
+  // This read `<= 14` and went stale the moment the window was widened to
+  // thirty -- it then failed reporting "ran 30 frames ahead", which was the
+  // mechanism working exactly as designed and the assertion describing a
+  // release that had gone.
+  const window = peers[0].session.windowMs / (STEP * 1000);
+  check("it ran ahead, but only as far as the window allows", ahead <= window, true);
   check("and it says so", peers[0].session.stalled, true);
-  console.log(`       ran ${ahead} frames ahead, then waited`);
+  console.log(`       ran ${ahead} frames ahead of a ${window}-frame window, then waited`);
 
   run(link, peers, 200, held, 160);
   converge(link, peers);

@@ -358,7 +358,7 @@ export function playScreen(host: HTMLElement): () => void {
       const context = rankedContext();
       if (context && view.session) ranking.observe(context, view.session, view.game);
     },
-    onFrame: () => watchStall(),
+    onFrame: () => { watchStall(); pace(); freshenReadout(); },
     onConfirmed: (v, frame) => {
       if (v.session) mirror?.confirmed(v.session,frame);
       if (frame % 26 === 0 || v.game.children.some((c: { Rboard?: unknown }) => c.Rboard)) {
@@ -445,12 +445,45 @@ export function playScreen(host: HTMLElement): () => void {
     if (now - costAt < 1000) return costText;
     costAt = now;
     const parts: string[] = [];
+    const s = view.session;
     if (typeof link?.sent === "number") parts.push(`${link.sent} msgs`);
-    if (typeof link?.rttMs === "number") parts.push(`${Math.round(link.rttMs)}ms`);
-    const stalls = view.session?.stalls ?? 0;
-    if (stalls) parts.push(`${stalls} stalls${hurried ? " · hurried" : ""}`);
+    // The session's own measurement first: it rides the input packets, so it
+    // works on every browser. `getStats` is the cross-check and is null on
+    // Firefox forever -- see `sampleRtt` in webrtc.ts.
+    const rtt = s?.rttMs ?? (typeof link?.rttMs === "number" ? link.rttMs : null);
+    if (rtt !== null) parts.push(`${Math.round(rtt)}ms rtt`);
+    if (s && s.jitterMs > 0) parts.push(`±${Math.round(s.jitterMs)}ms`);
+    // The whole point of the exercise: how far apart the two clocks are, and
+    // what is being done about it. Both used to be invisible.
+    if (s) parts.push(`adv ${s.advantage.toFixed(1)}`);
+    if (s && s.dilation < 1) parts.push(`×${s.dilation.toFixed(3)}`);
+    if (s) parts.push(`age ${Math.round(s.inputAgeMs)}/${Math.round(s.windowMs)}ms`);
+    if (s && s.inputDelay > 0) parts.push(`delay ${s.inputDelay}`);
+    if (hurried) parts.push("hurried");
+    const stalls = s?.stalls ?? 0;
+    if (stalls) parts.push(`${stalls} stalls`);
     costText = parts.length ? ` · ${parts.join(" · ")}` : "";
     return costText;
+  }
+
+  /**
+   * Keep the development readout moving, which it otherwise does not.
+   *
+   * `refreshStatus` runs from `onState`, and the engine's state key holds
+   * things that barely change while a level is being played -- whether it is
+   * running, the generation, the mute. So the line could sit frozen for a
+   * minute at a time, which is fine for the sentence a player reads and
+   * useless for the numbers this build added to it: a round trip that arrives
+   * after the last state change would simply never be drawn.
+   *
+   * Gated on the same one-second throttle `cost` already uses, so this costs a
+   * comparison a frame and a string once a second. Compiled out entirely in
+   * production, where the readout does not exist.
+   */
+  function freshenReadout(): void {
+    if (!import.meta.env.DEV) return;
+    if (Date.now() - costAt < 1000) return;
+    refreshStatus();
   }
 
   /**
@@ -859,28 +892,42 @@ export function playScreen(host: HTMLElement): () => void {
     stalling = bad;
     if (bad) {
       notice("stall", `Waiting for ${partner?.username ?? "your friend"}…`);
-      // The second one, not the first.
-      //
-      // A single stall is an ordinary hiccup and a pair should not be billed
-      // double for it. Two in one match is a pattern, and the likeliest cause
-      // is arithmetic rather than weather: a relayed pair spends 230 ms of a
-      // 539 ms rollback window waiting in the batch queue before a packet has
-      // left the browser, so anybody far enough away stalls on the batching
-      // alone. Halving the wait gives back 115 ms of that window at roughly
-      // double the messages, and only the pairs that were suffering pay it.
-      //
-      // Latched for the match. Turning it off again the moment things look
-      // calm would mean flipping the interval every time the link steadied for
-      // a second, and a pair that stalled twice will stall again.
-      if (++stallEpisodes >= 2 && !hurried) {
-        hurried = true;
-        // A no-op on a data channel, which sends each packet as it comes and
-        // has nothing to trade -- so there is nothing here to ask about kind.
-        link?.hurry?.(true);
-      }
+      stallEpisodes++;
     } else clearNotice("stall");
     // `stalling` is not in the engine's state key, so nothing else will.
     refreshStatus();
+  }
+
+  /**
+   * Decide whether to spend messages on a shorter batch.
+   *
+   * This used to be "the second stall in a match, then latch it forever",
+   * which was a proxy standing in for a measurement nobody had. The session
+   * now reports `pressure` -- how much of the rollback window the peer's input
+   * age is actually eating -- so the decision can be made on the thing it was
+   * always about.
+   *
+   * The order is deliberate and it is the opposite of what it looks like.
+   * Input delay is the cheaper lever in the only currency that runs out here:
+   * a frame of it costs 38.5 ms of feel and NOT ONE MESSAGE, where halving the
+   * batch doubles a relayed pair's traffic -- 17.4 message-units a second
+   * becomes 34.8, and the free tier's hundred a second goes from about six
+   * concurrent relayed pairs to about three. So the session takes delay first,
+   * inside the window, and this only fires when the window has run out anyway.
+   *
+   * Hysteresis on both sides, because flipping the interval every time a link
+   * steadied for a second would be worse than either setting.
+   */
+  function pace(): void {
+    const s = view.session;
+    if (!s || !match) return;
+    // No measurement yet -- a brand new link, or a peer on a build without the
+    // trailer. Fall back to the old proxy rather than to nothing.
+    const blind = s.rttMs === null;
+    const want = blind ? stallEpisodes >= 2 : s.pressure > 0.6;
+    const done = blind ? false : s.pressure < 0.4;
+    if (want && !hurried) { hurried = true; link?.hurry?.(true); }
+    else if (done && hurried) { hurried = false; link?.hurry?.(false); }
   }
 
   // ---- what you have finished --------------------------------------------
@@ -1206,9 +1253,10 @@ export function playScreen(host: HTMLElement): () => void {
     clearNotice();
     stalling = false;
     // A new link, and the batching question asked again from scratch. A pair
-    // that stalled its way onto the fast interval may have just been handed a
-    // direct peer connection, where there is nothing to hurry and no reason to
-    // carry the verdict over.
+    // that was on the fast interval may have just been handed a direct peer
+    // connection, where there is nothing to hurry -- and `pace` re-decides
+    // from measurement within a second either way, so there is no verdict here
+    // worth carrying over.
     stallEpisodes = 0;
     hurried = false;
     leave.hidden = false;
@@ -1237,10 +1285,6 @@ export function playScreen(host: HTMLElement): () => void {
     // has ever read it, so every number about what a relayed pair costs has
     // been a model. See `describe`.
     link = transport;
-    // Carried across a rebuilt link. `hurry` is per transport, so a pair that
-    // earned the fast interval and then lost the connection would quietly go
-    // back to stalling on the replacement.
-    if (hurried) link.hurry?.(true);
     if (ready.host) {
       mirror = new WatchMirror(transport, () => watchRoom);
       mirror.setSharing(sharing);

@@ -39,6 +39,53 @@ try {
     assert(await page.locator(".play-drawer").isHidden(),"ready peers collapse the setup drawer");
     assert(await page.evaluate(()=>document.documentElement.scrollHeight <= innerHeight+1));
   }
+  /*
+   * The link, measured rather than assumed.
+   *
+   * Two peers on two machines do not advance time together, and until this
+   * release nothing reconciled that: the session computed how far ahead the
+   * peer was, put it in a field called `lead`, and no line of code read it. The
+   * peer whose clock wandered ahead was the one that hit the edge of the
+   * rollback window and sat there saying "waiting for your friend", while the
+   * other side saw a perfectly healthy game.
+   *
+   * These are the numbers that were not there. They ride the input packets --
+   * no extra messages, which on the relay is the only reason it is affordable
+   * -- so this asserts the real browser path, over the real batched transport,
+   * and not just the netcode harness.
+   */
+  for (const page of [left,right]) {
+    await page.waitForFunction(()=>window.__fbwg.view.session?.rttMs !== null,{},{timeout:20000});
+    const link = await page.evaluate(()=>{
+      const s = window.__fbwg.view.session;
+      return { rtt: s.rttMs, jitter: s.jitterMs, advantage: s.advantage,
+               dilation: s.dilation, age: s.inputAgeMs, window: s.windowMs,
+               delay: s.inputDelay, pressure: s.pressure };
+    });
+    assert(link.rtt >= 0 && link.rtt < 5000, `a round trip was measured: ${link.rtt}`);
+    // Thirty frames at 26 Hz. It was fourteen, and the redundancy that caps it
+    // was sixteen -- a ratio of 1.14 where GGPO runs eight.
+    assert(Math.round(link.window) === 1154, `the window is thirty frames: ${link.window}`);
+    // Two tabs on one machine share a clock, so there is nothing to correct.
+    assert(link.dilation === 1, `a pair on one clock is not dilated: ${link.dilation}`);
+    assert(link.delay === 0, `and is given no input delay: ${link.delay}`);
+    assert(link.pressure < 1, `with the window comfortably covering it: ${link.pressure}`);
+  }
+  // And the development readout that reports all of it, which is what gets read
+  // while actually playing.
+  // Waited for rather than sampled: the readout is deliberately rate-limited to
+  // once a second, because `sent` changes constantly and is not in the engine's
+  // state key -- without the limit the counter alone would rewrite the status
+  // line on every state change, which is the layout thrash this screen spent a
+  // release removing.
+  await left.waitForFunction(
+    () => /rtt/.test(document.querySelector(".status").textContent),
+    {}, { timeout: 15000 });
+  const readout = await left.locator(".status").innerText();
+  assert(/rtt/.test(readout), `the readout names the round trip: ${readout}`);
+  assert(/adv /.test(readout), `and the frame advantage: ${readout}`);
+  assert(/age \d+\/\d+ms/.test(readout), `and the input age against the window: ${readout}`);
+
   const serial = await left.evaluate(()=>window.__fbwg.view.session.runSerial);
   await left.getByRole("button",{name:"Friends (1)",exact:true}).click();
   assert.equal(await left.evaluate(()=>window.__fbwg.view.session.runSerial),serial,"a social panel preserves the running session");
