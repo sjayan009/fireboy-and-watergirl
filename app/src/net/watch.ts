@@ -83,6 +83,13 @@ export class WatchMirror implements Transport {
 
   get rttMs(): number | null { return this.inner.rttMs; }
 
+  /**
+   * Passed straight through. The mirror's own 115 ms is already the hurried
+   * interval and is a spectator's problem rather than a player's; what this
+   * asks about is the link the two of them are actually playing on.
+   */
+  hurry(on: boolean): void { this.inner.hurry?.(on); }
+
   send(data: Uint8Array): void {
     this.inner.send(data);
     this.copy(data);

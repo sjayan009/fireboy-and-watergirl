@@ -18,9 +18,10 @@ the supplied Supabase project, and no paid resources were provisioned.
   ownerless outbox quarantine and confirmed-frame result capture.
 - Deferred engine loading, parallel manifests, shared resource requests,
   bounded decode concurrency, required art preparation and retry, conditional
-  rendering and input suspension. Relay batching remains 230ms.
+  rendering and input suspension. Relay batching starts at 230ms and halves to
+  115ms for a pair that has stalled twice in a match.
 - Server-side match sharing consent and rotating authorization, confirmed
-  spectator catch-up, authorized friend-list RPC, verified-only leaderboard,
+  spectator catch-up, authorized friend-list RPC,
   durable replay registration/acknowledgement/queue, and isolated Node verifier.
 
 ## Evidence obtained locally
@@ -119,6 +120,20 @@ is unchanged in substance: `progress_read`, `profiles_write_own`,
 `play_private.engine_versions` is deliberately seeded with nothing, so ranked
 registration refuses every engine until an operator enables one. Ordinary play,
 progress and the historical leaderboard do not depend on it.
+
+**The client no longer reads `verified_leaderboard`.** It did, and the sentence
+above is why that could not work: with no engine enabled and no worker deployed,
+`play_private.verified_results` can never receive a row, so the board was not
+stale or slow but structurally empty -- a pair would finish a level, watch
+Progress update, and find the board still saying it was waiting for its first
+pair. The Leaderboard panel reads `public.leaderboard` instead, which is built
+on `pair_progress` and updates the moment `sync_progress` acknowledges a result.
+Those times are client-reported within the bounds `0016_progress_writes.sql`
+enforces, and the panel's own copy says so rather than claiming a verification
+that is not happening. `verified_leaderboard`, the attempt registration and the
+worker are all unchanged and still in place: when a verifier is deployed and an
+engine enabled, verification comes back as a badge on these rows rather than as
+the only source of them. Gate 2 below is unaffected.
 
 ## Where these run
 

@@ -92,7 +92,7 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
   await page.waitForFunction(expected=>document.querySelector('.leaderboard-table .time')?.textContent===expected,expectedTime);
   await page.waitForTimeout(450);
   assert.equal(await page.locator('.leaderboard-table .time').innerText(),expectedTime,'late results never replace a newer level');
-  await page.evaluate(()=>{window.socialFixture.fail='verified_leaderboard';});
+  await page.evaluate(()=>{window.socialFixture.fail='leaderboard';});
   await page.getByLabel('Leaderboard level',{exact:true}).selectOption('5');
   await page.getByRole('button',{name:'Retry',exact:true}).click();
   assert(await page.locator('.leaderboard-results .error').isVisible());
@@ -100,6 +100,46 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
   await page.getByRole('button',{name:'Retry',exact:true}).click();
   await page.getByRole('table').waitFor();
   await page.screenshot({path:`.cache/play-evidence/${name}-elemental-leaderboard.png`,animations:'disabled'});
+  /*
+   * The batch interval, which is the difference between two people playing and
+   * two people watching each other freeze.
+   *
+   * A relayed pair waits 230 ms before a packet leaves the browser, out of a
+   * 539 ms rollback window -- so far enough apart, the batching alone is what
+   * stalls them. `hurry` halves that wait at roughly double the messages, and
+   * the play screen turns it on for the pairs that have actually stalled twice.
+   * Asserted here rather than in a pair test because forcing a real stall on
+   * one machine is not something a browser test can do honestly; what can be
+   * checked is that the dial exists and moves the queue.
+   */
+  const waits = await page.evaluate(async()=>{
+    const {RealtimeTransport}=await import('/src/net/realtime.ts');
+    const sent=[];
+    const channel={onBytes:()=>()=>{},onStatus:()=>()=>{},sendBytes:()=>{sent.push(Date.now());}};
+    const link=new RealtimeTransport(channel);
+    // Two input packets: the first goes at once (leading edge) and the second
+    // waits out the interval behind it. The gap between them IS the interval.
+    const packet=()=>{const d=new Uint8Array(20);d[0]=1;return d;};
+    const measure=async()=>{
+      sent.length=0;
+      link.send(packet());
+      const first=Date.now();
+      link.send(packet());
+      await new Promise(r=>setTimeout(r,400));
+      return sent.length>1?sent[sent.length-1]-first:-1;
+    };
+    const slow=await measure();
+    link.hurry(true);
+    const fast=await measure();
+    link.hurry(false);
+    const back=await measure();
+    link.close();
+    return {slow,fast,back};
+  });
+  assert(waits.slow>=200&&waits.slow<300,`the ordinary batch interval is ~230ms: ${waits.slow}`);
+  assert(waits.fast>=90&&waits.fast<180,`a hurried pair waits ~115ms: ${waits.fast}`);
+  assert(waits.back>=200,`and it goes back when the hurry is withdrawn: ${waits.back}`);
+
   await page.locator('.tool-friends').click();
   await page.getByLabel('Close panel',{exact:true}).click();
   await page.reload();
@@ -127,6 +167,6 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
   await refresh();
   await page.getByText('Add a friend below to play together. You can also play on one keyboard.',{exact:true}).waitFor();
   assert.deepEqual(errors,[]);
-  console.log(`PASS ${name}: add/crossed requests, failure recovery, removal, focus preservation, inline setup, leaderboard races, mobile and reduced motion`);
+  console.log(`PASS ${name}: add/crossed requests, failure recovery, removal, focus preservation, inline setup, leaderboard races, adaptive batching, mobile and reduced motion`);
  } finally {await browser.close();}
 }
