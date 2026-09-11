@@ -8,12 +8,26 @@
  * different maps and one window onto them, chosen for them by whether a friend
  * was currently online.
  *
- * So the panel takes a subject: "Just me", or any friend you have. That picker
+ * So the panel takes a subject: this device, or any friend you have. That picker
  * is also the whole answer to "am I playing locally or online" -- the app never
- * asks, because it already knows, and the LABEL says which. Showing the local
- * map the panel is called "Progress (Local)"; showing a shared one it is called
- * "Progress". Since the picker starts on whoever you are playing with, that
- * reads correctly without anybody choosing a mode.
+ * asks, because it already knows, and the answer is one control rather than a
+ * screen in the way of playing.
+ *
+ * ## "On This Device", not "Just me"
+ *
+ * The subject is a SAVE, not a person, and the game has never had a one-person
+ * mode: somebody playing "alone" is driving Fireboy and Watergirl together, or
+ * sharing a keyboard with whoever is next to them, and one day may be playing
+ * against a bot. Every one of those is two characters, so "Just me" described
+ * something that does not exist. What actually distinguishes this option is
+ * where the progress lives -- on this machine, under this account -- and that
+ * is what it now says.
+ *
+ * The panel is called "Progress" and stays called "Progress". It briefly
+ * renamed itself to match the subject, which fought the thing a tab is for:
+ * you find it again by it being in the same place with the same name. The
+ * picker is directly under the heading and says which map is on show, so the
+ * heading saying it too was a second voice for one fact.
  *
  * Reading is read-only. `pairProgress.adopt` swaps the store the running engine
  * writes through, and looking at a friend's map must never do that -- see
@@ -41,9 +55,13 @@ const MODES: [string, string, number][] = [
  */
 const GRADES: Record<number, string> = { 3: "A", 2: "B", 1: "C", 0: "—" };
 
-/** Shown on the tab and the drawer heading, so the mode needs no sentence. */
-export const LOCAL_LABEL = "Progress (Local)";
-export const SHARED_LABEL = "Progress";
+/**
+ * What this account's own save is called.
+ *
+ * Not "Just me": see the note at the top of this file. Two characters are
+ * always playing, and what is local about this option is the SAVE.
+ */
+export const LOCAL_OPTION = "On This Device";
 
 export interface ProgressSources {
   /** The store the game is writing through, and what it knows about saving. */
@@ -54,8 +72,6 @@ export interface ProgressSources {
   partner: () => FriendState | null;
   /** `game.Translation`, absent until the game has finished preparing. */
   table: () => string[] | undefined;
-  /** Told when the subject changes, so the tab and heading can follow it. */
-  onLabel: (label: string) => void;
 }
 
 export class ProgressPanel {
@@ -81,10 +97,8 @@ export class ProgressPanel {
       // map mid-game did not ask to be put back on the pair's when the next
       // level starts.
       this.chosen = true;
-      this.announce();
       void this.refresh();
     });
-    this.announce();
   }
 
   /**
@@ -98,13 +112,12 @@ export class ProgressPanel {
     const friends = this.sources.friends().filter(f => f.status === "accepted");
     const wanted = this.subject;
     this.who.replaceChildren(
-      el("option", { value: "" }, "Just me"),
+      el("option", { value: "" }, LOCAL_OPTION),
       ...friends.map(f => el("option", { value: f.id }, `With ${f.username}`)));
     // A friend who has been removed takes their option with them, and the panel
     // falls back to the one subject that is always there.
     this.subject = friends.some(f => f.id === wanted) ? wanted : "";
     this.who.value = this.subject;
-    this.announce();
   }
 
   /** Point the picker at the match, unless the reader has said otherwise. */
@@ -122,10 +135,6 @@ export class ProgressPanel {
   released(): void {
     this.chosen = false;
     this.follow();
-  }
-
-  private announce(): void {
-    this.sources.onLabel(this.subject ? SHARED_LABEL : LOCAL_LABEL);
   }
 
   open(): void {

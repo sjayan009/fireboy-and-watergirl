@@ -32,15 +32,6 @@ export class PlayShell {
   private panels: Record<string, HTMLElement>;
   private preference = `fbwg.panel.${auth().user?.id ?? "local"}`;
   private toastTimer: ReturnType<typeof setTimeout> | undefined;
-  /**
-   * Panel names that are not fixed.
-   *
-   * Progress is called "Progress (Local)" while it is showing this account's
-   * own map and "Progress" while it is showing one shared with somebody, which
-   * is how the app says which of the two you are in without asking. The tab and
-   * the drawer heading have to agree, so both read from here.
-   */
-  private labels: Partial<Record<Panel, string>> = {};
 
   constructor(host: HTMLElement, private options: {
     canvas: HTMLCanvasElement; name: string; status: HTMLElement; mute: HTMLElement;
@@ -176,21 +167,6 @@ export class PlayShell {
       button.setAttribute("aria-expanded", String(this.active === panel));
     }
   }
-  /**
-   * Rename a panel, on its tab and on its heading at once.
-   *
-   * Written even while the panel is closed: the tab is visible whenever the
-   * drawer is, and a tab that still said "Progress (Local)" over a shared map
-   * would be the same stale claim this exists to avoid.
-   */
-  setPanelLabel(panel: Panel, label: string): void {
-    if (this.labels[panel] === label) return;
-    this.labels[panel] = label;
-    const tab = this.tabs.querySelector<HTMLElement>(`button[data-panel='${panel}']`);
-    if (tab && tab.textContent !== label) tab.textContent = label;
-    if (this.active === panel && this.title.textContent !== label) this.title.textContent = label;
-  }
-
   toggle(panel: Panel): void { if (this.active === panel) this.close(); else this.open(panel); }
   open(panel: Panel, focus = true): void {
     if (panel === "setup") { this.showNotice(); return; }
@@ -199,7 +175,7 @@ export class PlayShell {
     if (!this.active || !this.drawer.contains(document.activeElement)) this.trigger = document.activeElement as HTMLElement;
     this.active = panel;
     this.root.classList.add("drawer-open"); this.drawer.hidden = false;
-    this.title.textContent = this.labels[panel] ?? { friends:"Play Together", leaderboard:"The Fastest Pairs", progress:"Progress", menu:"Game Menu", settings:"Settings" }[panel];
+    this.title.textContent = { friends:"Play Together", leaderboard:"The Fastest Pairs", progress:"Progress", menu:"Game Menu", settings:"Settings" }[panel];
     for (const tab of this.tabs.querySelectorAll<HTMLElement>("button")) {
       const current = tab.dataset.panel === panel;
       tab.classList.toggle("current", current);

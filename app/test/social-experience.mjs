@@ -8,6 +8,18 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
   const page=await browser.newPage({viewport:{width:1366,height:768}});
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.route('**/*',r=>new URL(r.request().url()).hostname===new URL(target).hostname?r.continue():r.abort());
+  /*
+   * Somebody who has played before, which is who this fixture is about.
+   *
+   * The Leaderboard opens on the level you last played and asks
+   * `leaderboard_standing` about the pair you last played it with, so without
+   * a remembered partner both of those are simply off -- which is a state, but
+   * not the one a friends-and-board test is exercising. Written before the
+   * first load, because the screen reads it once on the way up.
+   */
+  await page.addInitScript(() => {
+    try { localStorage.setItem('fbwg.lastPartner.00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002'); } catch { /* private mode */ }
+  });
   await page.goto(target+'?social=1');
   await page.waitForFunction(()=>window.__fbwg?.view?.prepared);
   await page.waitForSelector('.friend-row');
@@ -80,7 +92,21 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
   await page.evaluate(async()=>{const {leaderboardCache}=await import('/src/ranking.ts');leaderboardCache.clear();window.socialFixture.board=[{rank:1,a_username:'You',b_username:'Partner',best_time_str:'',is_mine:true}];});
   await page.getByLabel('Leaderboard level',{exact:true}).selectOption('2');
   await page.getByRole('table').waitFor();
-  assert(await page.getByText('Your pair',{exact:true}).isVisible());
+  await page.locator('.leaderboard-table .your-pair').waitFor();
+  /*
+   * The grade the query has always returned and the table used to discard.
+   *
+   * A board that ranks how FAST and says nothing about how WELL is half the
+   * result: `medal` comes back on every row, Progress has been colouring the
+   * same three tokens since it was written, and this table dropped the column.
+   * The podium is the same fact applied to the first three ranks.
+   */
+  assert.equal(await page.locator('.leaderboard-table tbody tr:first-child .grade').innerText(),'A');
+  assert.equal(await page.locator('.leaderboard-table tbody tr:first-child').evaluate(e=>e.className.includes('p1')),true,
+    'first place is on the podium');
+  // A header nobody can see is still a header a screen reader meets.
+  assert(await page.locator('.leaderboard-table thead').evaluate(e=>e.classList.contains('sr-only')));
+  assert.equal(await page.locator('.leaderboard-table thead th').count(),4);
   const expectedTime = await page.evaluate(()=>{
     const table=window.__fbwg.view.game.Translation;
     window.socialFixture.boardDelay[table.indexOf('1_3')+1]=350;
@@ -92,6 +118,32 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
   await page.waitForFunction(expected=>document.querySelector('.leaderboard-table .time')?.textContent===expected,expectedTime);
   await page.waitForTimeout(450);
   assert.equal(await page.locator('.leaderboard-table .time').innerText(),expectedTime,'late results never replace a newer level');
+  /*
+   * Where you stand, for the pairs the table itself cannot answer for.
+   *
+   * `leaderboard_standing` has been granted and indexed since `0018` and had
+   * no caller anywhere. Outside the top twenty the board is a list of other
+   * people's names, which is the one case where it tells the reader nothing.
+   */
+  await page.evaluate(()=>{
+    window.socialFixture.board = window.socialFixture.board.map(r=>({...r,is_mine:false}));
+    const node = window.__fbwg.view.game.Translation.indexOf('1_6')+1;
+    window.socialFixture.standing = [{node,rank:12,entries:31}];
+  });
+  await page.getByLabel('Leaderboard level',{exact:true}).selectOption('6');
+  await page.getByText('You are 12th of 31 pairs here.',{exact:true}).waitFor();
+  // The board caches an answer for fifteen seconds, so a changed fixture needs
+  // the cache dropped or the re-selection just replays what it already had.
+  await page.evaluate(async()=>{
+    const {leaderboardCache}=await import('/src/ranking.ts');
+    leaderboardCache.clear();
+    window.socialFixture.board = window.socialFixture.board.map(r=>({...r,is_mine:true}));
+  });
+  await page.getByLabel('Leaderboard level',{exact:true}).selectOption('2');
+  await page.getByLabel('Leaderboard level',{exact:true}).selectOption('6');
+  await page.locator('.leaderboard-table .your-pair').waitFor();
+  assert.equal(await page.locator('.board-standing').count(),0,
+    'a pair already on the board is not told where they are over the top of their own row');
   await page.evaluate(()=>{window.socialFixture.fail='leaderboard';});
   await page.getByLabel('Leaderboard level',{exact:true}).selectOption('5');
   await page.getByRole('button',{name:'Retry',exact:true}).click();
@@ -159,6 +211,25 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
   await page.emulateMedia({reducedMotion:'reduce'});
   await page.locator('.tool-menu').click();
   assert.equal(await page.locator('.menu-actions').evaluate(e=>getComputedStyle(e).animationName),'none');
+  await page.keyboard.press('Escape');
+  /*
+   * Reduced motion has to reach the JAVASCRIPT too, not only the stylesheet.
+   *
+   * `[hidden]` is `display:none` and cannot be animated, so the banner plays
+   * its exit and sets the attribute on a timer afterwards. Under the blanket
+   * `animation:none` rule that timer would still run -- 140ms of a motionless
+   * banner sitting there before it blinks out, which is the worst of both
+   * answers. The screen asks `matchMedia` and skips straight to hidden.
+   */
+  await page.locator('.tool-friends').click();
+  await page.getByRole('button',{name:/^Invite /}).first().click();
+  await page.locator('.banner').waitFor();
+  assert.equal(await page.locator('.banner').evaluate(e=>getComputedStyle(e).animationName),'none',
+    'reduced motion stops the banner arriving');
+  await page.locator('.banner').getByRole('button',{name:'Cancel',exact:true}).click();
+  assert(await page.locator('.banner').evaluate(e=>e.hidden && !e.classList.contains('leaving')),
+    'and takes it down at once rather than waiting out an animation that is not playing');
+  await page.emulateMedia({reducedMotion:null});
   await page.keyboard.press('Escape');
   await page.setViewportSize({width:683,height:384});
   await page.locator('.tool-friends').click();

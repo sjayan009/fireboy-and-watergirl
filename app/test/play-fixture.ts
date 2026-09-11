@@ -18,7 +18,8 @@ if (social) {
 }
 const fixture = {
   peers, fail: "", calls: [] as string[], boardDelay: {} as Record<number,number>,
-  board: [] as {rank:number; a_username:string; b_username:string; best_time_str:string; is_mine:boolean}[],
+  board: [] as {rank:number; a_username:string; b_username:string; medal?:number; best_time_str:string; is_mine:boolean}[],
+  standing: [] as {node:number; rank:number; entries:number}[],
 };
 (window as any).socialFixture = fixture;
 Object.assign(auth(), { stage: "in", user: { id: owner }, profile: { id: owner, username: "Temple explorer" }, session: null });
@@ -38,8 +39,9 @@ const sharedMap = [
   fixture.calls.push(name);
   if (fixture.fail === name) return {data:null,error:{message:"Test connection interrupted"}};
   if (name === "list_friends") return {data:peers.map(p=>({...p})),error:null};
+  if (name === "leaderboard_standing") return {data:fixture.standing,error:null};
   if (name === "leaderboard") {
-    const data = fixture.board.map(r=>({...r, best_time_str: `${args.p_node}:00`}));
+    const data = fixture.board.map(r=>({...r, medal: r.medal ?? 3, best_time_str: `${args.p_node}:00`}));
     await new Promise(resolve=>setTimeout(resolve,fixture.boardDelay[args.p_node] ?? 0));
     return {data,error:null};
   }
