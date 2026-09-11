@@ -136,9 +136,10 @@ secret key and the database password stay in `.env.local`, which is gitignored
 and must remain so.
 
 The Supabase **redirect allow-list** must include the deployed origin. Google
-OAuth is the default zero-mail-provider path. Public password signup/reset also
-requires SMTP whose free plan and hard send limit must be verified separately;
-the built-in sender is testing-only. Email confirmation remains required.
+OAuth is the default zero-mail-provider path. Existing public password signup/reset
+uses Brevo SMTP, verified on Free with 300 emails/day and no saved payment method
+on 11 September 2026. Recheck the plan before changing providers; the built-in
+Supabase sender is testing-only. Email confirmation remains required.
 
 CI needs five repository secrets: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`,
 `SUPABASE_SECRET_KEY`, `SUPABASE_DB_PASSWORD` and `SUPABASE_PROJECT_REF`. The
