@@ -430,16 +430,17 @@ export async function deleteAccount(): Promise<void> {
 /**
  * Claim a username.
  *
- * One argument now, and the order matters more than it looks. PostgREST picks
- * an overload by ARGUMENT NAME, so a client sending `invite_code` needs a
+ * One argument, and it is worth knowing why that took two releases. PostgREST
+ * picks an overload by ARGUMENT NAME, so a client sending `invite_code` needs a
  * function that declares one; dropping the two-argument version while anything
- * still sends it means a 404 and nobody able to claim a name at all.
+ * still sent it would have meant a 404 and nobody able to claim a name at all.
  *
- * This is the half that ships first. `claim_username(new_username, invite_code
- * default null)` accepts a call that omits the second argument perfectly well,
- * so this works against the schema as it stands today AND against the one left
- * behind once `deferred/20260911000000_drop_the_invite_machinery` is applied.
- * Only when THIS release is live does dropping the old signature become safe.
+ * So this stopped sending the second argument first, and
+ * `20260911000000_drop_the_invite_machinery` removed the signature only once
+ * this half was live -- confirmed by polling the deployed bundle until the
+ * string was gone from it, rather than by looking at `main`. Both halves have
+ * shipped; the sequence is recorded because the next contracting change to an
+ * RPC has to follow it.
  */
 export async function claimUsername(username: string): Promise<Profile> {
   const { data, error } = await supabase.rpc("claim_username", {
