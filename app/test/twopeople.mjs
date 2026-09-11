@@ -1103,25 +1103,27 @@ try {
     check("carol is watching, not playing",
           await c.evaluate(() => window.__fbwgWatch.view.watching), true);
 
-    // Carol arrived in the middle of a level, so she is waiting -- which is the
-    // chosen behaviour and not a gap: catching up would mean the pair shipping
-    // their whole history to anybody who asked. So the pair finish this one and
-    // start another, which is the moment a watcher is designed to join.
+    // Carol can be replaying a confirmed snapshot of the current level while
+    // the players move on. A running watcher is therefore not sufficient:
+    // wait for the generation of the new level before comparing input logs.
     //
     // Bob starts it, because the scene before this one handed him the pick.
     await pressInGame(b, "m_pauseMenu.endGameBtn");
     await until(() => window.__fbwg.view.session.running,
                 (both) => !both[0] && !both[1]);
     await clickInGame(b, "m_mainMenu.b_1_1");
+    await b.waitForFunction(() => window.__fbwg.view.session.running);
+    const watchGeneration=await b.evaluate(() => window.__fbwg.view.session.generation);
 
     let saw = null;
     for (let i = 0; i < 120 && !saw; i++) {
       const st = await c.evaluate(() => {
         const v = window.__fbwgWatch.view;
         return { running: v.session?.running ?? false,
+                 generation: v.session?.generation,
                  frame: v.session?.frame ?? -1, digest: v.digest() };
       });
-      if (st.running && st.frame > 30 && st.digest) saw = st;
+      if (st.running && st.generation === watchGeneration && st.frame > 30 && st.digest) saw = st;
       else await c.waitForTimeout(250);
     }
     check("the watcher reaches the level the pair started", saw !== null, true);
@@ -1159,28 +1161,35 @@ try {
       // anything differed, but because a longer game gives both of those more
       // room. An assertion that holds only while the window is small is not
       // holding for the reason it claims.
-      let at = 0, theirs = "", watched = "";
+      let at = 0, theirs = "", watched = "", comparable = false;
       for (let i = 0; i < 10; i++) {
         const before = await a.evaluate(() => ({
           run: window.__fbwg.view.session.runSerial,
+          generation: window.__fbwg.view.session.generation,
           confirmed: window.__fbwg.view.session.confirmed,
+          log: window.__fbwg.view.session.log.slice(),
         }));
-        at = Math.min(saw.frame, before.confirmed);
+        const observer=await c.evaluate(() => ({
+          generation: window.__fbwgWatch.view.session.generation,
+          frame: window.__fbwgWatch.view.session.frame,
+          log: window.__fbwgWatch.view.session.log.slice(),
+        }));
+        if (before.generation !== watchGeneration || observer.generation !== watchGeneration) {
+          await a.waitForTimeout(250); continue;
+        }
+        at = Math.min(observer.frame, before.confirmed, before.log.length, observer.log.length);
         if (at < 20) { await a.waitForTimeout(250); continue; }
-        theirs = await a.evaluate((f) => window.__fbwg.view.session.log
-          .slice(0, f).join(), at);
-        watched = await c.evaluate((f) => window.__fbwgWatch.view.session.log
-          .slice(0, f).join(), at);
+        theirs = before.log.slice(0,at).join();
+        watched = observer.log.slice(0,at).join();
         const after = await a.evaluate(() =>
           window.__fbwg.view.session.runSerial);
-        if (after === before.run) break;
+        if (after === before.run) { comparable = true; break; }
         // The level changed mid-comparison. Nothing is wrong; read it again.
         theirs = ""; watched = "";
       }
       check("and every frame it ran was the frame they ran",
-            at >= 20 && watched === theirs, true);
-      console.log(`  compared ${at} frames of the ${saw.frame} the watcher had ` +
-                  `run, all of them confirmed; digest ${saw.digest}`);
+            comparable && at >= 20 && watched === theirs, true);
+      console.log(`  compared ${at} confirmed frames in generation ${watchGeneration}`);
     }
 
     // Closing it takes the row away again.
