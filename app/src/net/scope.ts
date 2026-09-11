@@ -23,11 +23,25 @@ export function scopedChannel(channel: ByteChannel, identity: string): ByteChann
 }
 
 /** A direct link already belongs to one attempt; cap work before decoding. */
-export function boundedTransport(inner: Transport): Transport {
+export function boundedTransport(inner: Transport): Transport & { inner: Transport } {
   let window = Date.now(), messages = 0, bytes = 0;
   let ended = false;
   let lost: ((why: string) => void) | undefined;
   return {
+    // The transport underneath, kept reachable rather than sealed in this
+    // closure. `WatchMirror` already holds its inner one under this name, so
+    // between the two the chain from `session.transport` down to the thing
+    // actually on the network can be walked.
+    //
+    // It is walked. `twopeople` breaks the link to prove the pair rebuilds it,
+    // and the only honest way to break a link is to break the real one. When
+    // this wrapper was added it went on top of a test that reached straight for
+    // the peer connection, and the test began failing on EVERY path -- not
+    // because a peer connection was missing but because a plain object literal
+    // was in the way. A wrapper that hides what it wraps makes that failure
+    // look like a machine problem for as long as anybody is willing to believe
+    // it.
+    inner,
     get rttMs() { return inner.rttMs; },
     get sent() { return inner.sent; },
     send: data => { if (!ended) inner.send(data); },

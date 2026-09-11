@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { env } from "../../supabase/connect.mjs";
+import { sweepStaleTestUsers } from "../../supabase/sweep.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP = resolve(HERE, "..");
@@ -41,6 +42,10 @@ function check(what, got, want) {
 // ---- the accounts, made the way the admin API makes them -------------------
 
 const stamp = Date.now();
+// Before anything is made: whatever a killed run left behind.
+// `finally` cannot run when a process is killed, so the only
+// reachable place to tidy those away is the start of the next run.
+await sweepStaleTestUsers("twopeople");
 const users = [];
 
 const admin = (path, init = {}) => fetch(`${API}${path}`, {
@@ -146,6 +151,23 @@ try {
       if (msg.type() === "warning" || msg.type() === "error") {
         console.log(`  [${tag}] ${msg.text()}`);
       }
+    });
+    // What the console will NOT tell you. A failed fetch reaches it as
+    // "Failed to load resource: the server responded with a status of 400" and
+    // nothing else -- no method, no path, no body -- so a request that has been
+    // failing on every run since somebody added it reads as background noise.
+    // Once per distinct method-and-path, because a call that fails once fails
+    // every time and a hundred identical lines hide the run.
+    const said = new Set();
+    p.on("response", async (r) => {
+      if (r.status() < 400) return;
+      const url = new URL(r.url());
+      const what = `${r.request().method()} ${url.host}${url.pathname}`;
+      if (said.has(what)) return;
+      said.add(what);
+      let body = "";
+      try { body = (await r.text()).slice(0, 200); } catch { /* already gone */ }
+      console.log(`  [${tag}] HTTP ${r.status()} ${what}${body ? " -- " + body : ""}`);
     });
   }
 
@@ -362,8 +384,22 @@ try {
     if (!want) throw new Error("no such button: " + where);
     if (!v.sprites) throw new Error("the art has not loaded");
     // Where the renderer says that button is, in stage coordinates.
-    const box = v.sprites.buttonBoxes(v.game).find((h) => h.node === want);
-    if (!box) throw new Error("that button is not on screen: " + where);
+    const boxes = v.sprites.buttonBoxes(v.game);
+    const box = boxes.find((h) => h.node === want);
+    if (!box) {
+      // "Not on screen" has three quite different causes and used to name
+      // none of them: the node can be invisible, it can be `enabled = false`
+      // (which is how the map locks a level nobody has reached, and which
+      // `buttonBoxes` skips), or the screen it lives on can not be up at all.
+      // Saying which turns a ten-minute rerun into a read.
+      throw new Error(`that button is not on screen: ${where} -- ` +
+        JSON.stringify({
+          visible: want.visible, enabled: want.enabled,
+          alpha: want.alpha, parent: !!want.parent,
+          screens: v.game.children.map((c) => c.symbol).filter(Boolean),
+          clickable: boxes.length,
+        }));
+    }
     const [x, y] = box.centre;
     const hit = v.sprites.hitTest(v.game, x, y);
     if (hit !== want) {
@@ -373,6 +409,34 @@ try {
     v.shell.pointerDown(hit);
     v.shell.pointerUp();
   }, path);
+
+  /**
+   * Press one of the play screen's actions, wherever the shell keeps them.
+   *
+   * Not `header button`, which is where this file looked for all three of them
+   * for months. `PlayShell` is handed `[hand, share, leave, ...]` and puts every
+   * one into the Menu panel's "This Session" group; the header kept only the
+   * tabs and the tools. Three separate assertions went stale on that at once,
+   * and none of them said so -- a Playwright locator that matches nothing
+   * answers `isVisible()` with false and times out on `click()`, so "the button
+   * moved" arrives as "alice cannot hand over the pick" and as a thirty-second
+   * wait with no name on it.
+   *
+   * Closing is the panel's own close button and only when it is showing.
+   * NOT Escape: `PlayShell` swallows Escape only while a panel is open, so an
+   * Escape sent to a closed drawer reaches the game -- where in a live session
+   * it is the blunt "leave this level" and sends `Command.Quit`.
+   */
+  const openMenu = (p) => p.click("header button:has-text('Menu')");
+  const closePanel = async (p) => {
+    const close = p.locator(".close-panel");
+    if (await close.isVisible()) await close.click();
+  };
+  const menuAction = async (p, label) => {
+    await openMenu(p);
+    await p.click(`.menu-actions button:has-text('${label}')`);
+    await closePanel(p);
+  };
 
   /** What the game has on screen, for the assertions about leftovers. */
   const onScreen = (page) => page.evaluate(() => ({
@@ -524,7 +588,7 @@ try {
 
   console.log("\nand declined, which is an answer and not silence");
   {
-    // "Not now" used to do nothing at all, so the only way to decline was to say
+    // Declining used to do nothing at all, so the only way to say no was to say
     // nothing -- which is also what somebody who has walked away from their desk
     // does. The inviter waited out two full minutes either way.
     await inviteRow(a, bob.username).click();
@@ -532,7 +596,7 @@ try {
     await a.click(".banner button:has-text('Send invite')");
     await b.waitForSelector(".banner:has-text('wants to play')", { timeout: 30000 });
 
-    await b.click(".banner button:has-text('Not now')");
+    await b.click(".banner button:has-text('Decline')");
     await a.waitForSelector(".banner:has-text('not now')", { timeout: 20000 });
     check("alice hears it, well inside the two minutes she used to wait",
           /not now/.test(await a.locator(".banner").innerText()), true);
@@ -740,13 +804,48 @@ try {
     check("they were some way into the level", under !== null, true);
     const before = under ?? [0, 0];
 
-    await b.evaluate(() => {
-      // Private only to TypeScript. The peer connection is the thing there is
-      // to break, and closing it is what a network going away does.
-      const t = window.__fbwg.view.session.transport;
-      if (!t.pc) throw new Error("not a peer connection -- nothing to break");
-      t.pc.close();
+    // Which link there is to break depends on the machine. A pair reaches each
+    // other over WebRTC when their NATs allow it and over the pair's Realtime
+    // channel when they do not, and this section is about neither -- it is
+    // about what happens when the one they got dies. So: find the real thing at
+    // the bottom of the chain and break THAT.
+    //
+    // `session.transport` is not it. It is a stack of wrappers -- `WatchMirror`
+    // when the pair is sharing, then `boundedTransport` always -- and each one
+    // holds the next as `inner`. This used to reach straight for `.pc`, which
+    // was correct on the day it was written and stopped being correct the day
+    // `boundedTransport` was added on top: a plain object literal with no `pc`
+    // and no `pair`, so the reach failed on EVERY path and read as "WebRTC did
+    // not establish on this machine". It was not the machine.
+    const broke = await b.evaluate(async () => {
+      let t = window.__fbwg.view.session.transport;
+      while (t.inner) t = t.inner;
+
+      // WebRTC. Closing the peer connection is what the wifi going away does:
+      // `onconnectionstatechange` reports `closed` here, and the far side's
+      // ICE fails a moment later.
+      if (t.pc) { t.pc.close(); return "peer connection"; }
+
+      // The relay. `RealtimeTransport` holds a `ByteChannel` -- deliberately
+      // narrow, so a spectator riding the same transport is not handed the
+      // pair's presence and invitations -- which means there is no channel to
+      // close through it, and that narrowing is worth more than this test is.
+      //
+      // The pair channel is reachable through the lobby instead, and killing
+      // it is the failure the app was written for: the server pushes
+      // `phx_close`, presence, invitations and the game all die together, and
+      // `PairChannel.rejoin` builds a replacement. Six seconds of grace pass
+      // before the status is believed; the wait below is fifty.
+      if (t.pair) {
+        const pairs = [...(window.__fbwg.lobby?.channels?.values() ?? [])];
+        if (!pairs.length) return null;
+        await Promise.all(pairs.map((p) => p.channel.unsubscribe()));
+        return "relay";
+      }
+      return null;
     });
+    check("there was a link to break", broke !== null, true);
+    console.log(`  (the pair was on a ${broke})`);
 
     // The restart is asserted INSIDE the wait, not after it. A level that has
     // begun again counts up from zero at twenty-six frames a second, so by the
@@ -775,16 +874,41 @@ try {
     // the pair's channel rather than a command, because between levels nothing
     // is being simulated and there is no frame to agree on.
     await pressInGame(b, "m_pauseMenu.endGameBtn");
-    await until(() => window.__fbwg.view.session.running,
-                (both) => !both[0] && !both[1]);
+    // Asserted, not merely awaited. The button below exists only between
+    // levels, so a pair still IN one fails the next check instead of this one
+    // -- which reads as "the handover is broken" when what actually happened is
+    // that nobody left the level.
+    const out = await until(() => window.__fbwg.view.session.running,
+                            (both) => !both[0] && !both[1]);
+    check("bob's End game takes them both back to the map", out !== null, true);
 
-    // Matched on "pick", not on "Let". `has-text` is a case-insensitive
-    // substring and the header now also holds "Let friends watch" -- the same
-    // trap the accounts test fell into with "Confirm".
-    check("only alice can offer to hand it over",
-          await Promise.all([a, b].map((p) =>
-            p.locator("header button:has-text('pick')").isVisible())),
-          [true, false]);
+    // Matched on "pick" rather than on "Let", because `has-text` is a
+    // case-insensitive substring and that same group also holds "Let friends
+    // watch". Opened by hand rather than through `menuAction`, because this
+    // asserts on what the menu SHOWS before pressing anything.
+    const offer = ".menu-actions button:has-text('pick')";
+    await Promise.all([a, b].map(openMenu));
+    const offered = await Promise.all([a, b].map((p) =>
+      p.locator(offer).isVisible()));
+    check("only alice can offer to hand it over", offered, [true, false]);
+    if (offered[0] !== true || offered[1] !== false) {
+      // `showHand` wants a match, a stopped session and the pick. Which of the
+      // three is missing is the whole question, and a boolean cannot say.
+      for (const [tag, p] of [["A", a], ["B", b]]) {
+        console.log(`  [${tag}] ` + JSON.stringify(await p.evaluate(() => {
+          const v = window.__fbwg.view;
+          return {
+            running: v.session?.running ?? null,
+            canChooseLevel: v.canChooseLevel,
+            level: v.level !== null,
+            paused: !!v.game.m_level?.pause,
+            actions: [...document.querySelectorAll(".menu-actions button")]
+              .map((el) => ({ text: el.textContent, hidden: el.hidden })),
+          };
+        })));
+      }
+    }
+    await closePanel(b);
 
     // Whether the message arrives at all is worth seeing on failure: a
     // handover that does not land looks exactly like a page that ignored one.
@@ -793,7 +917,10 @@ try {
       window.__fbwg.lobby.onHandover((h) => window.__handovers.push(h));
     });
 
-    await a.click("header button:has-text('pick')");
+    // Alice's menu is still open from the check above, which is where the
+    // button lives.
+    await a.click(offer);
+    await closePanel(a);
     // Alice is the one who loses it, so Alice is the one told a name; bob is
     // told it is his.
     try {
@@ -931,7 +1058,26 @@ try {
     check("nothing to watch before they share it",
           await c.locator(".panel button.watch").count(), 0);
 
-    await a.click("header button:has-text('Let friends watch')");
+    // BOTH of them, and that is the feature rather than a detail of the test.
+    // `match_consent` returns `shared` as `consent_a and consent_b`, because
+    // being watched is not something one of two people gets to decide for the
+    // other. This section pressed only alice's button, which is why it never
+    // reached the assertion below: her switch turns into "Cancel sharing
+    // request" and waits.
+    //
+    // The wait is asserted rather than passed through. A pair that published a
+    // feed on one consent would be a real hole, and it would show up here as
+    // nothing worse than a test that got further than usual.
+    await menuAction(a, "Let friends watch");
+    const shareLabels = (p) =>
+      p.locator(".menu-actions button").allTextContents();
+    check("one player asking is not enough",
+          (await shareLabels(a)).some((t) => t === "Cancel sharing request"),
+          true);
+    check("and there is still nothing for carol to join",
+          await c.locator(".panel button.watch").count(), 0);
+
+    await menuAction(b, "Let friends watch");
     let offered = false;
     for (let i = 0; i < 60 && !offered; i++) {
       await c.waitForTimeout(500);
@@ -941,7 +1087,7 @@ try {
       const look = (p) => p.evaluate(() => ({
         channels: [...(window.__fbwg.lobby?.channels ?? new Map()).entries()]
           .map(([, ch]) => `${ch.topic.slice(0, 18)}=${ch.channel.state}`),
-        share: [...document.querySelectorAll("header button")]
+        share: [...document.querySelectorAll(".menu-actions button")]
           .map((b) => b.textContent + (b.hidden ? " (hidden)" : "")),
       }));
       console.log("  [A] " + JSON.stringify(await look(a)));
@@ -998,22 +1144,47 @@ try {
       // Compared at the same frame rather than the same moment: a watcher runs
       // a little behind because it waits for both players instead of guessing
       // at either, so "now" is not a fair question to ask of both.
-      const at = saw.frame;
-      const theirs = await a.evaluate((f) => {
-        const s = window.__fbwg.view.session;
-        return s.log.slice(0, f).join();
-      }, at);
-      const watched = await c.evaluate((f) => {
-        const s = window.__fbwgWatch.view.session;
-        return s.log.slice(0, f).join();
-      }, at);
+      // Bounded by what alice has CONFIRMED, and taken across a run that did
+      // not change underneath. Both of those are needed, and neither was here.
+      //
+      // `log[frame]` is written on the speculative pass and REWRITTEN when a
+      // rollback corrects the guess, so alice's entries above `confirmed` are
+      // provisional; the watcher's are not, because a watcher waits for both
+      // players rather than guessing at either. Comparing up to the watcher's
+      // frame therefore compared settled bytes against unsettled ones. And
+      // `resetLog` empties the log outright on a new run, so two reads that
+      // straddle a level change are comparing two different levels.
+      //
+      // This passed at frame 35 and at 43 and failed at 297 -- not because
+      // anything differed, but because a longer game gives both of those more
+      // room. An assertion that holds only while the window is small is not
+      // holding for the reason it claims.
+      let at = 0, theirs = "", watched = "";
+      for (let i = 0; i < 10; i++) {
+        const before = await a.evaluate(() => ({
+          run: window.__fbwg.view.session.runSerial,
+          confirmed: window.__fbwg.view.session.confirmed,
+        }));
+        at = Math.min(saw.frame, before.confirmed);
+        if (at < 20) { await a.waitForTimeout(250); continue; }
+        theirs = await a.evaluate((f) => window.__fbwg.view.session.log
+          .slice(0, f).join(), at);
+        watched = await c.evaluate((f) => window.__fbwgWatch.view.session.log
+          .slice(0, f).join(), at);
+        const after = await a.evaluate(() =>
+          window.__fbwg.view.session.runSerial);
+        if (after === before.run) break;
+        // The level changed mid-comparison. Nothing is wrong; read it again.
+        theirs = ""; watched = "";
+      }
       check("and every frame it ran was the frame they ran",
-            watched === theirs, true);
-      console.log(`  the watcher is on frame ${at}, digest ${saw.digest}`);
+            at >= 20 && watched === theirs, true);
+      console.log(`  compared ${at} frames of the ${saw.frame} the watcher had ` +
+                  `run, all of them confirmed; digest ${saw.digest}`);
     }
 
     // Closing it takes the row away again.
-    await a.click("header button:has-text('Stop letting friends watch')");
+    await menuAction(a, "Stop letting friends watch");
     await goPlay(c);
     await c.waitForSelector("#stage", { timeout: 20000 });
     let gone = false;
@@ -1074,14 +1245,29 @@ try {
     cookie.data.timesString[0] = "00:25";
     cookie.data.stats[2] = 0;          // finishing node 1 opens node 3
     cookie.flush();
+    // `cookie.flush()` alone queues NOTHING once a pair is loaded. `store.flush`
+    // is `if (!friendId) local.flush()` -- the solo path only -- because a pair's
+    // results do not belong to this browser. What carries them is
+    // `progress.confirm(...)`, which the game loop calls from `onConfirmed`
+    // every 26th frame; and the loop was deliberately stopped two lines up so
+    // that rollback cannot take the write back. So the loop's own call is made
+    // here, standing in for it, which is what "the ordinary flush the game loop
+    // already performs" meant.
+    window.__fbwg.progress.confirm(cookie.data);
   });
   await a.waitForTimeout(3000);
   const wrote = await a.evaluate(() => ({
     saves: window.__fbwg.progress.saves,
     error: window.__fbwg.progress.lastError,
+    // Where it stopped, if it did. `waiting` is the outbox depth: queued but
+    // not drained is a different failure from never queued at all, and
+    // `storageError` is the third -- IndexedDB refusing the record.
+    waiting: window.__fbwg.progress.waiting,
+    storage: window.__fbwg.progress.storageError,
   }));
   check("the write reached the database", [wrote.error, wrote.saves > 0],
         [null, true]);
+  if (!(wrote.saves > 0)) console.log("  " + JSON.stringify(wrote));
   const stored = async () => {
     const r = await admin(`/rest/v1/pair_progress?select=node,medal,` +
       `best_time_s,best_time_str&user_a=eq.${lo}&user_b=eq.${hi}&order=node`);
@@ -1126,8 +1312,24 @@ try {
 
     // Opening the friends list used to tear this screen down without a word,
     // which to the other person is indistinguishable from the game having died:
-    // their partner stops moving and never starts again.
+    // their partner stops moving and never starts again. This section used that
+    // as the way to make bob leave.
+    //
+    // It is not one any more, and that is the FIX rather than a regression:
+    // friends became a tab of this same drawer when the shell was redrawn, so
+    // the game carries on behind it. So the old trigger becomes an assertion
+    // that it no longer triggers anything...
     await openFriends(b);
+    check("opening the friends list no longer ends the game",
+          await b.evaluate(() => window.__fbwg.view.session !== null), true);
+    await closePanel(b);
+
+    // ...and leaving becomes what it now is: a deliberate act, from the Menu,
+    // behind a confirm. Playwright dismisses a native dialog unless something
+    // answers it, and a dismissed confirm means `endSession` is never called --
+    // which would look exactly like the app ignoring the button.
+    b.once("dialog", (d) => d.accept());
+    await menuAction(b, "Leave game");
     await a.waitForSelector(".banner:has-text('left the game')", { timeout: 20000 });
     check("alice is told",
           /left the game/.test(await a.locator(".banner").innerText()), true);
@@ -1136,9 +1338,17 @@ try {
     // Bob's page said "online" as it was torn down, and that has to travel to
     // alice through presence before her row for him means anything. Asking the
     // instant her banner appears is asking too early.
+    // Alice's drawer has been on other tabs since the watch section, and her
+    // row for bob only exists while the friends tab is showing.
+    await openFriends(a);
     let canInvite = false;
     for (let i = 0; i < 40 && !canInvite; i++) {
-      canInvite = await inviteRow(a, bob.username).isEnabled();
+      // `isEnabled` THROWS on a locator that matches nothing, rather than
+      // answering false the way `isVisible` does. So a missing row took the
+      // whole run down thirty seconds later, and took the diagnostic below --
+      // written for exactly this -- down with it, unrun.
+      canInvite = await inviteRow(a, bob.username)
+        .isEnabled({ timeout: 1000 }).catch(() => false);
       if (!canInvite) await a.waitForTimeout(500);
     }
     if (!canInvite) {
@@ -1172,7 +1382,12 @@ try {
       await page.reload({ waitUntil: "load" });
       await page.waitForSelector("#stage", { timeout: 40000 });
     }
+    // Through `openFriends`, not straight at the row. A reload restores the
+    // drawer from `localStorage` and a narrow window restores it closed, so
+    // waiting for a friend row assumes a tab that may not be showing -- and
+    // waits the full forty seconds to find out.
     for (const p of [a, b]) {
+      await openFriends(p);
       await p.waitForSelector(".friend-row button:not([disabled])",
                               { timeout: 40000 });
     }

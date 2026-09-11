@@ -26,6 +26,7 @@ import { createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { env } from "../../supabase/connect.mjs";
+import { sweepStaleTestUsers } from "../../supabase/sweep.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP = resolve(HERE, "..");
@@ -46,6 +47,10 @@ function check(what, got, want) {
 }
 
 const stamp = Date.now();
+// Before anything is made: whatever a killed run left behind.
+// `finally` cannot run when a process is killed, so the only
+// reachable place to tidy those away is the start of the next run.
+await sweepStaleTestUsers("accounts");
 const users = [];
 
 const admin = (path, init = {}) => fetch(`${API}${path}`, {

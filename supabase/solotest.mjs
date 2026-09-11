@@ -7,11 +7,16 @@
  *   3. does deleting the account take it.
  */
 import { env } from "./connect.mjs";
+import { sweepStaleTestUsers } from "./sweep.mjs";
 
 const e = env();
 const API = e.SUPABASE_URL, PUB = e.SUPABASE_PUBLISHABLE_KEY, S = e.SUPABASE_SECRET_KEY;
 const h = { apikey: S, Authorization: `Bearer ${S}`, "content-type": "application/json" };
 const stamp = Date.now();
+// Before anything is made: whatever a killed run left behind.
+// `finally` cannot run when a process is killed, so the only
+// reachable place to tidy those away is the start of the next run.
+await sweepStaleTestUsers("solotest");
 let failures = 0;
 const check = (what, got, want) => {
   const ok = JSON.stringify(got) === JSON.stringify(want);

@@ -70,12 +70,18 @@ half goes in `supabase/deferred/`, which the runner does not read, and is
 applied by being moved into `migrations/` once the release it was waiting for
 is actually live. `supabase/deferred/README.md` has the procedure.
 
-The watch topic is the worked example. `20260905002813` widened
-`can_watch_pair_topic` and `can_feed_watch_topic` to accept the new
-`watch:<match>:<feed>` alongside the derived `watch:<lo>:<hi>` the previous
-release publishes to; `deferred/20260906000000_watch_topic_contract.sql` is the
-narrowing, and until it runs a feed can still be reached by naming two user ids
-rather than by holding a consent the players can withdraw.
+The watch topic is the worked example, and both halves have now run.
+`20260905002813` widened `can_watch_pair_topic` and `can_feed_watch_topic` to
+accept the new `watch:<match>:<feed>` alongside the derived `watch:<lo>:<hi>`
+the previous release published to; `20260906000000_watch_topic_contract.sql` is
+the narrowing that removed the derived arm, and it sat in `deferred/` until the
+client that had stopped using it was live. Until it ran, a feed could be reached
+by naming two user ids rather than by holding a consent the players can
+withdraw.
+
+`deferred/` is empty as of that migration. That is the state to expect: a file
+sitting there is a contraction still waiting on a release, not a place things
+accumulate.
 
 ## The schema
 
