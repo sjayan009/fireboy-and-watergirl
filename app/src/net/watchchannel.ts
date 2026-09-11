@@ -26,10 +26,19 @@ import { ENGINE_VERSION } from "@engine/version.js";
 
 const BYTES = "b";
 
-/** The watch topic for two ids, in the order `friendships` stores them. */
-export function watchTopicFor(a: string, b: string): string {
-  return `watch:${a < b ? a : b}:${a < b ? b : a}`;
-}
+/*
+ * `watchTopicFor(a, b)` used to live here, building `watch:<lo>:<hi>` out of
+ * the two players' ids. It is gone, and it is worth saying why rather than
+ * quietly deleting it.
+ *
+ * A topic derived from who the players ARE cannot be revoked: the name is a
+ * fact about them, so anyone who can work out two ids can name the channel
+ * forever. The topic is now `watch:<match>:<feed>`, which the pair consents to
+ * and the server rotates on every revocation -- and `20260906000000_watch_topic
+ * _contract` has removed the last policy arm that would have honoured the old
+ * shape. Reintroducing a helper like that would produce a topic no policy
+ * accepts, which is the correct outcome and a confusing one to debug.
+ */
 
 export class WatchChannel {
   private byteHandlers = new Set<(d: Uint8Array) => void>();

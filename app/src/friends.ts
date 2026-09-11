@@ -8,7 +8,7 @@
  * insert a row claiming somebody else asked. This module is the thin part.
  */
 import { supabase } from "./supabase.js";
-import { auth, Profile } from "./auth.js";
+import { auth } from "./auth.js";
 
 export type FriendStatus = "pending" | "accepted" | "blocked";
 
@@ -87,23 +87,18 @@ export async function listFriends(): Promise<Friend[]> {
   }).sort((a, b) => a.username.localeCompare(b.username));
 }
 
-/**
- * Look somebody up by the name they told you.
+/*
+ * `findByUsername` used to be here, reading `profiles` by name so a stranger's
+ * row could be fetched before asking to be their friend. It had no callers, and
+ * removing it is what makes the tightened `profiles_read` safe -- see
+ * `20260912000000_tighten_reads`.
  *
- * Throws rather than returning null on a failure. `maybeSingle` reports no rows
- * without an error, so an error here is a real one -- and answering it with
- * "no such user" told somebody their friend does not exist because the network
- * blinked.
+ * Nothing is lost. `request` below hands the NAME to `request_friend`, a
+ * definer function that resolves it server-side, so adding somebody never
+ * needed a client-side read of their profile. What the policy no longer permits
+ * is the other thing that query could do: ask, one name at a time, who plays
+ * here -- or, without a filter, ask for everybody at once.
  */
-export async function findByUsername(username: string): Promise<Profile | null> {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("id, username, display_name, avatar_url")
-    .ilike("username", username)
-    .maybeSingle();
-  fail(error);
-  return (data as Profile) ?? null;
-}
 
 export async function request(username: string): Promise<void> {
   const { error } = await supabase.rpc("request_friend",
