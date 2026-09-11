@@ -12,6 +12,10 @@ const label = process.argv[2] ?? "after";
 const engine = resolve(root, process.env.FBWG_BENCH_ENGINE ?? "engine/dist");
 const assets = resolve(root, process.env.FBWG_BENCH_ASSETS ?? "extracted/assets");
 const seconds = Number(process.env.FBWG_BENCH_SECONDS ?? 20);
+// Position feedback keeps a slow baseline on the starting ledge. The legacy
+// time-based pattern remains available to reproduce the original audit.
+const steering = process.env.FBWG_BENCH_STEERING ?? "timed";
+if (!["timed", "position"].includes(steering)) throw new Error("Unknown benchmark steering mode");
 const types = { ".js": "text/javascript", ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml", ".webp": "image/webp", ".ttf": "font/ttf", ".mp3": "audio/mpeg", ".wav": "audio/wav" };
 const server = createServer(async (req, res) => {
   if (req.url === "/") { res.setHeader("content-type", "text/html"); res.end('<!doctype html><canvas id="stage" tabindex="0"></canvas>'); return; }
@@ -49,7 +53,7 @@ try {
   const trace = [];
   cdp.on("Tracing.dataCollected", e => trace.push(...e.value));
   await cdp.send("Tracing.start", { categories: "devtools.timeline,v8", transferMode: "ReportEvents" });
-  const result = await page.evaluate(async duration => {
+  const result = await page.evaluate(async ({ duration, steering }) => {
     const { view } = window.bench;
     const raf = requestAnimationFrame.bind(window);
     const frame = [], render = [], input = [], nodes = [], calls = [], longTasks = [];
@@ -97,6 +101,7 @@ try {
     }
     const find = (node, symbol) => node.symbol === symbol ? node : (node.children ?? []).map(c => find(c, symbol)).find(Boolean);
     const character = find(view.game, "FireBoy");
+    const anchorX = character?.x ?? 0;
     view.render = function (...args) {
       const t = performance.now(); signature = 2166136261; drawCalls = 0; visits = 0; drawActive = true;
       originalRender(...args); drawActive = false;
@@ -120,7 +125,9 @@ try {
         if (next !== phase) {
           phase = next;
           if (held) dispatchEvent(new KeyboardEvent("keyup", { key: held, bubbles: true }));
-          held = phase % 2 ? "ArrowLeft" : "ArrowRight";
+          held = steering === "position"
+            ? (character && character.x > anchorX + 8 ? "ArrowLeft" : "ArrowRight")
+            : (phase % 2 ? "ArrowLeft" : "ArrowRight");
           if (character) { inputEvents++; if (pending) inputUnresolved++; pending = { at: performance.now(), x: character.x, y: character.y }; }
           dispatchEvent(new KeyboardEvent("keydown", { key: held, bubbles: true }));
         }
@@ -136,12 +143,13 @@ try {
     const result = { elapsed, frameMs: quantiles(frame), renderMs: quantiles(render), inputToRenderMs: quantiles(input), inputEvents, inputUnresolved: inputUnresolved + (pending ? 1 : 0), renderCallsPerSecond: draws / elapsed, distinctVisualUpdatesPerSecond: distinct / elapsed, localPositionUpdatesPerSecond: localVisualUpdates / elapsed, drawCalls: quantiles(calls), traversalNodes: quantiles(nodes), mainThreadLongTasksMs: quantiles(longTasks), methodTimes, simFrames: view.simFrame, digest: view.digest(), levelEnded: view.level?.ended, session: view.session ? { rollbacks: view.session.rollbacks, stalls: view.session.stalls } : null, heap: performance.memory ? { used: performance.memory.usedJSHeapSize, total: performance.memory.totalJSHeapSize } : null };
     view.destroy();
     return result;
-  }, seconds);
+  }, { duration: seconds, steering });
   const completed = new Promise(resolve => cdp.once("Tracing.tracingComplete", resolve));
   await cdp.send("Tracing.end"); await completed;
   const after = Object.fromEntries((await cdp.send("Performance.getMetrics")).metrics.map(m => [m.name, m.value]));
   const gcEvents = trace.filter(e => e.ph === "X" && /^(MajorGC|MinorGC)$/.test(e.name));
   const output = { label, recordedAt: new Date().toISOString(), commit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), environment: { platform: platform(), release: release(), cpu: cpus()[0]?.model, logicalCpus: cpus().length, node: process.version, browser: browser.version(), headless: true, engine, assets }, preparation, ...result, taskCpuPercent: 100 * (after.TaskDuration - before.TaskDuration) / (after.Timestamp - before.Timestamp), gc: { count: gcEvents.length, totalMs: gcEvents.reduce((s,e)=>s+(e.dur ?? 0)/1000,0), maxMs: Math.max(0,...gcEvents.map(e=>(e.dur ?? 0)/1000)) }, errors, limitations: ["Native headless rAF cadence, not a physical high-refresh monitor", "Input-to-render callback proxy excludes OS input and display scanout", "Unresolved inputs include events replaced before movement or blocked by collision; reported separately", "Canvas instrumentation and trace overhead included equally in both variants", "GC trace durations are collector activity, not necessarily all stop-the-world time", "CPU is Chromium TaskDuration/wall time including measurement setup/teardown; no process RSS meter", "Solo renderer workload; network results are separate"] };
+  output.steering = steering;
   await mkdir(resolve(root,"benchmarks"),{recursive:true});
   await writeFile(resolve(root,"benchmarks",`${label}.json`),JSON.stringify(output,null,2)+"\n");
   console.log(JSON.stringify(output,null,2));
