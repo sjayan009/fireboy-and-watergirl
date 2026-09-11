@@ -13,6 +13,22 @@
   --bg: #14110E; --panel: #1E1A15; --ink: #F2ECE0; --dim: #A99E8D;
   --fire: #FF865B; --water: #75D5EB; --edge: #342e24; --bad: #ffad9b;
   --gold: #f0ce7b; --silver: #ded7cc; --bronze: #d6a686;
+  /*
+   * Corners are round on every side, which they were not.
+   *
+   * Four surfaces carried a diagonal motif -- 16px 4px 16px 4px on the drawer
+   * and the game frame, 22/6 on the sign-in card, 11/4 on a friend's initials
+   * -- so a panel was generously rounded at the top left and very nearly square
+   * at the top right. Against a toolbar of uniformly rounded buttons directly
+   * above it, the sharp corner does not read as a motif; it reads as the corner
+   * that did not get rounded.
+   *
+   * Each surface kept the LARGER of its two values, so nothing got tighter and
+   * the change is only the sharp corners leaving. The sizes still differ by
+   * surface on purpose -- 22px on a 440px card, 8px on a 36px button -- because
+   * a radius is read relative to the thing it is on, which is why this is not
+   * one number for everything.
+   */
   --radius: 10px; --press: 100ms; --settle: 180ms; --ease: cubic-bezier(.22,.61,.36,1);
   /*
    * Leaving, and the curve that mirrors arriving.
@@ -101,7 +117,7 @@ form { display: grid; gap: 14px; margin-top: 20px; }
 .error .ghost { margin-top: 8px; }
 
 /* Entry and settings screens share the same identity without a marketing page. */
-.card { width: 100%; max-width: 440px; padding: 34px; background: var(--panel); border: 1px solid #423b30; border-top: 3px solid #8a8070; border-radius: 22px 6px 22px 6px; box-shadow: 0 24px 80px #00000080; }
+.card { width: 100%; max-width: 440px; padding: 34px; background: var(--panel); border: 1px solid #423b30; border-top: 3px solid #8a8070; border-radius: 22px; box-shadow: 0 24px 80px #00000080; }
 .card > .account-brand { display:flex; align-items:center; gap:10px; margin-bottom:28px; color:var(--dim); font-size:.8125rem; }
 .card h1 { margin-bottom: 10px; }
 .card h2 { margin: 28px 0 8px; font-size: 1rem; }
@@ -287,7 +303,7 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .tool-menu::before { mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8'%3E%3Cpath d='M3 5h18M3 12h18M3 19h18'/%3E%3C/svg%3E"); }
 .has-invite { border-color: var(--water); }
 .play-workspace { display:grid; grid-template-columns:minmax(0,1fr); min-height:0; position:relative; }
-.game-viewport { position:relative; min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; overflow:hidden; background:#0b0a09; border:1px solid #3a342a; border-radius:16px 4px 16px 4px; box-shadow:inset 0 0 0 5px #1a1712, inset 0 0 0 6px #2b2620; }
+.game-viewport { position:relative; min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; overflow:hidden; background:#0b0a09; border:1px solid #3a342a; border-radius:16px; box-shadow:inset 0 0 0 5px #1a1712, inset 0 0 0 6px #2b2620; }
 .screen { background:#000; overflow:hidden; aspect-ratio:4/3; border-radius:4px; }
 .play-shell .screen { flex:none; outline:none; border:0; }
 #stage { display:block; width:100%; height:100%; outline:none; touch-action:none; }
@@ -304,7 +320,7 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
  * same true thing at every moment, so it looks the same at every moment.
  */
 .focus-hint { color:var(--ink); border-bottom:1px solid var(--water); }
-.play-drawer { position:absolute; z-index:5; inset:0 0 0 auto; width:min(360px,100%); min-height:0; display:grid; grid-template-rows:auto auto minmax(0,1fr); background:var(--panel); border:1px solid #423b30; border-radius:16px 4px 16px 4px; box-shadow:-16px 0 40px #00000077; }
+.play-drawer { position:absolute; z-index:5; inset:0 0 0 auto; width:min(360px,100%); min-height:0; display:grid; grid-template-rows:auto auto minmax(0,1fr); background:var(--panel); border:1px solid #423b30; border-radius:16px; box-shadow:-16px 0 40px #00000077; }
 .drawer-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:18px 18px 12px; }
 .drawer-heading h2 { margin:0; font-size:1.4rem; }
 .close-panel { font-size:1.4rem; width:30px; min-height:30px; padding:0; background:transparent; border-color:transparent; box-shadow:none; }
@@ -374,7 +390,7 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .friend-row { min-width:0; padding:12px 0; border-bottom:1px solid var(--edge); }
 .friend-row:last-child { border-bottom:0; }
 .friend-main { display:flex; align-items:center; gap:9px; min-width:0; }
-.friend-avatar { display:flex; align-items:center; justify-content:center; flex:none; width:34px; height:38px; background:#332d24; color:var(--dim); font-size:.75rem; font-weight:600; border:1px solid #4a4237; border-radius:11px 4px 11px 4px; position:relative; }
+.friend-avatar { display:flex; align-items:center; justify-content:center; flex:none; width:34px; height:38px; background:#332d24; color:var(--dim); font-size:.75rem; font-weight:600; border:1px solid #4a4237; border-radius:11px; position:relative; }
 .friend-avatar[data-activity='in_lobby']::after, .friend-avatar[data-activity='online']::after, .friend-avatar[data-activity='in_game']::after { content:''; position:absolute; right:-3px; bottom:-2px; width:9px; height:9px; background:var(--water); border-radius:50%; border:2px solid var(--panel); }
 .friend-avatar[data-activity='in_game']::after { background:var(--fire); border-radius:2px; }
 .friend-identity { flex:1; min-width:0; }
