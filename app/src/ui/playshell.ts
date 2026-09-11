@@ -175,7 +175,7 @@ export class PlayShell {
     if (!this.active || !this.drawer.contains(document.activeElement)) this.trigger = document.activeElement as HTMLElement;
     this.active = panel;
     this.root.classList.add("drawer-open"); this.drawer.hidden = false;
-    this.title.textContent = { friends:"Play Together", leaderboard:"The Fastest Pairs", progress:"Your Progress", menu:"Game Menu", settings:"Settings" }[panel];
+    this.title.textContent = { friends:"Play Together", leaderboard:"The Fastest Pairs", progress:"Progress", menu:"Game Menu", settings:"Settings" }[panel];
     for (const tab of this.tabs.querySelectorAll<HTMLElement>("button")) {
       const current = tab.dataset.panel === panel;
       tab.classList.toggle("current", current);

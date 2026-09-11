@@ -13,7 +13,34 @@
   --bg: #14110E; --panel: #1E1A15; --ink: #F2ECE0; --dim: #A99E8D;
   --fire: #FF865B; --water: #75D5EB; --edge: #342e24; --bad: #ffad9b;
   --gold: #f0ce7b; --silver: #ded7cc; --bronze: #d6a686;
+  /*
+   * Corners are round on every side, which they were not.
+   *
+   * Four surfaces carried a diagonal motif -- 16px 4px 16px 4px on the drawer
+   * and the game frame, 22/6 on the sign-in card, 11/4 on a friend's initials
+   * -- so a panel was generously rounded at the top left and very nearly square
+   * at the top right. Against a toolbar of uniformly rounded buttons directly
+   * above it, the sharp corner does not read as a motif; it reads as the corner
+   * that did not get rounded.
+   *
+   * Each surface kept the LARGER of its two values, so nothing got tighter and
+   * the change is only the sharp corners leaving. The sizes still differ by
+   * surface on purpose -- 22px on a 440px card, 8px on a 36px button -- because
+   * a radius is read relative to the thing it is on, which is why this is not
+   * one number for everything.
+   */
   --radius: 10px; --press: 100ms; --settle: 180ms; --ease: cubic-bezier(.22,.61,.36,1);
+  /*
+   * Leaving, and the curve that mirrors arriving.
+   *
+   * `--ease-in` is `--ease` reflected through the diagonal -- for
+   * cubic-bezier(x1,y1,x2,y2) the reverse is (1-x2,1-y2,1-x1,1-y1) -- so a
+   * surface goes out along the path it came in on rather than on some other
+   * curve that happens to look similar. Shorter than `--settle` on purpose:
+   * something arriving is asking to be read, and something leaving has already
+   * been read.
+   */
+  --leave: 140ms; --ease-in: cubic-bezier(.64,0,.78,.39);
   /*
    * The reader's own system font, which is the one typeface already tuned for
    * the screen it is being read on.
@@ -90,7 +117,7 @@ form { display: grid; gap: 14px; margin-top: 20px; }
 .error .ghost { margin-top: 8px; }
 
 /* Entry and settings screens share the same identity without a marketing page. */
-.card { width: 100%; max-width: 440px; padding: 34px; background: var(--panel); border: 1px solid #423b30; border-top: 3px solid #8a8070; border-radius: 22px 6px 22px 6px; box-shadow: 0 24px 80px #00000080; }
+.card { width: 100%; max-width: 440px; padding: 34px; background: var(--panel); border: 1px solid #423b30; border-top: 3px solid #8a8070; border-radius: 22px; box-shadow: 0 24px 80px #00000080; }
 .card > .account-brand { display:flex; align-items:center; gap:10px; margin-bottom:28px; color:var(--dim); font-size:.8125rem; }
 .card h1 { margin-bottom: 10px; }
 .card h2 { margin: 28px 0 8px; font-size: 1rem; }
@@ -276,7 +303,7 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .tool-menu::before { mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8'%3E%3Cpath d='M3 5h18M3 12h18M3 19h18'/%3E%3C/svg%3E"); }
 .has-invite { border-color: var(--water); }
 .play-workspace { display:grid; grid-template-columns:minmax(0,1fr); min-height:0; position:relative; }
-.game-viewport { position:relative; min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; overflow:hidden; background:#0b0a09; border:1px solid #3a342a; border-radius:16px 4px 16px 4px; box-shadow:inset 0 0 0 5px #1a1712, inset 0 0 0 6px #2b2620; }
+.game-viewport { position:relative; min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; overflow:hidden; background:#0b0a09; border:1px solid #3a342a; border-radius:16px; box-shadow:inset 0 0 0 5px #1a1712, inset 0 0 0 6px #2b2620; }
 .screen { background:#000; overflow:hidden; aspect-ratio:4/3; border-radius:4px; }
 .play-shell .screen { flex:none; outline:none; border:0; }
 #stage { display:block; width:100%; height:100%; outline:none; touch-action:none; }
@@ -293,7 +320,7 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
  * same true thing at every moment, so it looks the same at every moment.
  */
 .focus-hint { color:var(--ink); border-bottom:1px solid var(--water); }
-.play-drawer { position:absolute; z-index:5; inset:0 0 0 auto; width:min(360px,100%); min-height:0; display:grid; grid-template-rows:auto auto minmax(0,1fr); background:var(--panel); border:1px solid #423b30; border-radius:16px 4px 16px 4px; box-shadow:-16px 0 40px #00000077; }
+.play-drawer { position:absolute; z-index:5; inset:0 0 0 auto; width:min(360px,100%); min-height:0; display:grid; grid-template-rows:auto auto minmax(0,1fr); background:var(--panel); border:1px solid #423b30; border-radius:16px; box-shadow:-16px 0 40px #00000077; }
 .drawer-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:18px 18px 12px; }
 .drawer-heading h2 { margin:0; font-size:1.4rem; }
 .close-panel { font-size:1.4rem; width:30px; min-height:30px; padding:0; background:transparent; border-color:transparent; box-shadow:none; }
@@ -327,6 +354,24 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .banner { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:15px; background:#2b241b; border:1px solid #6b6151; border-radius:10px; font-size:.875rem; box-shadow:0 8px 24px #0003; }
 .banner > span:first-child { flex-basis:100%; }
 .banner .dim { color:var(--dim); }
+/*
+ * It arrives from the edge it lives on, and leaves back through it.
+ *
+ * The banner is pinned to the top of the stage, so down-from-above is the only
+ * direction that reads as the same object coming and going -- in from the top
+ * and out through the bottom would be two different events. Scale travels with
+ * the opacity so a bordered, shadowed card reads as a surface arriving rather
+ * than a rectangle being turned up; 0.98 is small enough that nothing reflows
+ * around it, because `transform` does not.
+ *
+ * Automatic dismissal is the reason this exists at all: a message that takes
+ * itself away after eight seconds and does it by blinking out of existence
+ * looks like a bug in the page.
+ */
+@keyframes banner-arrive { from { opacity:0; transform:translateY(-8px) scale(.98); } to { opacity:1; transform:none; } }
+@keyframes banner-leave  { from { opacity:1; transform:none; } to { opacity:0; transform:translateY(-8px) scale(.98); } }
+.banner:not([hidden]) { animation:banner-arrive var(--settle) var(--ease); }
+.banner.leaving { animation:banner-leave var(--leave) var(--ease-in) forwards; pointer-events:none; }
 .play-toast { position:absolute; z-index:9; bottom:48px; left:50%; transform:translateX(-50%); width:max-content; max-width:calc(100% - 32px); padding:10px 16px; border-radius:8px; color:var(--ink); background:#2a2520; border:1px solid #5b5346; font-size:.875rem; pointer-events:none; box-shadow:0 6px 24px #0004; }
 .play-toast:empty { display:none; }
 
@@ -345,7 +390,7 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .friend-row { min-width:0; padding:12px 0; border-bottom:1px solid var(--edge); }
 .friend-row:last-child { border-bottom:0; }
 .friend-main { display:flex; align-items:center; gap:9px; min-width:0; }
-.friend-avatar { display:flex; align-items:center; justify-content:center; flex:none; width:34px; height:38px; background:#332d24; color:var(--dim); font-size:.75rem; font-weight:600; border:1px solid #4a4237; border-radius:11px 4px 11px 4px; position:relative; }
+.friend-avatar { display:flex; align-items:center; justify-content:center; flex:none; width:34px; height:38px; background:#332d24; color:var(--dim); font-size:.75rem; font-weight:600; border:1px solid #4a4237; border-radius:11px; position:relative; }
 .friend-avatar[data-activity='in_lobby']::after, .friend-avatar[data-activity='online']::after, .friend-avatar[data-activity='in_game']::after { content:''; position:absolute; right:-3px; bottom:-2px; width:9px; height:9px; background:var(--water); border-radius:50%; border:2px solid var(--panel); }
 .friend-avatar[data-activity='in_game']::after { background:var(--fire); border-radius:2px; }
 .friend-identity { flex:1; min-width:0; }
@@ -374,26 +419,75 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .watch-list:empty { display:none; }
 .watch-list { margin-top:22px; }
 
-/* Results are a table, with paired names and quiet, aligned timing. */
-.board-intro { margin-bottom:12px; }
-.board-intro h3 { font-size:1.15rem; line-height:1.3; margin:12px 0 0; }
-.trophy-mark { color:var(--gold); font-size:2rem; }
-.board-filters { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:22px 0; }
+/*
+ * Results are a table, with paired names and quiet, aligned timing.
+ *
+ * The header above them used to cost 124px and the filters another 109, out of
+ * a panel that is 364px tall on a 1024x600 laptop -- so 233px went by before
+ * the first result and the board opened already scrolled past its own title.
+ * The trophy is now ON the heading line at text size, and the sentence about
+ * who is listed sits under the table rather than over it.
+ */
+.board-title { display:flex; align-items:center; gap:8px; font-family:var(--heading); font-size:1.0625rem; line-height:1.3; letter-spacing:-.01em; margin:2px 0 0; }
+.trophy-mark { flex:none; display:flex; color:var(--gold); }
+.board-filters { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:14px 0 4px; }
 .board-filters label { display:grid; gap:6px; }
+.board-footnote { margin-top:14px; padding-top:12px; border-top:1px solid var(--edge); }
+/*
+ * Where you stand, for the pairs the table cannot answer for.
+ *
+ * Outside the top twenty the board is a list of other people, and this is the
+ * one line that is about the reader. Shown only when their own row is absent --
+ * over a highlighted row it would be narrating something already on screen.
+ */
+.board-standing { margin:0 0 10px; font-size:.8125rem; color:var(--water); }
 .leaderboard-table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:.875rem; }
-.leaderboard-table th { text-align:left; color:var(--dim); font-weight:400; font-size:.75rem; padding:8px 4px; border-bottom:1px solid #57503f; }
-.leaderboard-table th:first-child { width:38px; }
-.leaderboard-table th:last-child { width:64px; text-align:right; }
-.leaderboard-table td { padding:13px 4px; border-bottom:1px solid var(--edge); overflow-wrap:anywhere; }
+.leaderboard-table td { padding:11px 4px; border-bottom:1px solid var(--edge); overflow-wrap:anywhere; vertical-align:middle; }
+.col-rank { width:30px; } .col-grade { width:24px; } .col-time { width:56px; }
 .leaderboard-table .mine { background:#2e2820; }
 .leaderboard-table .mine td:first-child { border-left:2px solid var(--water); }
 .pair-and { color:var(--dim); }
-.your-pair { display:block; font-size:.75rem; color:var(--water); padding-top:3px; }
+/*
+ * Inline, not a block underneath.
+ *
+ * As its own line this made the reader's row 88.8px against everybody else's
+ * 47.1px -- a jump in the one column that gets scanned vertically, in aid of
+ * saying something the row's own background already said.
+ */
+.your-pair { font-size:.75rem; color:var(--water); margin-left:6px; white-space:nowrap; }
 .time, .grade, .rank { font-variant-numeric:tabular-nums; }
 .time { text-align:right; white-space:nowrap; }
 .rank { color:var(--dim); }
+/*
+ * Centred in its own column, overriding the Progress row's right-aligned one.
+ *
+ * The grade markup is shared with Progress on purpose -- the same `.g1`/`.g2`/
+ * `.g3` tokens colour the same three grades in both places -- but Progress
+ * pushes it to the end of a flex row and this is the third of four table
+ * columns, with a time hard right after it. Scoped rather than reordered: the
+ * unscoped rule below is the flex one and must keep winning there.
+ */
+.leaderboard-table .grade { text-align:center; min-width:0; }
+/*
+ * The podium, in the three colours this app already awards.
+ *
+ * `medal` has come back from the query since the board was written and was
+ * never drawn -- so the panel that exists to say how well a pair did showed
+ * only how fast. Progress has been colouring the same three tokens the whole
+ * time, which is the other half of why these and not new ones.
+ */
+.leaderboard-table .p1 .rank { color:var(--gold); font-weight:600; }
+.leaderboard-table .p2 .rank { color:var(--silver); font-weight:600; }
+.leaderboard-table .p3 .rank { color:var(--bronze); font-weight:600; }
 .board-empty { border-top:1px solid var(--edge); padding-top:20px; }
 .board-empty h3 { font-size:1rem; line-height:1.4; }
+
+/* Progress is Best Times for one chosen map: your own, or one you share. The
+   picker carries the local/shared distinction that the panel's own name also
+   carries, so it sits above the heading rather than beside a second filter. */
+.progress-filters { margin:0 0 18px; }
+.progress-filters label { display:grid; gap:6px; font-size:.8125rem; color:var(--dim); }
+.progress-results .note:first-of-type { margin-bottom:4px; }
 .panel h2 { margin-bottom:12px; font-size:1.1rem; }
 .row { display:flex; align-items:center; gap:8px; padding:10px 0; border-bottom:1px solid var(--edge); font-size:.875rem; }
 .row .name { flex:1; min-width:0; overflow-wrap:anywhere; font-weight:600; }

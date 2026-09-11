@@ -37,6 +37,8 @@ import { FriendState, getLobby, Lobby, Ready } from "../lobby.js";
 import { PlayShell } from "../ui/playshell.js";
 import { FriendsPanel } from "./friends.js";
 import { Leaderboard } from "../ui/leaderboard.js";
+import { ProgressPanel } from "../ui/progress.js";
+import { leaderboardCache } from "../ranking.js";
 import { PlayController, loadSelection, selectionKey } from "../playstate.js";
 import { Ranking } from "../ranking.js";
 import { MatchLease } from "../matchlease.js";
@@ -52,12 +54,49 @@ const MODES: [string, string, number][] = [
 ];
 
 /**
- * What the game's own `stats` mean, in the order `CreateMainMenu` draws them.
+ * What a banner message is ABOUT, so it can be taken down when that stops
+ * being the case.
  *
- * -1 is a node you have not reached, 0 is one you have reached and not
- * finished, and 1 to 3 are the grades `Recuent` awards against `TimeTable`.
+ * Every notice used to be a string with one way out: the Dismiss button. So
+ * "Sarah went back to the map" and "Sarah picks the next level" -- both of
+ * which are true for about four seconds -- sat on the other person's screen
+ * through the whole of the next level, and they had to dismiss a message about
+ * a decision that had already been made. The person who made it saw nothing and
+ * had no idea.
+ *
+ * A kind is the answer to "when does this stop being true":
+ *
+ *  * `map` and `chooser` stop the moment a level starts. Both describe the gap
+ *    between levels, and a level running is proof the gap is over.
+ *  * `stall` stops when the link recovers. `watchStall` owns it outright and
+ *    nothing else may take it down, or the two would disagree about whether
+ *    the message is up.
+ *  * `suspend` stops after it has been read. Pausing is a COMMAND inside the
+ *    simulation rather than a stop, so the session goes on running and there is
+ *    no transition to hang it off -- and the game draws its own pause over the
+ *    canvas anyway. The nudge says which key; once there has been time to read
+ *    it, it has done its job.
+ *  * `session` and `art` never expire on their own. Somebody left, or the game
+ *    is missing pieces -- the reader has to actually see those.
  */
-const GRADES: Record<number, string> = { 3: "A", 2: "B", 1: "C", 0: "—" };
+type NoticeKind = "stall" | "chooser" | "map" | "session" | "art" | "suspend";
+
+/** Kinds a level starting makes untrue. */
+const BETWEEN_LEVELS: NoticeKind[] = ["map", "chooser", "suspend"];
+
+/** Kinds that also come down on their own, having been read. */
+const FADES: NoticeKind[] = ["map", "chooser", "suspend"];
+
+/**
+ * How long an informational line stays up with nothing else happening.
+ *
+ * The backstop for the case the rule above does not cover: the pick was handed
+ * over and then nobody started anything. Long enough to read twice, short
+ * enough that it is gone before it becomes furniture. `session`, `art` and
+ * `stall` ignore it -- each of those is either something the reader has to act
+ * on or something with an owner that will take it down itself.
+ */
+const NOTICE_MS = 8000;
 
 /**
  * How long the other peer may be silent before it is worth saying so.
@@ -77,6 +116,11 @@ const STALL_FRAMES = 52;
  * inside a bad patch cannot blink the message away either.
  */
 const RECOVERED_FRAMES = 26;
+
+/** `--leave` in styles.css. The attribute follows the animation, so they agree. */
+const LEAVE_MS = 140;
+/** Asked rather than assumed, and re-asked: the setting can change mid-session. */
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 
 export function playScreen(host: HTMLElement): () => void {
   const flow = new PlayController();
@@ -221,8 +265,16 @@ export function playScreen(host: HTMLElement): () => void {
    * invitation comes back as a rejection from `Lobby.invite` instead.
    */
   let pending: { session: string | null; attempt?: string; friendId: string; abort: AbortController } | null = null;
-  /** A transient line in the banner: a stall, a refusal, somebody leaving. */
-  let noticeText = "";
+  /**
+   * The line in the banner, and what it is about.
+   *
+   * The kind is what lets it be taken down by something other than a click;
+   * see `NoticeKind`.
+   */
+  let noticed: { kind: NoticeKind; text: string } | null = null;
+  let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The exit animation in flight, so an arriving message can cancel it. */
+  let leaving: ReturnType<typeof setTimeout> | null = null;
   /** What the status line last said, so it is not rewritten 26 times a second. */
   let lastStatus = "";
   /** Whether presence has been told a level is running. */
@@ -268,15 +320,14 @@ export function playScreen(host: HTMLElement): () => void {
       // report. Preparation retries what failed last time, so this clears
       // itself the moment the art actually arrives.
       if (!v.artComplete) {
-        notice("Some game art did not load. The level still plays, but this " +
+        notice("art", "Some game art did not load. The level still plays, but this " +
                "run will not be ranked.");
       }
       const context = rankedContext();
       if (context && v.session) await ranking.prepare(context, v.session);
     },
     onState: () => {
-      const next = describe();
-      if (next !== lastStatus) { status.textContent = next; lastStatus = next; }
+      refreshStatus();
       // The game has a mute button of its own, inside the canvas, and in a
       // session it now drives this same local mute -- so neither button can own
       // the label and it is read back from the one thing both of them set.
@@ -289,18 +340,25 @@ export function playScreen(host: HTMLElement): () => void {
       if (playing !== inGame) {
         inGame = playing;
         if (match) flow.set(playing ? "playing" : "between-levels");
-        if (playing) lobby?.setActivity("in_game");
+        if (playing) {
+          lobby?.setActivity("in_game");
+          // The whole of the sticky-banner bug, answered in one line.
+          //
+          // "They went back to the map" and "They pick the next level" describe
+          // the gap between levels. A level running is proof the gap is over,
+          // and it is proof on BOTH sides at once -- which is what was missing:
+          // the person who picked saw nothing to dismiss and the other person
+          // was left holding a message about a decision already made.
+          clearNotice(...BETWEEN_LEVELS);
+        }
       }
-      if (playing && match && view.session) {
-        const selection = view.session.selection;
-        try { localStorage.setItem(selectionKey(auth().user!.id,match.friend.id),JSON.stringify({ ...selection, iAmFireboy: view.slot === 0 })); } catch { /* optional */ }
-      }
+      rememberSelection(playing);
       showHand();
       showShare();
       const context = rankedContext();
       if (context && view.session) ranking.observe(context, view.session, view.game);
     },
-    onFrame: () => watchStall(),
+    onFrame: () => { watchStall(); pace(); freshenReadout(); },
     onConfirmed: (v, frame) => {
       if (v.session) mirror?.confirmed(v.session,frame);
       if (frame % 26 === 0 || v.game.children.some((c: { Rboard?: unknown }) => c.Rboard)) {
@@ -316,11 +374,11 @@ export function playScreen(host: HTMLElement): () => void {
     },
     onRefused: (why) => {
       if (why === "preparation-failed") {
-        notice("Some game art could not load.",el("button", { class: "ghost", onclick: () => { void view.prepare().catch(() => {}); } },"Retry loading"));
+        notice("art", "Some game art could not load.",el("button", { class: "ghost", onclick: () => { void view.prepare().catch(() => {}); } },"Retry loading"));
         shell.open("setup");
       }
       if (why === "not-your-pick") {
-        notice(`Waiting for ${partner?.username ?? "them"} to pick the ` +
+        notice("chooser", `Waiting for ${partner?.username ?? "them"} to pick the ` +
                "next level.");
       }
     },
@@ -333,24 +391,126 @@ export function playScreen(host: HTMLElement): () => void {
     const who = partner?.username ?? "your friend";
     if (!s) return match ? `Reconnecting with ${who}` : "Play locally or invite a friend";
     if (!s.running) return `With ${who} · choosing a level`;
+    // `stalling`, not `s.stalled`.
+    //
+    // The session's own flag goes true on any frame the peer's input has not
+    // arrived for and false on the very next one that has, which under ordinary
+    // jitter is several times a second -- and it is in the engine's state key,
+    // so `onState` fires with it. Reading it here made "waiting for your friend"
+    // strobe next to the username at very nearly frame rate, which is what this
+    // was reported as. `watchStall` already computes the same fact with two
+    // seconds of patience and a second of hysteresis on the way out; that is
+    // the one a person should be shown.
     return `${view.slot === 0 ? "Fireboy" : "Watergirl"} with ${who}` +
-      (s.stalled ? " · waiting for your friend" : "") + cost();
+      (stalling ? " · waiting for your friend" : "") + cost();
   }
 
   /**
-   * What this match has cost the server, in development only.
+   * Write the status line, from wherever the thing it describes changed.
+   *
+   * Two callers now, because the two facts it needs change on different
+   * schedules: engine state arrives through `onState`, and `stalling` is
+   * decided here, per frame, by `watchStall`.
+   */
+  function refreshStatus(): void {
+    const next = describe();
+    if (next !== lastStatus) { status.textContent = next; lastStatus = next; }
+  }
+
+  /** When the development readout last changed, so a counter cannot redraw at frame rate. */
+  let costAt = 0;
+  let costText = "";
+  /**
+   * What this match is costing and how it is faring, in development only.
    *
    * A relayed pair's message rate is what decides how many games can be played
    * at once -- the free tier allows a hundred a second across the whole project
-   * -- and until now every figure about it was arithmetic on `FLUSH_MS`.
-   * `RealtimeTransport` has been counting the real number since it was written;
-   * this is the first thing to read it. A direct pair has no counter and
-   * nothing is shown, which is itself the point: they cost nothing.
+   * -- and until now every figure about it was arithmetic on the batch
+   * interval. `RealtimeTransport` has been counting the real number since it
+   * was written; this is the first thing to read it. A direct pair has no
+   * counter and nothing is shown, which is itself the point: they cost nothing.
+   *
+   * `stalls` and the round trip are here for the other half of the same
+   * question. Adaptive batching trades one against the other, and without the
+   * two side by side there is no way to see whether the trade worked.
+   *
+   * Rate-limited to once a second, because `sent` changes constantly and is not
+   * in the engine's state key: without this the counter alone would rewrite
+   * `status.textContent` on every state change, which is the layout thrash the
+   * rest of this file is busy removing.
    */
   function cost(): string {
     if (!import.meta.env.DEV) return "";
-    const sent = link?.sent;
-    return typeof sent === "number" ? ` · ${sent} msgs` : "";
+    const now = Date.now();
+    if (now - costAt < 1000) return costText;
+    costAt = now;
+    const parts: string[] = [];
+    const s = view.session;
+    if (typeof link?.sent === "number") parts.push(`${link.sent} msgs`);
+    // The session's own measurement first: it rides the input packets, so it
+    // works on every browser. `getStats` is the cross-check and is null on
+    // Firefox forever -- see `sampleRtt` in webrtc.ts.
+    const rtt = s?.rttMs ?? (typeof link?.rttMs === "number" ? link.rttMs : null);
+    if (rtt !== null) parts.push(`${Math.round(rtt)}ms rtt`);
+    if (s && s.jitterMs > 0) parts.push(`±${Math.round(s.jitterMs)}ms`);
+    // The whole point of the exercise: how far apart the two clocks are, and
+    // what is being done about it. Both used to be invisible.
+    if (s) parts.push(`adv ${s.advantage.toFixed(1)}`);
+    if (s && s.dilation < 1) parts.push(`×${s.dilation.toFixed(3)}`);
+    if (s) parts.push(`age ${Math.round(s.inputAgeMs)}/${Math.round(s.windowMs)}ms`);
+    if (s && s.inputDelay > 0) parts.push(`delay ${s.inputDelay}`);
+    if (hurried) parts.push("hurried");
+    const stalls = s?.stalls ?? 0;
+    if (stalls) parts.push(`${stalls} stalls`);
+    costText = parts.length ? ` · ${parts.join(" · ")}` : "";
+    return costText;
+  }
+
+  /**
+   * Keep the development readout moving, which it otherwise does not.
+   *
+   * `refreshStatus` runs from `onState`, and the engine's state key holds
+   * things that barely change while a level is being played -- whether it is
+   * running, the generation, the mute. So the line could sit frozen for a
+   * minute at a time, which is fine for the sentence a player reads and
+   * useless for the numbers this build added to it: a round trip that arrives
+   * after the last state change would simply never be drawn.
+   *
+   * Gated on the same one-second throttle `cost` already uses, so this costs a
+   * comparison a frame and a string once a second. Compiled out entirely in
+   * production, where the readout does not exist.
+   */
+  function freshenReadout(): void {
+    if (!import.meta.env.DEV) return;
+    if (Date.now() - costAt < 1000) return;
+    refreshStatus();
+  }
+
+  /**
+   * The last selection written down, so writing it is not a per-frame act.
+   *
+   * This used to run on every `onState`, and `session.stalled` is in the state
+   * key -- so a jittery link turned a preference into a synchronous
+   * `localStorage.setItem` several times a second, on the same thread that is
+   * drawing the game. It is the likeliest single cause of the game "feeling
+   * laggy" exactly when the waiting message appeared, because the two had the
+   * same trigger.
+   */
+  let lastSelection = "";
+  /** Who this account last played with, for the two panels that open on a pair. */
+  function rememberPartner(id: string): void {
+    if (lastPartner === id) return;
+    lastPartner = id;
+    leaderboard.invalidate();
+    try { localStorage.setItem(`fbwg.lastPartner.${auth().user!.id}`, id); } catch { /* optional */ }
+  }
+  function rememberSelection(playing: boolean): void {
+    if (!playing || !match || !view.session) return;
+    const selection = view.session.selection;
+    const value = JSON.stringify({ ...selection, iAmFireboy: view.slot === 0 });
+    if (value === lastSelection) return;
+    lastSelection = value;
+    try { localStorage.setItem(selectionKey(auth().user!.id, match.friend.id), value); } catch { /* optional */ }
   }
 
   mute.addEventListener("click", () => {
@@ -422,7 +582,7 @@ export function playScreen(host: HTMLElement): () => void {
         watchRoom = room;
         room.onViewer(() => mirror?.catchUp(view.session));
         setSharing(true);
-      }).catch(() => { if (!gone) notice("The spectator feed could not connect."); });
+      }).catch(() => { if (!gone) notice("session", "The spectator feed could not connect."); });
     } else if (state?.shared) setSharing(true);
     showShare();
   }
@@ -433,7 +593,7 @@ export function playScreen(host: HTMLElement): () => void {
     sharing = on;
     mirror?.setSharing(on);
     showShare();
-    notice(on
+    notice("session", on
       ? "Your friends can watch this game."
       : "This game is private again.");
 
@@ -492,7 +652,7 @@ export function playScreen(host: HTMLElement): () => void {
     showHand();
     // Both of them, because both need to know. Telling only the person who
     // lost it leaves the other wondering why the map suddenly answers.
-    notice(mine
+    notice("chooser", mine
       ? "You pick the next level."
       : `${partner?.username ?? "They"} picks the next level.`);
   }
@@ -508,15 +668,24 @@ export function playScreen(host: HTMLElement): () => void {
         !between || !view.canChooseLevel);
   }
 
-  const leaderboard = new Leaderboard(board, () => view.game.Translation as string[] | undefined);
+  // The partner is handed in as a getter rather than a value: the board outlives
+  // any one match, and `leaderboard_standing` is a question about a PAIR.
   let lastPartner: string | null = null;
   try { lastPartner = localStorage.getItem(`fbwg.lastPartner.${auth().user!.id}`); } catch { /* optional */ }
+  // The partner is handed in as a getter rather than a value: the board outlives
+  // any one match, and `leaderboard_standing` is a question about a PAIR.
+  const leaderboard = new Leaderboard(board,
+    () => view.game.Translation as string[] | undefined,
+    () => match?.friend.id ?? lastPartner);
   const shell = new PlayShell(host, {
     canvas, name, status, mute, banner, friends: panel, times, board,
     input: (enabled) => view.setInputEnabled(enabled),
     onPanel: (panel, changed) => {
       if (panel === "leaderboard") leaderboard.open(view.session?.selection ?? loadSelection(auth().user!.id, lastPartner ?? ""), changed);
-      if (panel === "progress") drawTimes();
+      // `open`, not `refresh`: the panel has to be told it is visible before it
+      // will fetch anything, and it points itself at the current match on the
+      // way in. Reached only after construction -- the shell opens "friends".
+      if (panel === "progress") progressPanel.open();
     },
     actions: [hand, share, leave, el("button", {
       class: "ghost", onclick: async () => {
@@ -525,13 +694,35 @@ export function playScreen(host: HTMLElement): () => void {
       },
     }, "Sign out")],
   });
+  const progressPanel = new ProgressPanel(times, {
+    progress,
+    friends: () => lobby?.list ?? [],
+    partner: () => partner,
+    table: () => view.game.Translation as string[] | undefined,
+  });
   const friendsUI = new FriendsPanel(panel, { onInvite: showInviteForm, busy: () => match !== null || pending !== null });
   const watchList = el("section", { class: "watch-list" });
   panel.append(watchList);
+  /** How many results had reached the server last time we looked. */
+  let sentResults = progress.saves;
   const offSave = progress.onChange(() => {
     const error = progress.lastError ?? progress.storageError;
     shell.saveStatus.textContent = error ? "Retry needed" : progress.waiting ? "Saving…" : "Saved";
     shell.saveStatus.title = error ?? "Your progress";
+    // A result that has actually landed is a leaderboard that has actually
+    // changed, and the board holds a fifteen-second cache. `quit` has always
+    // asked it to redraw, but it asked in the same breath as the save -- so the
+    // answer was either the cache or a query that ran before the row existed,
+    // and a pair finishing a level watched the board go on saying it was
+    // waiting for its first pair. Clearing on the acknowledgement is the only
+    // moment that is neither too early nor a guess.
+    if (progress.saves !== sentResults) {
+      sentResults = progress.saves;
+      leaderboardCache.clear();
+      leaderboard.invalidate();
+      void drawBoard();
+    }
+    void progressPanel.refresh();
   });
   shell.root.querySelector("footer")!.append(rankedStatus);
   const otherTab = el("span", { class: "other-tab" }, "Playing in another tab. ");
@@ -541,14 +732,14 @@ export function playScreen(host: HTMLElement): () => void {
   shell.root.querySelector("footer")!.append(otherTab);
   const lease = new MatchLease(auth().user!.id, busy => { otherTab.hidden = !busy; }, () => {
     pending?.abort.abort(); flow.cancel(); endSession("Your match moved to another tab.");
-    notice("Your match moved to another tab.");
+    notice("session", "Your match moved to another tab.");
   });
   takeover.addEventListener("click", () => {
     takeover.disabled = true;
     void lease.takeover().then(ok => {
       takeover.disabled = false;
       if (ok) { shell.open("friends"); lease.release(); }
-      else notice("The other tab did not release the match. Close it and try again.");
+      else notice("session", "The other tab did not release the match. Close it and try again.");
     });
   });
   // Toggles, like the toolbar buttons: press it again and Progress goes away.
@@ -560,7 +751,7 @@ export function playScreen(host: HTMLElement): () => void {
   const prepare = () => {
     void view.prepare().then(() => { if (!gone) { shell.notify(""); void leaderboard.refresh(); } }).catch(() => {
       if (gone) return;
-      notice("Some game art could not be loaded.", el("button", { class: "ghost", onclick: prepare }, "Retry loading"));
+      notice("art", "Some game art could not be loaded.", el("button", { class: "ghost", onclick: prepare }, "Retry loading"));
       shell.open("setup");
     });
   };
@@ -580,23 +771,95 @@ export function playScreen(host: HTMLElement): () => void {
 
   // ---- the banner --------------------------------------------------------
 
-  /** A one-line message, replacing whatever the banner was showing. */
-  function notice(text: string, ...extra: (Node | string)[]): void {
+  /**
+   * A one-line message, replacing whatever the banner was showing.
+   *
+   * Idempotent, and that is load-bearing rather than tidy. Three callers repeat
+   * themselves as a matter of course -- `onRefused("not-your-pick")` fires on
+   * every click at a map that is not yours to click, the resume message fires on
+   * every `visibilitychange`, and `watchStall` re-asserts on recovery -- and
+   * each repeat used to rebuild the banner's DOM and move the node between two
+   * parents. At a rate somebody drumming on the mouse can reach, that is layout
+   * thrash on a page whose stage height is a function of its width.
+   */
+  function notice(kind: NoticeKind, text: string, ...extra: (Node | string)[]): void {
+    if (noticed?.kind === kind && noticed.text === text && extra.length === 0) return;
     shell.showNotice();
-    noticeText = text;
-    banner.hidden = false;
+    noticed = { kind, text };
+    showBanner();
     clear(banner);
     banner.append(el("span", {}, text), ...extra,
-      el("button", {
-        class: "ghost",
-        onclick: () => { noticeText = ""; banner.hidden = true; shell.notify(""); },
-      }, "Dismiss"));
+      el("button", { class: "ghost", onclick: () => clearNotice() }, "Dismiss"));
+    if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
+    if (FADES.includes(kind)) {
+      noticeTimer = setTimeout(() => { noticeTimer = null; clearNotice(kind); }, NOTICE_MS);
+    }
   }
 
-  function clearNotice(): void {
-    if (!noticeText) return;
-    noticeText = "";
-    banner.hidden = true;
+  /**
+   * The banner is about to hold a FORM rather than a message.
+   *
+   * An invitation, outbound or incoming, lives in the same strip: it is the one
+   * thing on this screen somebody has to answer. Whatever notice was there is
+   * replaced, so the kind is let go with it -- otherwise the next automatic
+   * clear would be deciding the fate of a message no longer on screen.
+   */
+  function takeBanner(): void {
+    if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
+    noticed = null;
+    showBanner();
+    clear(banner);
+  }
+
+  /**
+   * Put the banner on screen, cancelling an exit that had already begun.
+   *
+   * Interruptibility, in the one place on this screen that has any: a message
+   * arriving while the last one is on its way out must not wait for it, and
+   * must not be left invisible because the exit's timer fires afterwards and
+   * hides what has since replaced it.
+   */
+  function showBanner(): void {
+    if (leaving !== null) { clearTimeout(leaving); leaving = null; }
+    banner.classList.remove("leaving");
+    banner.hidden = false;
+  }
+
+  /**
+   * Take it off screen the way it came on.
+   *
+   * `[hidden]` is `display:none`, which cannot be animated, so the exit plays
+   * first and the attribute follows it. Reduced motion skips straight to the
+   * end -- the point of that setting is not to see the travel, and a 140ms
+   * pause with nothing moving in it would be the worst of both.
+   */
+  function hideBanner(): void {
+    if (banner.hidden || leaving !== null) return;
+    if (reduceMotion.matches) { banner.hidden = true; return; }
+    banner.classList.add("leaving");
+    leaving = setTimeout(() => {
+      leaving = null;
+      banner.classList.remove("leaving");
+      banner.hidden = true;
+    }, LEAVE_MS);
+  }
+
+  /**
+   * Take the banner down.
+   *
+   * With no kinds it is unconditional: a Dismiss press, a cancelled invitation
+   * and a new session all mean "whatever is in there, it is over" -- and that
+   * has to hold for a FORM too, which has no kind at all.
+   *
+   * With kinds it is the automatic route, and it must be conditional: a level
+   * starting clears the messages about there not being one, and must not clear
+   * the message saying somebody left.
+   */
+  function clearNotice(...kinds: NoticeKind[]): void {
+    if (kinds.length && (!noticed || !kinds.includes(noticed.kind))) return;
+    noticed = null;
+    if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
+    hideBanner();
     shell.notify("");
   }
 
@@ -611,6 +874,10 @@ export function playScreen(host: HTMLElement): () => void {
   let stalling = false;
   /** Frames since the session last looked stalled, for the hysteresis above. */
   let healthy = 0;
+  /** How many separate stalls this match has suffered, for `hurry`. */
+  let stallEpisodes = 0;
+  /** Whether the link has been asked to spend messages on latency. */
+  let hurried = false;
   function watchStall(): void {
     const s = view.session;
     // Never while the link is being rebuilt. "Waiting for them" and "the
@@ -623,81 +890,57 @@ export function playScreen(host: HTMLElement): () => void {
       : live && s!.stalled && s!.stalledFrames > STALL_FRAMES;
     if (bad === stalling) return;
     stalling = bad;
-    if (bad) notice(`Waiting for ${partner?.username ?? "your friend"}…`);
-    else if (noticeText.startsWith("Waiting for")) clearNotice();
+    if (bad) {
+      notice("stall", `Waiting for ${partner?.username ?? "your friend"}…`);
+      stallEpisodes++;
+    } else clearNotice("stall");
+    // `stalling` is not in the engine's state key, so nothing else will.
+    refreshStatus();
+  }
+
+  /**
+   * Decide whether to spend messages on a shorter batch.
+   *
+   * This used to be "the second stall in a match, then latch it forever",
+   * which was a proxy standing in for a measurement nobody had. The session
+   * now reports `pressure` -- how much of the rollback window the peer's input
+   * age is actually eating -- so the decision can be made on the thing it was
+   * always about.
+   *
+   * The order is deliberate and it is the opposite of what it looks like.
+   * Input delay is the cheaper lever in the only currency that runs out here:
+   * a frame of it costs 38.5 ms of feel and NOT ONE MESSAGE, where halving the
+   * batch doubles a relayed pair's traffic -- 17.4 message-units a second
+   * becomes 34.8, and the free tier's hundred a second goes from about six
+   * concurrent relayed pairs to about three. So the session takes delay first,
+   * inside the window, and this only fires when the window has run out anyway.
+   *
+   * Hysteresis on both sides, because flipping the interval every time a link
+   * steadied for a second would be worse than either setting.
+   */
+  function pace(): void {
+    const s = view.session;
+    if (!s || !match) return;
+    // No measurement yet -- a brand new link, or a peer on a build without the
+    // trailer. Fall back to the old proxy rather than to nothing.
+    const blind = s.rttMs === null;
+    const want = blind ? stallEpisodes >= 2 : s.pressure > 0.6;
+    const done = blind ? false : s.pressure < 0.4;
+    if (want && !hurried) { hurried = true; link?.hurry?.(true); }
+    else if (done && hurried) { hurried = false; link?.hurry?.(false); }
   }
 
   // ---- what you have finished --------------------------------------------
 
   /**
-   * The 32 results, from the same three arrays the game itself reads.
+   * The 32 results, for whichever map the reader asked for.
    *
-   * No query and no schema: `pairsave` swaps `The_cookie.data` for the pair's
-   * map when a match starts and hands the solo one back afterwards, so this
-   * shows the pair's best times during a game and this browser's when you are
-   * alone, without knowing which it is looking at. That is the whole reason
-   * the store was built with a swappable bag of arrays.
-   *
-   * It replaces the hiscore screen the original had, whose server stopped
-   * answering some time around 2010.
+   * It used to draw `The_cookie.data` -- whatever store the game happened to be
+   * holding -- which showed the pair's map during a match and this account's
+   * afterwards, with no way to ask for either on purpose. See `ProgressPanel`,
+   * which takes a subject and reads a friend's map without adopting it.
    */
-  function drawTimes(): void {
-    clear(times);
-    times.append(el("h2", {}, "Best Times"));
-    const data = view.game.The_cookie?.data;
-    const table = view.game.Translation as string[] | undefined;
-    if (!data || !table) {
-      times.append(el("p", { class: "note" }, "Nothing recorded yet."));
-      return;
-    }
-
-    const rows: HTMLElement[] = [];
-    let done = 0;
-    for (let i = 0; i < 32; i++) {
-      const medal = data.stats?.[i] ?? -1;
-      if (medal < 0) continue;                       // never reached
-      const [type, num] = String(table[i] ?? "").split("_");
-      const label = MODES[Number(type) - 1]?.[1] ?? "?";
-      const time = data.timesString?.[i] || "";
-      if (medal > 0) done++;
-      rows.push(el("div", { class: "row" },
-        el("span", { class: "name" }, `${label} ${num}`),
-        el("span", { class: "dim" }, time || "not finished"),
-        // The grade carries a colour of its own. All four used to be the same
-        // orange, so the column that exists to say HOW WELL a level went said
-        // only that it had been played.
-        el("span", { class: `grade g${medal}` }, GRADES[medal] ?? "—")));
-    }
-
-    // Whose progress this is, which stopped being "this browser's" when solo
-    // results moved into `solo_progress` and got an account on them. The old
-    // wording outlived the change by a release and told people their own
-    // account's medals belonged to the machine they happened to be sitting at
-    // -- which had been true, and was the bug that moved them.
-    times.append(el("p", { class: "note" },
-      `${done} of 32 finished` +
-      (progress.shared ? ", together" : ", on your account")));
-
-    // A save that is not being saved used to look exactly like one that was.
-    // `localStorage.setItem` throws on a full quota and in some private modes,
-    // and both the solo store and the pair store swallowed it -- so somebody
-    // could finish half the map in a private window and lose all of it without
-    // a single word on screen.
-    const trouble = progress.shared ? progress.lastError : progress.storageError;
-    if (trouble) {
-      times.append(el("p", { class: "error", role: "alert" },
-        progress.shared
-          ? `The last result could not be saved: ${trouble}. It will be sent ` +
-            "again when the connection comes back."
-          : `This browser is not storing progress: ${trouble}. A private ` +
-            "window or a full quota will do that."));
-    } else if (progress.waiting > 0) {
-      times.append(el("p", { class: "note" },
-        `${progress.waiting} result${progress.waiting === 1 ? "" : "s"} still ` +
-        "waiting to be sent. They will go when the connection allows."));
-    }
-    times.append(...rows);
-  }
+  function drawTimes(): void { void progressPanel.refresh(); }
 
   function drawBoard(): Promise<void> { return leaderboard.refresh(); }
 
@@ -768,7 +1011,7 @@ export function playScreen(host: HTMLElement): () => void {
       pending = null;
       shell.invite(false);
       void progress.release();
-      notice(`${from.username} called that off.`);
+      notice("session", `${from.username} called that off.`);
     }));
     // The `await` above is another place this screen can have gone, and by
     // here there is something to take back. Last, so it covers every handler.
@@ -782,6 +1025,10 @@ export function playScreen(host: HTMLElement): () => void {
   function drawPanel(friends: FriendState[]): void {
     shell.friends(friends.filter(f => f.status === "accepted" && f.activity !== null).length);
     friendsUI.update(friends);
+    // Whose maps there are to look at. Cheap, and this is the one place the
+    // friend list is known to have changed -- including somebody being removed,
+    // which has to take their option away with them.
+    progressPanel.fill();
     clear(watchList);
     // Games our friends have opened. Pushed to us when they turn watching on,
     // because a friend cannot ask who is playing -- other people's friendships
@@ -845,14 +1092,12 @@ export function playScreen(host: HTMLElement): () => void {
       flow.cancel();
       if (pending) { pending.abort.abort(); pending = null; }
       void progress.release();
-      banner.hidden = true;
+      clearNotice();
       drawPanel(lobby?.list ?? []);
       shell.open("friends");
     });
 
-    banner.hidden = false;
-    noticeText = "";
-    clear(banner);
+    takeBanner();
     banner.append(
       el("span", {}, `Invite ${friend.username}:`),
       el("label", { class: "setup-field" }, "Mode", mode),
@@ -877,8 +1122,6 @@ export function playScreen(host: HTMLElement): () => void {
         await view.prepareLevel(mode.value, Number(num.value), abort.signal);
         if (!flow.owns(abort) || gone) return;
         try { localStorage.setItem(selectionKey(auth().user!.id, friend.id), JSON.stringify({ mode: mode.value, num: Number(num.value), iAmFireboy: roles.value === "me" })); } catch { /* optional preference */ }
-        lastPartner = friend.id;
-        try { localStorage.setItem(`fbwg.lastPartner.${auth().user!.id}`,friend.id); } catch { /* optional */ }
         const ready = await lobby!.invite(friend.id, {
           mode: mode.value,
           num: Number(num.value),
@@ -942,13 +1185,11 @@ export function playScreen(host: HTMLElement): () => void {
       pending = null;
       shell.invite(false);
       void progress.release();
-      banner.hidden = true;
+      clearNotice();
       drawPanel(lobby?.list ?? []);
     });
 
-    banner.hidden = false;
-    noticeText = "";
-    clear(banner);
+    takeBanner();
     banner.append(
       el("span", {},
         `${from.username} wants to play ${invite.mode} ${invite.num}. ` +
@@ -1009,11 +1250,28 @@ export function playScreen(host: HTMLElement): () => void {
       chooser,
     };
     consent ??= new MatchSharing(invite.session, ready.friend.id, updateSharing);
-    banner.hidden = true;
-    noticeText = "";
+    clearNotice();
     stalling = false;
+    // A new link, and the batching question asked again from scratch. A pair
+    // that was on the fast interval may have just been handed a direct peer
+    // connection, where there is nothing to hurry -- and `pace` re-decides
+    // from measurement within a second either way, so there is no verdict here
+    // worth carrying over.
+    stallEpisodes = 0;
+    hurried = false;
     leave.hidden = false;
     lobby?.setActivity("in_game");
+    // Remembered HERE rather than where the invitation is sent.
+    //
+    // It was written only by the person who did the inviting, so somebody who
+    // always accepts never had a last partner -- and that name is what the
+    // Leaderboard opens on and what `leaderboard_standing` is a question
+    // about. Half the pairs in every game had the feature turned off by which
+    // of them pressed the button. A match beginning is the event that is true
+    // for both of them.
+    rememberPartner(ready.friend.id);
+    // Whose map the Progress panel shows, unless the reader has already said.
+    progressPanel.follow();
 
     // The inviter carries the feed. Built even when nothing is being shared and
     // even before the watch topic has finished being joined: it costs a wrapper
@@ -1092,7 +1350,7 @@ export function playScreen(host: HTMLElement): () => void {
       // can fail at one end and be perfectly healthy at the other, so the side
       // that noticed has to be able to start something, or a one-sided failure
       // is a pair sitting and waiting for each other forever.
-      notice(`Lost the connection to ${them}. Reconnecting…`);
+      notice("session", `Lost the connection to ${them}. Reconnecting…`);
       for (const wait of [0, 1000, 2000, 4000, 8000, 16000]) {
         if (abort.signal.aborted || !match) return;
         await new Promise((r) => setTimeout(r, wait));
@@ -1107,7 +1365,7 @@ export function playScreen(host: HTMLElement): () => void {
     // back and hammering it helps nobody.
     for (const wait of [500, 1000, 2000, 4000, 8000, 16000]) {
       if (abort.signal.aborted || !match) break;
-      notice(`Lost the connection to ${them}. Reconnecting…`);
+      notice("session", `Lost the connection to ${them}. Reconnecting…`);
       try {
         // Carrying whether the last link was a relay, so neither side spends
         // eight seconds asking a NAT the question it already refused -- and
@@ -1185,7 +1443,7 @@ export function playScreen(host: HTMLElement): () => void {
     void drawBoard();
     if (!forGood) {
       if (bySlot !== view.slot) {
-        notice(`${partner?.username ?? "They"} went back to the map.`);
+        notice("map", `${partner?.username ?? "They"} went back to the map.`);
       }
       return;
     }
@@ -1227,6 +1485,9 @@ export function playScreen(host: HTMLElement): () => void {
     hand.hidden = true;
     share.hidden = true;
     stalling = false;
+    stallEpisodes = 0;
+    hurried = false;
+    lastSelection = "";
     // The match is over, so the audience is told and the topic is let go.
     if (beating !== null) { clearInterval(beating); beating = null; }
     if (sharing) {
@@ -1237,7 +1498,10 @@ export function playScreen(host: HTMLElement): () => void {
     void watchRoom?.close();
     watchRoom = null;
     lobby?.setActivity("in_lobby");
-    notice(why);
+    notice("session", why);
+    // Before `drawTimes`, because the panel follows the match and there is no
+    // longer one -- the picker goes back to "Just me" and the tab with it.
+    progressPanel.released();
     drawPanel(lobby?.list ?? []);
     // The pair's map has just been handed back for this browser's own.
     drawTimes();
@@ -1272,7 +1536,7 @@ export function playScreen(host: HTMLElement): () => void {
       if (consent?.consent) void consent.set(false);
     } else {
       void consent?.refresh(); void ranking.flush();
-      if (match) notice("Press P when you are both ready to continue.");
+      if (match) notice("suspend", "Press P when you are both ready to continue.");
     }
   };
   document.addEventListener("visibilitychange",visibility);
@@ -1285,9 +1549,12 @@ export function playScreen(host: HTMLElement): () => void {
   return () => {
     gone = true;
     flow.cancel();
+    if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
+    if (leaving !== null) { clearTimeout(leaving); leaving = null; }
     shell.destroy();
     friendsUI.destroy();
     leaderboard.destroy();
+    progressPanel.destroy();
     consent?.close(); consent = null; watchGeneration++;
     lease.close();
     ranking.close();
