@@ -28,7 +28,7 @@
  * All three now have the caller the bug needed, which is why the sections below
  * are named after the attacker rather than after the table.
  */
-import { env } from "./connect.mjs";
+import { env, open } from "./connect.mjs";
 
 const e = env();
 const URL_ = e.SUPABASE_URL;
@@ -184,9 +184,18 @@ try {
                    { new_username: mn })).body?.username,
         mn);
 
-  // A username has to be findable or nobody can add a friend.
+  // A username used to have to be findable "or nobody can add a friend", and
+  // that turned out to be false -- which is why this assertion is inverted now.
+  //
+  // Adding a friend goes through `request_friend(their_username)`, a definer
+  // function that resolves the name server-side. The client never needed to
+  // read a stranger's row, and `20260912000000_tighten_reads` stopped letting
+  // it: a readable-by-name profiles table is a table anybody can walk, and
+  // since the invite gate came down "anybody" means anybody.
   const found = await api(bob, `/profiles?username=eq.${an}&select=id,username`);
-  check("bob can look alice up by name", found.body?.[0]?.username, an);
+  check("bob cannot look alice up before they are anything to each other",
+        Array.isArray(found.body) ? found.body.length : found.status, 0);
+
 
   const hijack = await api(mallory, `/profiles?id=eq.${alice.id}`, {
     method: "PATCH", body: JSON.stringify({ display_name: "owned" }),
@@ -640,6 +649,108 @@ try {
     const body = await r.json().catch(() => null);
     check(what, Array.isArray(body) ? body.length : r.status, 0);
   }
+  // ---- what a signed-in stranger can reach --------------------------------
+
+  console.log("\nan account nobody knows cannot look around");
+  {
+    // Signing up needs nothing but a confirmed address now, so "some
+    // authenticated caller" and "anybody at all" are the same set of people.
+    // All of this was true and harmless while an invite code stood in front of
+    // it, and stopped being either when the gate came down.
+    const stranger = await makeUser("stranger");
+    const sname = `str${stamp % 100000}`;
+    await rpc(stranger, "claim_username", { new_username: sname });
+
+    const seen = await api(stranger, "/profiles?select=id,username");
+    const rows = Array.isArray(seen.body) ? seen.body : [];
+    check("it reads exactly one profile -- its own", rows.length, 1);
+    check("and that one is itself", rows[0]?.username, sname);
+    // Said plainly, because it is the point: user ids are what a topic derived
+    // from two players is built out of, and not being able to list them is what
+    // stops such a topic being reachable at scale.
+    check("so it collects nobody else's id",
+          rows.some((r) => r.id !== stranger.id), false);
+
+    for (const t of ["friendships", "pair_progress", "solo_progress"]) {
+      const r = await api(stranger, `/${t}?select=*`);
+      check(`nor reads ${t}`,
+            Array.isArray(r.body) ? r.body.length : r.status, 0);
+    }
+
+    // The half the old "a username has to be findable" assertion was actually
+    // protecting -- proved on two accounts of its own, because asking to be
+    // somebody's friend is not a read. Done on alice or bob it would have
+    // changed what their own requests meant further up: `request_friend` reads
+    // a crossed request as an acceptance.
+    const hopeful = await makeUser("hopeful");
+    const wanted = await makeUser("wanted");
+    const wname = `wnt${stamp % 100000}`;
+    await rpc(hopeful, "claim_username", { new_username: `hpf${stamp % 100000}` });
+    await rpc(wanted, "claim_username", { new_username: wname });
+
+    const blind = await api(hopeful, `/profiles?username=eq.${wname}&select=id`);
+    check("a stranger cannot see the person they are about to add",
+          Array.isArray(blind.body) ? blind.body.length : blind.status, 0);
+    const asked = await rpc(hopeful, "request_friend", { their_username: wname });
+    check("and can add them anyway -- the name is resolved server-side",
+          asked.status < 400, true);
+    const named = await api(hopeful, `/profiles?username=eq.${wname}&select=username`);
+    check("after which there is a row, so the name can be shown",
+          named.body?.[0]?.username, wname);
+  }
+
+  // ---- the grants themselves, read out of the catalogue -------------------
+
+  console.log("\nand the surface matches what this project claims");
+  {
+    const db = await open({ quiet: true });
+    try {
+      // Asserted as a SET, not as a list of names. The failure worth catching
+      // is a function added LATER that arrives with Supabase's default grant --
+      // which is how `has_password` shipped reachable by anybody holding the
+      // publishable key. Listing known names would not have caught that; asking
+      // whether the set is empty does.
+      const open_ = (await db.query(`
+        select p.proname
+          from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public'
+           and has_function_privilege('anon', p.oid, 'execute')
+         order by p.proname`)).rows.map((r) => r.proname);
+      check("no function in public is executable by anon", open_, []);
+
+      // Both halves of the revoke are needed and each hides the other's
+      // absence: PUBLIC's default keeps `anon` able to execute however many
+      // named revokes run, and a named grant survives `revoke ... from public`.
+      const authed = (await db.query(`
+        select count(*)::int as n
+          from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public'
+           and has_function_privilege('authenticated', p.oid, 'execute')`))
+        .rows[0].n;
+      check("while a signed-in player still has plenty", authed > 20, true);
+
+      // A topic derived from who the players ARE cannot be revoked: the name is
+      // a fact about them. `20260906000000_watch_topic_contract` removed the
+      // last arm that honoured `watch:<lo>:<hi>`, on both the read and the
+      // publish side.
+      const srcOf = async (name) => (await db.query(`
+        select prosrc from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname = $1`, [name])).rows[0].prosrc;
+
+      const watch = await srcOf("can_watch_pair_topic");
+      check("watching no longer accepts a topic built from two user ids",
+            /theirs\.user_a/.test(watch), false);
+      check("and requires a consent that can be withdrawn",
+            /consent_a/.test(watch) && /expires_at/.test(watch), true);
+
+      const feed = await srcOf("can_feed_watch_topic");
+      check("nor does publishing to one",
+            /f\.user_a::text/.test(feed), false);
+    } finally {
+      await db.end();
+    }
+  }
+
 } finally {
   for (const u of users) {
     await admin(`/auth/v1/admin/users/${u.id}`, { method: "DELETE" });

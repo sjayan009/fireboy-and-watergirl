@@ -225,10 +225,35 @@ try {
   console.log("\nwatching is a second topic, with a wider door");
   {
     // The pair topic stays exactly as private as the checks above found it.
-    // `watch:<lo>:<hi>` is the one a spectator uses, and it carries a copy of
-    // the input the two are already exchanging -- the game, and nothing about
-    // their presence, their invitations or their signalling.
-    const watch = "watch:" + [alice.id, bob.id].sort().join(":");
+    // This is the one a spectator uses, and it carries a copy of the input the
+    // two are already exchanging -- the game, and nothing about their presence,
+    // their invitations or their signalling.
+    //
+    // The topic is `watch:<match>:<feed>`, and the shape is the security
+    // property rather than a detail. It used to be `watch:<lo>:<hi>`, derived
+    // from who the players ARE -- a name that is a fact about them and
+    // therefore one they can never take back. `20260906000000_watch_topic
+    // _contract` removed the last policy arm that honoured it; the assertion
+    // for that is at the end of this block.
+    //
+    // Both players have to say yes. `match_consent` is what says it, and it
+    // hands back the topic.
+    // `rpc` here hands back the body as TEXT, not as parsed JSON -- everything
+    // else in this file only ever asked it for a status.
+    const said = (r) => { try { return JSON.parse(r.body)[0]; } catch { return null; } };
+
+    const match = crypto.randomUUID();
+    const first = said(await rpc(alice, "match_consent",
+                                 { p_match: match, their_id: bob.id, p_on: true }));
+    check("one player consenting is not enough", first?.shared, false);
+    const second = said(await rpc(bob, "match_consent",
+                                  { p_match: match, their_id: alice.id, p_on: true }));
+    check("both of them is", second?.shared, true);
+    // The feed is rotated on every change of mind, so the live topic is the one
+    // the SECOND consent returned, not the first.
+    const watch = second?.topic;
+    check("and the topic names the match, not the players",
+          /^watch:[0-9a-f-]{36}:[0-9a-f-]{36}$/i.test(watch ?? ""), true);
 
     // Carol knows nobody. She is the case the whole policy exists for.
     const carol = await makeUser("carol");
@@ -242,6 +267,13 @@ try {
     await rpc(mallory, "accept_friend", { their_id: alice.id });
     check("a friend of one of them is let in", await join(mallory, watch), "in");
     check("and so are the two playing", await join(bob, watch), "in");
+
+    // The thing the old shape could not do. A topic built from two user ids is
+    // reachable forever by anybody who can name them; this one stops being
+    // reachable the moment either player withdraws.
+    const derived = "watch:" + [alice.id, bob.id].sort().join(":");
+    check("and the shape derived from their ids is refused outright",
+          await join(mallory, derived), "refused");
 
     // End to end, because a policy that admits a reader and refuses the writer
     // is a channel that carries nothing.

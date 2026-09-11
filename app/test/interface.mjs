@@ -342,13 +342,37 @@ try {
       await picker.waitFor({ state: "visible", timeout: 15000 });
       await picker.focus();
 
-      const cancelled = page.evaluate(() => new Promise((resolve) => {
-        window.addEventListener(
-          "keydown", (e) => resolve(e.defaultPrevented), { once: true });
-      }));
+      // Bounded, and it has to be. This waited on a keydown that might already
+      // have happened: the listener is installed by one round trip and the key
+      // pressed by the next, so losing that race meant waiting forever -- not
+      // failing, HANGING, with the suite pinning a core and saying nothing. A
+      // seven-minute cap on the whole file turned that into "timed out" with no
+      // clue which assertion did it.
+      //
+      // "timeout" is not silently tolerated either; it is a distinct value, so
+      // a race that starts happening shows up as a failed assertion naming
+      // itself rather than as a suite that never finishes.
+      // Installed, confirmed, THEN pressed. Starting the listener and the key
+      // press as two un-ordered round trips is a race, and chromium lost it
+      // while firefox and webkit did not -- so the suite hung on the first
+      // engine and passed on the other two, which reads like a chromium bug and
+      // is really a test that never said when it was ready.
+      //
+      // The promise is parked on `window` so the page keeps it across both
+      // calls; awaiting the first evaluate is what guarantees the listener
+      // exists before anything is typed.
+      await page.evaluate(() => {
+        window.__keydownSeen = new Promise((resolve) => {
+          const timer = setTimeout(() => resolve("timeout"), 10000);
+          window.addEventListener("keydown", (e) => {
+            clearTimeout(timer);
+            resolve(e.defaultPrevented);
+          }, { once: true });
+        });
+      });
       await page.keyboard.press("ArrowDown");
       check("an arrow aimed at a picker is left to the picker",
-            await cancelled, false);
+            await page.evaluate(() => window.__keydownSeen), false);
       check("and the picker still has the focus",
             await page.evaluate(() => document.activeElement?.tagName), "SELECT");
 
