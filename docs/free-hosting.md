@@ -17,7 +17,9 @@ Cloudflare dashboard shows **Free — $0 — Current plan**, and confirms that t
 Worker has only static assets (no runtime variables, bindings or triggers).
 Supabase uses Brevo SMTP; its authenticated account shows Free, 300 emails/day,
 no saved payment methods and zero prepaid credits. Private GitHub hosted jobs
-are disabled, and the published release's jobs were observed skipped.
+are enabled with `FBWG_ZERO_DOLLAR_ACTIONS=1` after the authenticated billing
+dashboard confirmed an existing account-wide Actions $0 budget with Stop usage
+enabled. Included minutes can be used; paid overage is blocked by GitHub.
 
 ## Static delivery
 
