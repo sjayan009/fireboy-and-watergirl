@@ -200,7 +200,7 @@ try {
    * caller is asking to see. Hence the check first.
    */
   async function openFriends(p) {
-    if (await p.locator("text=Send a request").count() === 0) {
+    if (!await p.locator("text=Send a request").isVisible()) {
       await p.click("button.tool-friends");
     }
     await p.waitForSelector("text=Send a request", { timeout: 20000 });
@@ -1378,7 +1378,7 @@ try {
     // was only tested with two tabs on a BroadcastChannel -- not over Realtime,
     // which is what a real pair would actually be using.
     for (const [ctx, page] of [[ctxA, a], [ctxB, b]]) {
-      await ctx.addInitScript(() => { delete window.RTCPeerConnection; });
+      await ctx.addInitScript(() => { window.RTCPeerConnection = undefined; });
       await page.reload({ waitUntil: "load" });
       await page.waitForSelector("#stage", { timeout: 40000 });
     }
@@ -1402,9 +1402,16 @@ try {
       await p.waitForFunction("window.__fbwg && window.__fbwg.view.session",
                               null, { timeout: 90000 });
     }
-    const how = await Promise.all([a, b].map((p) => p.locator(".status").innerText()));
-    check("both fell back to the relay",
-          how.every((t) => /relay/.test(t)), true);
+    // Status copy describes the player, not the implementation of the link.
+    // Inspect the actual unwrapped transport so a working direct link cannot
+    // accidentally satisfy this forced-NAT-failure test.
+    const relayKinds = () => Promise.all([a, b].map(p => p.evaluate(async () => {
+      const {RealtimeTransport} = await import('/src/net/realtime.ts');
+      let transport = window.__fbwg.view.session.transport;
+      while (transport.inner) transport = transport.inner;
+      return transport instanceof RealtimeTransport;
+    })));
+    check("both fell back to the relay", await relayKinds(), [true, true]);
 
     await Promise.all([a, b].map((p) => p.waitForFunction(
       "window.__fbwg.view.level !== null", null, { timeout: 40000 })));
@@ -1467,8 +1474,8 @@ try {
       p.locator(".status").innerText()));
     check("and neither is reconnecting",
           saying.map((t) => /reconnect/i.test(t)), [false, false]);
-    check("still relayed, still in step",
-          saying.every((t) => /relay/.test(t)), true);
+    check("still relayed", await relayKinds(), [true, true]);
+    check("still in step after the transitions", await agree(40) !== null, true);
     check("and still no desyncs",
           await Promise.all([a, b].map((p) =>
             p.evaluate(() => window.__fbwg.view.session.desyncs))), [0, 0]);
@@ -1487,15 +1494,22 @@ try {
   // Two halves, tested separately, because they fail in different ways.
   console.log("\na result written and abandoned still arrives");
   {
-    // One: navigate away INSIDE the settle window. `release` has to capture
-    // the pair and send before it hands the solo progress back.
+    // One: leave INSIDE the settle window. Friends is now an overlay and does
+    // not release the pair. Open the menu before writing, then activate the
+    // real Leave handler in the same task as the write, before its debounce.
+    await openMenu(a);
+    a.once("dialog", d => d.accept());
     await a.evaluate(() => {
       const cookie = window.__fbwg.view.game.The_cookie;
       cookie.data.stats[2] = 3;
       cookie.data.times[2] = 31;
       cookie.data.timesString[2] = "00:31";
       cookie.flush();
+      // As in the save test above, only confirmed state may enter the outbox.
+      window.__fbwg.progress.confirm(cookie.data);
+      document.querySelector('.menu-actions button.leave').click();
     });
+    await closePanel(a);
     // No wait at all: straight off the screen, well inside the 1500 ms timer.
     await openFriends(a);
     await a.waitForSelector("text=Send a request", { timeout: 20000 });
@@ -1510,30 +1524,42 @@ try {
     const friendId = await a.evaluate(() => window.__fbwg.progress.shared);
     check("and the screen has handed the pair's map back", friendId, false);
 
-    await a.evaluate((them) => {
+    await a.evaluate(async ({owner,them}) => {
+      const {remember} = await import('/src/outbox.ts');
       const stats = new Array(32).fill(-1);
       const times = new Array(32).fill(0);
       const strs = new Array(32).fill("");
       stats[4] = 3; times[4] = 44; strs[4] = "IGNORED";
-      localStorage.setItem("fbwg.pairoutbox", JSON.stringify({
-        [them]: { stats, times, timesString: strs, at: Date.now() },
-      }));
-    }, bob.id);
+      await remember(owner,them,{stats,times,timesString:strs});
+      // Ownerless legacy entries are quarantined, never silently attributed to
+      // whichever account signs in next. Retain one alongside the valid entry.
+      localStorage.setItem("fbwg.pairoutbox",JSON.stringify({legacy:'unassigned'}));
+    }, {owner:alice.id,them:bob.id});
     check("there is something waiting to be sent",
-          await a.evaluate(() => Object.keys(
-            JSON.parse(localStorage.getItem("fbwg.pairoutbox") ?? "{}")).length),
+          await a.evaluate(async owner => {
+            const {pendingFor}=await import('/src/outbox.ts');
+            return (await pendingFor(owner)).length;
+          },alice.id),
           1);
 
-    await goPlay(a);
+    // Recreate the authenticated screen: setting the already-active play hash
+    // does not mount a new session or replay its outbox.
+    await a.reload({ waitUntil: "load" });
     await a.waitForSelector("#stage", { timeout: 20000 });
     await a.waitForTimeout(4000);
     const replayed = await stored();
     check("the next session sends it",
           replayed.find((r) => r[0] === 5), [5, 3, 44, "00:44"]);
-    check("with the label the SERVER derived, not the one it was handed",
+    check("with a canonical time label",
           replayed.find((r) => r[0] === 5)?.[3], "00:44");
     check("and the outbox is empty again",
-          await a.evaluate(() => localStorage.getItem("fbwg.pairoutbox")), null);
+          await a.evaluate(async owner => {
+            const {pendingFor}=await import('/src/outbox.ts');
+            return (await pendingFor(owner)).length;
+          },alice.id),0);
+    check("ownerless legacy data remains quarantined",
+          await a.evaluate(() => localStorage.getItem("fbwg.pairoutbox")),
+          JSON.stringify({legacy:'unassigned'}));
   }
 
 } catch (err) {

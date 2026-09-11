@@ -157,40 +157,47 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
    * two people watching each other freeze.
    *
    * A relayed pair waits 230 ms before a packet leaves the browser, out of a
-   * 539 ms rollback window -- so far enough apart, the batching alone is what
+   * 1154 ms rollback window -- so far enough apart, the batching alone is what
    * stalls them. `hurry` halves that wait at roughly double the messages, and
    * the play screen turns it on for the pairs that have actually stalled twice.
    * Asserted here rather than in a pair test because forcing a real stall on
    * one machine is not something a browser test can do honestly; what can be
    * checked is that the dial exists and moves the queue.
    */
-  const waits = await page.evaluate(async()=>{
-    const {RealtimeTransport}=await import('/src/net/realtime.ts');
-    const sent=[];
-    const channel={onBytes:()=>()=>{},onStatus:()=>()=>{},sendBytes:()=>{sent.push(Date.now());}};
-    const link=new RealtimeTransport(channel);
-    // Two input packets: the first goes at once (leading edge) and the second
-    // waits out the interval behind it. The gap between them IS the interval.
-    const packet=()=>{const d=new Uint8Array(20);d[0]=1;return d;};
-    const measure=async()=>{
-      sent.length=0;
-      link.send(packet());
-      const first=Date.now();
-      link.send(packet());
-      await new Promise(r=>setTimeout(r,400));
-      return sent.length>1?sent[sent.length-1]-first:-1;
-    };
-    const slow=await measure();
-    link.hurry(true);
-    const fast=await measure();
-    link.hurry(false);
-    const back=await measure();
-    link.close();
-    return {slow,fast,back};
-  });
-  assert(waits.slow>=200&&waits.slow<300,`the ordinary batch interval is ~230ms: ${waits.slow}`);
-  assert(waits.fast>=90&&waits.fast<180,`a hurried pair waits ~115ms: ${waits.fast}`);
-  assert(waits.back>=200,`and it goes back when the hurry is withdrawn: ${waits.back}`);
+  // Check exact timer boundaries with a controlled clock in a separate context.
+  // Real browser timers can fire late under CPU contention; their lateness is
+  // a performance measurement, not evidence that hurry chose a wrong interval.
+  const clockPage=await browser.newPage();
+  try {
+    const clockUrl=new URL('/test/transport-clock.html',target).href;
+    await clockPage.route(clockUrl,r=>r.fulfill({contentType:'text/html',body:'<!doctype html><title>Transport clock</title>'}));
+    await clockPage.clock.install({time:new Date('2026-01-01T00:00:00Z')});
+    await clockPage.goto(clockUrl);
+    await clockPage.clock.pauseAt(new Date('2026-01-01T01:00:00Z'));
+    await clockPage.evaluate(async()=>{
+      const {RealtimeTransport}=await import('/src/net/realtime.ts');
+      window.sent=[];
+      window.link=new RealtimeTransport({onBytes:()=>()=>{},onStatus:()=>()=>{},
+        sendBytes:()=>{window.sent.push(Date.now());}});
+      window.packet=()=>{const d=new Uint8Array(20);d[0]=1;return d;};
+    });
+    for(const [hurried,interval] of [[false,230],[true,115],[false,230]]) {
+      await clockPage.clock.runFor(230);
+      await clockPage.evaluate(on=>{
+        window.link.hurry(on);
+        window.sent.length=0;
+        window.link.send(window.packet());
+        window.link.send(window.packet());
+      },hurried);
+      assert.equal(await clockPage.evaluate(()=>window.sent.length),1,'leading packet leaves immediately');
+      await clockPage.clock.runFor(interval-1);
+      assert.equal(await clockPage.evaluate(()=>window.sent.length),1,`batch cannot leave before ${interval}ms`);
+      await clockPage.clock.runFor(1);
+      assert.equal(await clockPage.evaluate(()=>window.sent.length),2,'queued packet leaves at its deadline');
+      assert.equal(await clockPage.evaluate(()=>window.sent[1]-window.sent[0]),interval);
+    }
+    await clockPage.evaluate(()=>window.link.close());
+  } finally {await clockPage.close();}
 
   await page.locator('.tool-friends').click();
   await page.getByLabel('Close panel',{exact:true}).click();
