@@ -206,10 +206,11 @@ await writeFile(join(TO, "sounds.json"), JSON.stringify(
  * -- and if they do not, the check quietly passes against the OLD deployment
  * and vouches for a page nobody just changed. A commit is not a guess.
  *
- * Vercel supplies the SHA; a local build says so rather than pretending.
+ * Workers Builds, Pages, Vercel, and CI supply the SHA. A local build says so.
  */
 await writeFile(resolve(ROOT, "dist/version.txt"),
-                (process.env.VERCEL_GIT_COMMIT_SHA ?? "local") + "\n");
+                (process.env.WORKERS_CI_COMMIT_SHA || process.env.CF_PAGES_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA ||
+                 process.env.GITHUB_SHA || "local") + "\n");
 
 console.log(
   `assets: ${(before / 1e6).toFixed(1)} MB -> ${(after / 1e6).toFixed(1)} MB ` +

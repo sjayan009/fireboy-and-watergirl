@@ -26,6 +26,7 @@ import { FontSet } from "./fonts.js";
 import { cssFilter, hasVisibleFilter } from "./filters.js";
 import { assetUrl } from "../asseturl.js";
 import { assetRevision, imageAsset, jsonAsset } from "./assets.js";
+import { VisualSnapshots, type VisualMode, type VisualTransform } from "./interpolation.js";
 
 export interface ChildPlacement {
   name: string;
@@ -101,7 +102,7 @@ export interface ButtonHit {
 }
 
 /** A resolved transform for one node. */
-interface Xform { x: number; y: number; sx: number; sy: number; rot: number; }
+type Xform = VisualTransform;
 
 const DEG = Math.PI / 180;
 /** Flash pads every text field by 2px on each side. */
@@ -181,6 +182,12 @@ function rasterOrigin(img: HTMLImageElement,
 }
 
 export class SpriteRenderer {
+  private placements = new WeakMap<ChildPlacement, Xform>();
+  private transforms = new WeakMap<object, Xform>();
+  private visualSnapshots: VisualSnapshots | null = null;
+  private visualAlpha = 1;
+  private presentedSnapshots: VisualSnapshots | null = null;
+  private presentedAlpha = 1;
   private images = new Map<string, HTMLImageElement>();
   private pending = new Set<string>();
   private failed = new Set<string>();
@@ -195,7 +202,8 @@ export class SpriteRenderer {
    * would be wasteful -- the original cached it into a BitmapData for the same
    * reason. Entries are invalidated when the transform changes.
    */
-  private filterCache = new WeakMap<object, { key: string; c: HTMLCanvasElement }>();
+  private filterCache = new WeakMap<object, { key: string; c: HTMLCanvasElement; raw: HTMLCanvasElement }>();
+  private groundCache = new WeakMap<object, { key: string; c: HTMLCanvasElement }>();
   /**
    * Bumped whenever an image finishes loading. It is part of the filter cache
    * key, because a layer rendered before its art arrived would otherwise be
@@ -324,8 +332,38 @@ export class SpriteRenderer {
     }
   }
 
-  draw(ctx: CanvasRenderingContext2D, root: DisplayObject): void {
-    this.drawNode(ctx, root);
+  draw(ctx: CanvasRenderingContext2D, root: DisplayObject,
+       snapshots: VisualSnapshots | null = null, alpha = 1): void {
+    this.visualSnapshots = snapshots;
+    this.visualAlpha = alpha;
+    this.presentedSnapshots = snapshots;
+    this.presentedAlpha = alpha;
+    try { this.drawNode(ctx, root); }
+    finally { this.visualSnapshots = null; }
+  }
+
+  /** Resolve only transforms at simulation boundaries; retain no game references in the game itself. */
+  captureTransforms(root: DisplayObject, snapshots: VisualSnapshots,
+                    local: number, reconcile = false): void {
+    if (!reconcile) snapshots.begin();
+    const visit = (node: any, parent: object | null, place?: ChildPlacement,
+                   inherited: VisualMode = "interpolate"): void => {
+      if (!node || node.visible === false || node.alpha <= 0) return;
+      const controlled = (node.name === "pers1" && (local & 1)) ||
+        (node.name === "pers2" && (local & 2));
+      const mode: VisualMode = controlled ? "predict" : inherited;
+      snapshots.capture(node, this.resolvedTransform(node, place), parent, mode, reconcile);
+      const sprite = this.spriteFor(node);
+      const geom = sprite?.geom[Math.min(Math.max(node.currentFrame ?? 1, 1), sprite.frames) - 1];
+      for (const child of node.children ?? []) {
+        const childPlace = placementFor(geom, child);
+        if (geom && !childPlace && (child.__place != null || !child.__seed)) continue;
+        visit(child, node, childPlace, controlled ? "latest" : inherited);
+      }
+      // BitmapData is baked terrain, not an independently animated camera.
+      // Its source transforms stay exact and its filter cache remains reusable.
+    };
+    visit(root, null);
   }
 
   /**
@@ -367,23 +405,37 @@ export class SpriteRenderer {
    * for properties the game has written to since construction.
    */
   private childXform(child: any, place: ChildPlacement): Xform {
-    const fromFrame = decompose(place.m);
+    let fromFrame = this.placements.get(place);
+    if (!fromFrame) { fromFrame = decompose(place.m); this.placements.set(place, fromFrame); }
+    let out = this.transforms.get(child);
+    if (!out) { out = { ...fromFrame }; this.transforms.set(child, out); }
     const seed = child.__seed;
-    if (!seed) return fromFrame;
-    return {
-      x: child.x === seed.x ? fromFrame.x : child.x,
-      y: child.y === seed.y ? fromFrame.y : child.y,
-      sx: child.scaleX === seed.sx ? fromFrame.sx : child.scaleX,
-      sy: child.scaleY === seed.sy ? fromFrame.sy : child.scaleY,
-      rot: child.rotation === seed.rot ? fromFrame.rot : child.rotation,
-    };
+    out.x = !seed || child.x === seed.x ? fromFrame.x : child.x;
+    out.y = !seed || child.y === seed.y ? fromFrame.y : child.y;
+    out.sx = !seed || child.scaleX === seed.sx ? fromFrame.sx : child.scaleX;
+    out.sy = !seed || child.scaleY === seed.sy ? fromFrame.sy : child.scaleY;
+    out.rot = !seed || child.rotation === seed.rot ? fromFrame.rot : child.rotation;
+    return out;
+  }
+
+  private resolvedTransform(node: any, place?: ChildPlacement): Xform {
+    let t: Xform;
+    if (place) t = this.childXform(node, place);
+    else {
+      t = this.transforms.get(node);
+      if (!t) { t = { x: 0, y: 0, sx: 1, sy: 1, rot: 0 }; this.transforms.set(node, t); }
+      t.x = node.x ?? 0; t.y = node.y ?? 0;
+      t.sx = node.scaleX ?? 1; t.sy = node.scaleY ?? 1; t.rot = node.rotation ?? 0;
+    }
+    this.applyHeight(node, t);
+    return t;
   }
 
   private drawNode(ctx: CanvasRenderingContext2D, node: any,
-                   xform?: Xform): void {
+                   xform?: Xform, flags = 0): void {
     if (!node || node.visible === false) return;
     // A mask is never painted, only used to clip (see DisplayObject.isMask).
-    if (node.isMask) return;
+    if (node.isMask && !(flags & 1)) return;
     // Flash clamps alpha to [0, 1] on assignment. The ported code relies on
     // that: Recuento.Ease sets `Tapper.alpha = Math.abs((y + 164) / 390)`,
     // which settles at 1.02, and PauseMenu.Update does the same. Without the
@@ -398,24 +450,21 @@ export class SpriteRenderer {
     // GroundMask are both at 0,0) and fatal for a floor button at (590,198)
     // whose mask sits at (590,200): the mask landed off-screen and
     // destination-in erased the button.
-    if (node.mask) {
+    if (node.mask && !(flags & 2)) {
       this.drawMasked(ctx, node, xform);
       return;
     }
 
     ctx.save();
-    const t: Xform = xform ?? {
-      x: node.x ?? 0, y: node.y ?? 0,
-      sx: node.scaleX ?? 1, sy: node.scaleY ?? 1,
-      rot: node.rotation ?? 0,
-    };
-    this.applyHeight(node, t);
+    const base = xform ?? this.resolvedTransform(node);
+    if (xform) this.applyHeight(node, base);
+    const t = this.visualSnapshots?.sample(node, base, this.visualAlpha) ?? base;
     ctx.translate(t.x, t.y);
     if (t.rot) ctx.rotate(t.rot * DEG);
     if (t.sx !== 1 || t.sy !== 1) ctx.scale(t.sx, t.sy);
     if (alpha !== 1) ctx.globalAlpha *= alpha;
 
-    if (hasVisibleFilter(node.filters)) {
+    if (hasVisibleFilter(node.filters) && !(flags & 4)) {
       this.drawFiltered(ctx, node);
       ctx.restore();
       return;
@@ -557,11 +606,8 @@ export class SpriteRenderer {
       if ((node.alpha ?? 1) <= 0) return;
 
       ctx.save();
-      const t: Xform = xform ?? {
-        x: node.x ?? 0, y: node.y ?? 0,
-        sx: node.scaleX ?? 1, sy: node.scaleY ?? 1,
-        rot: node.rotation ?? 0,
-      };
+      const base = xform ?? this.resolvedTransform(node);
+      const t = this.presentedSnapshots?.sample(node, base, this.presentedAlpha) ?? base;
       ctx.translate(t.x, t.y);
       if (t.rot) ctx.rotate(t.rot * DEG);
       if (t.sx !== 1 || t.sy !== 1) ctx.scale(t.sx, t.sy);
@@ -719,32 +765,57 @@ export class SpriteRenderer {
    */
   private drawFiltered(ctx: CanvasRenderingContext2D, node: any): void {
     const t = ctx.getTransform();
-    const key = [t.a, t.b, t.c, t.d, t.e, t.f].map((v) => v.toFixed(2))
-      .join() + "|" + this.generation;
+    // A moving character's glow is local art. Translating it does not change
+    // that art, so use a small tile and cache its pose independently of x/y.
+    const character = node.name === "pers1" || node.name === "pers2";
+    const size = character ? 192 : this.stageW;
+    const height = character ? 192 : this.stageH;
+    const ox = character ? size / 2 : t.e, oy = character ? height / 2 : t.f;
+    const scale = Math.hypot(t.a, t.b) || 1;
+    const filter = cssFilter(node.filters, scale);
+    const key = [t.a, t.b, t.c, t.d, ox, oy].join() + "|" + this.generation + "|" + filter +
+      (character ? "|" + this.poseKey(node) : "");
     let hit = this.filterCache.get(node);
 
     if (!hit || hit.key !== key) {
-      const c = document.createElement("canvas");
-      c.width = this.stageW;
-      c.height = this.stageH;
-      const lc = c.getContext("2d")!;
-      lc.setTransform(t);
-      const saved = node.filters;
-      node.filters = [];                   // avoid recursing into ourselves
-      this.drawNode(lc, node, { x: 0, y: 0, sx: 1, sy: 1, rot: 0 });
-      node.filters = saved;
-      hit = { key, c };
-      this.filterCache.set(node, hit);
+      if (!hit) {
+        const c = document.createElement("canvas"), raw = document.createElement("canvas");
+        c.width = raw.width = size; c.height = raw.height = height;
+        hit = { key, c, raw };
+        this.filterCache.set(node, hit);
+      }
+      hit.key = key;
+      const lc = hit.raw.getContext("2d")!;
+      lc.setTransform(1, 0, 0, 1, 0, 0);
+      lc.clearRect(0, 0, size, height);
+      lc.setTransform(t.a, t.b, t.c, t.d, ox, oy);
+      // The context already contains this node's visual transform. Draw its
+      // contents directly: never temporarily modify filters on simulation state.
+      if (node.__clipMask) this.drawSelfMasked(lc, node);
+      else this.drawContent(lc, node, false);
+      const filtered = hit.c.getContext("2d")!;
+      filtered.clearRect(0, 0, size, height);
+      filtered.filter = filter;
+      filtered.drawImage(hit.raw, 0, 0);
+      filtered.filter = "none";
     }
 
-    // the scale baked into the transform, so a 20px glow stays 20 Flash px
-    const scale = Math.hypot(t.a, t.b) || 1;
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.filter = cssFilter(node.filters, scale);
-    ctx.drawImage(hit.c, 0, 0);
-    ctx.filter = "none";
+    ctx.drawImage(hit.c, character ? t.e - ox : 0, character ? t.f - oy : 0);
     ctx.restore();
+  }
+
+  private poseKey(node: any): string {
+    let key = `${node.currentFrame},${node.visible},${node.alpha}`;
+    const sprite = this.spriteFor(node);
+    const geom = sprite?.geom[Math.min(Math.max(node.currentFrame ?? 1, 1), sprite.frames) - 1];
+    for (const child of node.children ?? []) {
+      const place = placementFor(geom, child);
+      const t = this.resolvedTransform(child, place);
+      key += `|${t.x},${t.y},${t.sx},${t.sy},${t.rot},${this.poseKey(child)}`;
+    }
+    return key;
   }
 
   /**
@@ -787,10 +858,7 @@ export class SpriteRenderer {
     const mask = node.__clipMask;
     // draw the clip's own art and every child except the mask
     this.drawContent(lc, node, true);
-    const wasMask = mask.isMask;
-    mask.isMask = false;
-    this.drawNode(mc, mask);
-    mask.isMask = wasMask;
+    this.drawNode(mc, mask, undefined, 1);
 
     lc.setTransform(1, 0, 0, 1, 0, 0);
     lc.globalCompositeOperation = "destination-in";
@@ -810,29 +878,45 @@ export class SpriteRenderer {
    */
   private drawMasked(ctx: CanvasRenderingContext2D, node: any,
                      xform?: Xform): void {
+    // CreateGround builds this immutable texture/mask pair once per level.
+    // Its 300+ tile mask used to be traversed and composited every draw, even
+    // when only a character moved. Cache the final terrain pixels after load.
+    const terrain = node.symbol === "texture1" && node.mask?.name === "GroundMask";
+    const t = ctx.getTransform();
+    const cacheKey = terrain ? [t.a, t.b, t.c, t.d, t.e, t.f,
+      node.x, node.y, node.scaleX, node.scaleY, node.rotation, this.generation].join() : "";
+    const cached = terrain ? this.groundCache.get(node) : null;
+    if (cached?.key === cacheKey) {
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(cached.c, 0, 0); ctx.restore();
+      return;
+    }
     const layer = this.scratch("layer");
     const maskLayer = this.scratch("maskLayer");
     const lc = layer.getContext("2d")!;
     const mc = maskLayer.getContext("2d")!;
-    const t = ctx.getTransform();
     for (const c of [lc, mc]) {
       c.setTransform(1, 0, 0, 1, 0, 0);
       c.clearRect(0, 0, this.stageW, this.stageH);
       c.setTransform(t);
     }
     const mask = node.mask;
-    node.mask = null;                      // avoid recursing forever
-    const wasMask = mask.isMask;
-    mask.isMask = false;
-    this.drawNode(lc, node, xform);
-    this.drawNode(mc, mask);
-    mask.isMask = wasMask;
-    node.mask = mask;
+    this.drawNode(lc, node, xform, 2);
+    this.drawNode(mc, mask, undefined, 1);
 
     lc.setTransform(1, 0, 0, 1, 0, 0);
     lc.globalCompositeOperation = "destination-in";
     lc.drawImage(maskLayer, 0, 0);
     lc.globalCompositeOperation = "source-over";
+
+    if (terrain) {
+      const c = cached?.c ?? document.createElement("canvas");
+      if (!cached) { c.width = this.stageW; c.height = this.stageH; }
+      const cc = c.getContext("2d")!;
+      cc.clearRect(0, 0, this.stageW, this.stageH);
+      cc.drawImage(layer, 0, 0);
+      this.groundCache.set(node, { key: cacheKey, c });
+    }
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);

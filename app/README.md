@@ -5,7 +5,6 @@ A static single-page app: accounts, and the game.
 ```bash
 npm run dev      # from the repo root; builds the engine, then serves on :5174
 npm run build    # engine, app, and the extracted assets into the REPO ROOT dist/
-npm run invite -- --email you@example.com   # put somebody straight in
 ```
 
 ## Why static
@@ -61,13 +60,10 @@ at all -- so verification is checked before any request of ours is reachable.
 Google sign-in satisfies it the same way, because Google reports the address as
 verified and Supabase records it as confirmed.
 
-`invite_codes`, `invite_redemptions` and `was_invited()` still exist, unread by
-anything. They hold the record of how the first accounts arrived, and dropping a
-table is the contracting half of a change -- so that half waits in
-`supabase/deferred/` rather than shipping with the release that opened the door.
-
-`npm run invite -- --email someone@example.com` also still works. It is no
-longer a gate, just the shortest way to put somebody straight into the game.
+The obsolete invite machinery and its CLI were removed by
+`20260911000000_drop_the_invite_machinery`. Google sign-in avoids a required
+outbound mail service; password signup/reset requires separately verified free
+SMTP. See the root `FREE_TIER_BUDGET.md` for the deployment and quota policy.
 
 ## Two-factor
 

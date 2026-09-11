@@ -5,6 +5,7 @@ permissions:
   contents: read
 jobs:
   browser-and-worker:
+    if: github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

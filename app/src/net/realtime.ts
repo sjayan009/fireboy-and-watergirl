@@ -10,41 +10,39 @@
  *
  *  * **Always**, to carry the SDP and ICE of the peer-connection handshake.
  *    A handful of messages, then silence.
- *  * **Sometimes**, as the game transport itself, for the pairs whose NAT
- *    refuses a direct connection -- usually 10 to 20%. This is what removes the
- *    need for a TURN server: a session is about ten bytes a second, so relaying
- *    it costs a hop of latency and nothing else.
+ *  * **Sometimes**, as the game transport itself when direct connection fails.
+ *    This removes the TURN dependency. A full input packet is 65 bytes; two
+ *    players normally send 52 packets/s before batching and JSON/base64.
  *
  * ## Why sends are batched
  *
  * The free tier allows about two million Realtime messages a month. A relayed
- * session sending one packet per frame per peer is roughly 52 a second, which
- * would spend the entire month's allowance in about ten hours of play.
+ * session sending one packet per frame per peer is roughly 52 publishes/s.
+ * Supabase meters BOTH publishes and deliveries: at one recipient this spends
+ * two million messages in about 5.34 pair-hours, before other Realtime uses.
  *
- * Batching to one message every three frames costs almost nothing, because
- * every input packet already repeats the last sixteen frames and rollback
- * absorbs the later arrival by predicting -- and it takes the same allowance to
- * something like thirty hours. Nothing is dropped: a message carries every
- * packet queued since the last one, so a command still gets through.
+ * The default 230ms batch has a theoretical pair rate of 8.70 publishes/s
+ * (17.39 metered messages/s with one recipient), or about 31.94 pair-hours per
+ * 2M-message allowance. The 115ms hurried mode halves that capacity. Commands,
+ * signalling, spectators, social traffic and framing need additional budget.
  *
  * ## Except when it costs a great deal
  *
- * "Almost nothing" is true of the pairs the window fits. A peer stalls once the
- * other's input is delayed by more than the rollback window, and for a relayed
+ * A peer stalls once the other's input is delayed by more than the rollback
+ * window, and for a relayed
  * pair that delay is this wait PLUS a server hop each way -- so 230 ms of a
- * 539 ms window is spent before a packet has left the browser, and two people
+ * 1154 ms window is spent before a packet has left the browser, and two people
  * far enough apart spend the evening watching each other freeze.
  *
  * `hurry` is the dial, and it is turned by the page rather than set here,
  * because the page is what can see a pair stalling and what pays for the
- * messages. A hurried session sends about twice as many -- the honest price --
- * and only the sessions that were stalling pay it. Nobody's ordinary evening
- * costs more than it did.
+ * messages. A hurried session consumes about twice as much message quota;
+ * it is not a different billing plan. On Free, exceeding limits stops service.
  *
  * Verify the quota against current pricing before relying on those numbers.
  */
-import { Transport } from "@engine/net/transport.js";
-import { encode } from "./pairchannel.js";
+import { Transport, transportStats } from "@engine/net/transport.js";
+import { encode } from "./base64.js";
 
 /**
  * The three things this needs from a channel, and nothing else.
@@ -68,14 +66,10 @@ export interface ByteChannel {
  * games this project can host at once. Fifty games with one in seven relaying
  * is about 260 messages a second at 115 ms and about 130 at 230.
  *
- * It is bounded, and not by taste. A peer stalls once the other's input is
- * delayed by more than the rollback window can reach back through, and that
- * delay is this number plus one-way latency. The window is
- * `maxRollback * 38.5 ms`, so at the netcode's old window of ten frames --
- * 385 ms -- this value would have started stalling pairs at 310 ms round trip,
- * which for a relayed pair paying a server hop each way is an ordinary evening
- * rather than a bad one. The window went to fourteen frames in the same change
- * for exactly that reason; see `maxRollback` in the session.
+ * A peer stalls once delayed input exceeds the rollback window. The current
+ * default is 30 frames, about 1154ms; queue time, network latency, jitter and
+ * a burst of loss all consume that window. The network benchmark measures
+ * these together rather than treating a regional RTT as a queue-inclusive RTT.
  *
  * Do NOT make sends change-triggered instead. Lockstep needs the peer's input
  * for every frame or `ready` stalls, so packets have to flow whether or not
@@ -85,24 +79,25 @@ const SLOW_MS = 230;
 /**
  * The same lever, for a pair the slow one is failing.
  *
- * Three frames rather than six. It gives back 115 ms of a 539 ms window, which
- * is the difference between stalling at a 310 ms round trip and stalling at a
- * 540 ms one -- and 540 ms is further than two people in one country are from
- * each other, relay hop included. It is deliberately not lower than this: the
- * next halving buys 57 ms for another doubling of the bill, and `WatchMirror`
- * settled on the same 115 ms for the same reason.
+ * Three frames rather than six. It returns 115ms of queue budget at roughly
+ * twice the message consumption. The 600ms RTT + jitter/loss benchmark shows
+ * why the existing explicit choice is useful; making it universal would halve
+ * the finite Free relay capacity.
  */
 const FAST_MS = 115;
 
 export class RealtimeTransport implements Transport {
+  readonly stats = transportStats();
   private queue: string[] = [];
+  private queuedAt: number[] = [];
+  private queuedBytes: number[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private off: (() => void) | null = null;
   private offStatus: (() => void) | null = null;
   private closed = false;
   private gone = false;
 
-  /** Messages actually put on the wire, so the cost is observable. */
+  /** Batch dispatches; PairChannel may hold/retry these during reconnection. */
   sent = 0;
 
   /** How long a queued packet may wait. See `hurry`. */
@@ -135,10 +130,8 @@ export class RealtimeTransport implements Transport {
   get pacingMs(): number { return this.flushMs; }
 
   /**
-   * Realtime gives no round-trip figure, and measuring one would mean sending
-   * pings that cost messages for a number nothing depends on. The session's
-   * prediction window is fixed, and the UI can say "relay" without a millisecond
-   * count it would have had to pay for.
+   * The transport itself adds no paid-quota ping messages. NetSession estimates
+   * RTT/jitter from timing trailers already attached to normal input packets.
    */
   readonly rttMs = null;
 
@@ -160,6 +153,8 @@ export class RealtimeTransport implements Transport {
       this.flush();
       this.pair.sendBytes([encode(data)]);
       this.sent++;
+      this.stats.sentPackets++;
+      this.stats.sentBytes += data.byteLength;
       return;
     }
     // An input packet carries a window of history ending at `frame`, so two
@@ -174,8 +169,13 @@ export class RealtimeTransport implements Transport {
     const frame = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(2);
     if (previous && data[1] === previous.slot && data[14] === previous.epoch && frame === previous.frame) {
       this.queue.pop();
+      this.queuedAt.pop();
+      this.stats.bufferedBytes -= this.queuedBytes.pop()!;
     }
     this.queue.push(encode(data));
+    this.queuedAt.push(performance.now());
+    this.queuedBytes.push(data.byteLength);
+    this.stats.bufferedBytes += data.byteLength;
     this.lastInput = { frame, slot: data[1], epoch: data[14] };
     if (this.queue.length >= 32) { this.flush(); return; }
 
@@ -192,7 +192,19 @@ export class RealtimeTransport implements Transport {
   private flush(): void {
     if (this.closed || this.queue.length === 0) return;
     const packets = this.queue;
+    const now = performance.now();
+    for (let i = 0; i < this.queuedAt.length; i++) {
+      const wait = Math.max(0, now - this.queuedAt[i]);
+      this.stats.queueSamples++;
+      this.stats.queueTotalMs += wait;
+      this.stats.queueMaxMs = Math.max(this.stats.queueMaxMs, wait);
+      this.stats.sentPackets++;
+      this.stats.sentBytes += this.queuedBytes[i];
+    }
     this.queue = [];
+    this.queuedAt = [];
+    this.queuedBytes = [];
+    this.stats.bufferedBytes = 0;
     this.lastInput = null;
     this.sent++;
     this.lastSent = Date.now();
@@ -201,7 +213,11 @@ export class RealtimeTransport implements Transport {
 
   onMessage(fn: (data: Uint8Array) => void): void {
     this.off?.();
-    this.off = this.pair.onBytes(fn);
+    this.off = this.pair.onBytes(data => {
+      this.stats.receivedPackets++;
+      this.stats.receivedBytes += data.byteLength;
+      fn(data);
+    });
   }
 
   /**

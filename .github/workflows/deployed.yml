@@ -38,6 +38,7 @@ permissions:
 
 jobs:
   live:
+    if: github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -100,7 +101,7 @@ jobs:
 
       - name: wait for this commit to be the one that is live
         env:
-          SITE: ${{ vars.FBWG_URL || 'https://fireboy-and-watergirl-official.vercel.app' }}
+          SITE: ${{ vars.FBWG_URL || 'https://fireboy-and-watergirl.sjayan009.workers.dev' }}
         run: |
           for i in $(seq 1 60); do
             live=$(curl -fsS "$SITE/version.txt" 2>/dev/null | tr -d '[:space:]' || true)
@@ -116,7 +117,7 @@ jobs:
 
       - name: and does it work
         env:
-          FBWG_URL: ${{ vars.FBWG_URL || 'https://fireboy-and-watergirl-official.vercel.app' }}
+          FBWG_URL: ${{ vars.FBWG_URL || 'https://fireboy-and-watergirl.sjayan009.workers.dev' }}
           FBWG_COMMIT: ${{ github.sha }}
         run: npm run test:deployed
 

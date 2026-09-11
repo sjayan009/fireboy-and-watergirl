@@ -1,0 +1,168 @@
+# Zero-dollar production budget
+
+Audited 11 September 2026. Current official limits were researched before proposing infrastructure changes. Workload calculations below are models, not live network benchmarks.
+
+## Financial boundary and verified evidence
+
+The deployment policy is **$0 in provider charges, including when overloaded**. No trials, paid plans, metered overage, paid TURN, automatic upgrades, paid storage, or required VM. Capacity exhaustion must reduce availability, never authorize spending. No software can guarantee that a third party retains today's free offering indefinitely. If terms change, disable or migrate the integration; do not upgrade it.
+
+Unlimited players, retries or hostile requests have no finite worst-case traffic volume. Free-plan enforcement is the final financial protection; admission budgets protect availability. Notifications and browser-local usage counters are not spend caps. This document cannot certify unknown account settings.
+
+Read-only Supabase connector checks against the repository's production project returned:
+
+| Check | Observed result |
+| --- | --- |
+| Organization subscription | `free` |
+| Project status / region | `ACTIVE_HEALTHY`, `us-west-2` |
+| Database / version | 13,233,299 bytes; PostgreSQL 17.6 |
+| Public tables without RLS | 0 |
+| Accepting verifier engine versions | 0 |
+| Ranked attempts / retained replay payload | 0 / 0 bytes |
+| GitHub repository visibility | `private`, verified through repository metadata |
+| Existing Vercel project | `fireboy-and-watergirl-official`, linked to this repository on a `hobby` team |
+| Selected Cloudflare destination | `fireboy-and-watergirl.sjayan009.workers.dev`; dashboard Workers plan **Free, $0, Current plan** |
+| Existing Worker deployment type | Dashboard confirms static assets only; runtime variables, Logpush, Tail Workers and triggers unavailable |
+
+These are point-in-time observations. Cloudflare Workers Free and the existing Vercel Hobby subscription were verified; invoices and separately purchased integrations were not inspected. GitHub spending controls and the configured SMTP contract were not inspected. Therefore **the entire existing live deployment is not yet certified as having no billing path**. Source configuration cannot prove these external settings.
+
+Implemented repository safeguards: `app/scripts/pages.mjs` emits Cloudflare static security headers and rejects over-limit or non-static output. `static-hosting.mjs` restricts `wrangler.json` to this service's static assets, with no script, binding, alternate environment or build hook. `app/scripts/free-config.mjs` rejects TURN/credentials in the default ICE configuration. Every hosted CI job is gated to public repositories or `FBWG_ZERO_DOLLAR_ACTIONS=1`, which may be set only after a zero-dollar account stop-spend budget is verified. The flag is an operator attestation, not a billing API check. Fast CI now has a 20-minute deadline and keepalive a 2-minute deadline.
+
+## Production dependency ledger
+
+| Dependency | Boundary and zero-dollar rule |
+| --- | --- |
+| Cloudflare Workers Static Assets (selected) | Verified Workers Free; free `workers.dev` hostname, no runtime script/bindings, R2, Images, Stream or purchased domain. Static requests/storage are free and unlimited; Free permits 20,000 files/version and 25 MiB/file. No Worker invocation is needed even for 404s. [Billing](https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/), [limits](https://developers.cloudflare.com/workers/platform/limits/#static-assets) |
+| Cloudflare Pages (compatible alternative) | Free `pages.dev` hostname; no Functions or paid resources. Free: 500 builds/month, 20,000 files/site, 25 MiB/file. Static requests are unlimited. At build exhaustion retain the last good deployment. [Limits](https://developers.cloudflare.com/pages/platform/limits/) |
+| Existing Vercel hosting during migration | The linked project is on a verified Hobby team. Hobby is free, restricts use to personal/non-commercial projects, and blocks features at limits rather than charging usage overage. Do not upgrade it or add paid integrations. The user selected the existing Workers destination. [Hobby plan](https://vercel.com/docs/plans/hobby) |
+| Supabase Free | Auth, Postgres, private friends/presence/signalling, persistence and bounded emergency relay. Free: 500 MB database, 5 GB uncached egress, 50,000 MAU, 2M Realtime messages/month, 200 peak connections. No paid add-ons, branching, compute upgrade, custom domain, phone MFA or log drains. Free may restrict service or pause after inactivity; it does not bill overages. [Pricing](https://supabase.com/pricing), [cost control](https://supabase.com/docs/guides/platform/cost-control) |
+| Direct WebRTC | Existing unordered data channel with `maxRetransmits: 0`. Public STUN discovers addresses; it is not TURN. Gameplay compute/bandwidth belongs to the peers, with no provider relay charge. A STUN outage cannot authorize buying TURN. |
+| Google OAuth through Supabase | Already implemented; avoids an email-delivery prerequisite for this sign-in route. Verify provider configuration and redirects. Preserve assurance/profile checks and enrolled TOTP. |
+| Email sign-up/reset | Optional alongside OAuth until the actual SMTP contract is proven non-expiring, hard-limited and $0. Default Supabase SMTP only sends to team addresses, currently 2 emails/hour; it is not public production email. Never disable confirmation to make a cost claim. [SMTP](https://supabase.com/docs/guides/auth/auth-smtp) |
+| Replay verifier | Preserve isolated Node worker and replay validation. Ordinary play/progress already tolerate unavailable ranking registration. Keep engine acceptance disabled without a compatible verifier and bounded queue. No VM is required to play. |
+| Optional DO relay | Evaluated below, not deployed or enabled by this audit. Must run on Workers **Free**, using SQLite-backed objects, Hibernation and server-enforced admission. A free allowance on a paid account is insufficient. |
+| Local toolchain | npm/Node/TypeScript/Vite/sharp/Playwright are not hosted production services. Use the committed lockfile. Local image builds avoid any required paid registry. Serving an existing static artifact does not require CI to run. |
+
+Supabase Storage (1 GB) and Edge Functions (500,000 invocations/month) are included on Free but not needed: planned production consumption is **zero**. Game assets stay on the static host. The selected design adds no hosted production dependency.
+
+## Asset inventory and delivery
+
+The final built `dist/` inspected during this audit contained **2,496 files, 27,839,015 bytes**, largest **1,356,970 bytes**: 12.48% of the Pages file limit and 5.177% of the single-file limit. Recount the artifact after every build; these numbers are not a claim about a later build. Publish `dist/`, not the extraction/source tree.
+
+This includes the added Cloudflare `_headers` file. Workers Static Assets and Pages both parse it. The build guard reports final count, bytes and largest file on each release and fails before deployment if a limit is exceeded.
+
+WebP raster conversion, original compressed audio and exclusion of extraction intermediates already exist. Atlases can reduce fetch/decode work but are not necessary for today's file quota. Any atlas must preserve pivots, clipping, filter margins and sampling and pass render comparisons. Combine assets before adding storage. Every atlas must remain below 25 MiB.
+
+At 100 completely cold full-artifact downloads/day, the pessimistic static transfer is **2.7839015 GB/day, 86.3009465 GB/31 days**. This is free static asset delivery, not Supabase egress or Worker invocations. Lazy loading and caches reduce it.
+
+Workers Builds Free has **3,000 build minutes/month**, one concurrent build and a 20-minute timeout. At the full timeout, three builds/day consume at most **60 minutes/day, 1,860 minutes/31 days**; four/day consume **2,480 minutes/month**, above a 75% planning threshold of 2,250. Count non-production branches, retries and other account projects. Local builds/direct uploads use **0 hosted build minutes**. Retain the last good static deployment at exhaustion and never switch to the paid 6,000-minute-plus-overage plan. The current service is Git-linked to `main`; source changes remain local until pushed. [Build limits](https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/)
+
+## Exact traffic arithmetic
+
+`H` means **pair-hours**: two people playing one hour produce one pair-hour. `N` is concurrent relayed pairs; `d` is batching interval in seconds. A model month has 31 days. RTT, jitter, loss and browser throttling change actual sends/stalls; do not assume a universal NAT-failure percentage.
+
+The full engine input is `18 + 16 + 15 + 16 = 65` bytes, carrying 32 input-history frames plus timing/checksums:
+
+```text
+input packets/pair-second = 2 * 26 = 52
+input packets/pair-hour   = 187,200
+input payload/pair-hour   = 187,200 * 65 = 12,168,000 bytes
+input payload/peer-second = 26 * 65 = 1,690 bytes
+```
+
+Exclude commands, negotiation, lower-layer retransmissions and DTLS/SCTP/UDP/IP or TLS/TCP/WebSocket framing from that payload figure. Never call it NIC bandwidth. Supabase adds a connection prefix: with `L` prefix bytes, base64 length is `4 * ceil((65 + L) / 3)` ASCII bytes/input, plus JSON arrays/envelopes and Phoenix framing. Actual serialized messages and transport counters must be measured.
+
+### Existing Supabase emergency relay
+
+A broadcast counts once sent plus once per receiving subscriber. With one recipient, that is **two units**. Inputs are batched at 230 ms normally and 115 ms hurried. [Accounting](https://supabase.com/docs/guides/platform/manage-your-usage/realtime-messages)
+
+```text
+broadcasts/pair-hour      = 2 * 3,600 / d
+Realtime units/pair-hour = 4 * 3,600 / d
+Realtime units/second    = 4 * N / d
+```
+
+| Input-only quantity | 230 ms | 115 ms |
+| --- | ---: | ---: |
+| Broadcasts/pair-hour | 31,304.35 | 62,608.70 |
+| Realtime units/pair-hour | 62,608.70 | 125,217.39 |
+| Units/second/pair | 17.3913 | 34.7826 |
+| Pair-hours/month at full 2M quota | 31.9444 | 15.9722 |
+| Pair-hours/month at 1.5M, 25% reserve | 23.9583 | 11.9792 |
+| Pair-hours/day at reserve, 31-day month | 0.77285 | 0.38642 |
+| Whole pairs below 75 units/second | 4 | 2 |
+
+For finite sessions round sends up and add leading-edge sends, commands, signalling and retries. Free also limits 100 messages/s, 20 presence messages/s, 100 joins/s and 100 channels/connection. [Limits](https://supabase.com/docs/guides/realtime/limits)
+
+The audit's actual 20-second production-transport baseline, with seeded 80-ms RTT/10-ms jitter, measured **8.95 publishes/s and 9,839.4 JSON-payload bytes/s** for a pair on 230-ms batching. Repeating that exact observed rate would be 64,440 Realtime units and 35,421,840 sent JSON bytes per pair-hour. This includes a 74-byte session/attempt prefix before base64, but excludes Phoenix/TLS/IP. A 600-ms RTT/100-ms jitter/20%-loss cell measured 11.1 publishes/s at 230 ms and 19.6 at 115 ms because control retries add sends. These short controlled samples are not global WAN or provider-quota measurements; see [raw baseline](docs/benchmarks/network-before.json). They demonstrate why the input-only ceilings cannot be treated as admissions.
+
+Presence is change-triggered and spaced 8 seconds **per pair channel**. Up to 50 channels means one client's simultaneous activity change can exceed the project presence rate. Rejoining announces again. The channel cap does not prove project-wide presence compliance. Multiple tabs consume actual connections. Reserve budget for the friends graph, startup bursts and reconnects.
+
+Spectating adds traffic even for direct players: one sharing peer mirrors both input directions every 115 ms. With `V` recipients, units/watched pair-hour are `(1 + V) * 3,600 / 0.115`, before catch-up snapshots, presence and control. One viewer adds **62,608.70 units/hour**. Stop admitting new spectators before reducing player connectivity.
+
+### Optional Durable Object binary relay
+
+DO Free: SQLite only; 100,000 request units/day, 13,000 GB-s/day, reset 00:00 UTC. Incoming application WS messages count 20:1; outgoing messages are unmetered for requests. An upgrade is a request. Eligible idle time is excluded from duration; active objects are metered at 0.128 GB. Free quota exhaustion fails operations, without overage billing. [DO pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)
+
+The front Worker separately allows 100k requests/day, 10 ms CPU/invocation. Count upgrades, authentication, probes and rejected requests; do not route static files through it. [Worker pricing](https://developers.cloudflare.com/workers/platform/pricing/)
+
+For one object per pair, no upstream sockets/timers preventing hibernation and no per-input storage:
+
+```text
+DO request units = R + ceil((input WS messages + control WS messages) / 20)
+R = upgrades + HTTP requests + RPC sessions + alarms, across every object
+duration GB-s <= 0.128 * 3,600 * H = 460.8 * H (continuous-active bound)
+```
+
+Do not assume negligible active time at 52 incoming messages/s. Measure provider duration/handler occupancy before claiming Hibernation savings. Eligible idle time is free even before physical eviction. Use `ctx.acceptWebSocket`; ordinary `accept()` keeps connected objects active. Per-input storage is unnecessary. Free storage limits: 5M reads/day, 100k writes/day, 5 GB total. A persistent global admission ledger needs separate row accounting and retention.
+
+| Input strategy | Units/pair-hour | Request ceiling pair-hours/day | Continuous-active duration ceiling |
+| --- | ---: | ---: | ---: |
+| Immediate 26 Hz binary | 9,360.00 | 10.6838 | 28.2118 |
+| Binary batches, 115 ms | 3,130.43 | 31.9444 | 28.2118 |
+| Binary batches, 230 ms | 1,565.22 | 63.8889 | 28.2118 |
+
+These ceilings exclude overhead. Binary batching removes base64/JSON but still adds queue delay and reliable ordered TCP delivery. It does not replace the semantics of the direct unreliable/unordered data channel.
+
+| Illustrative daily workload; each player plays 1 hour | Relayed pair-hours/day | Immediate DO input units/day | 31-day input units | Continuous GB-s/day | Supabase 230-ms units/31 days instead |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 2 players, both relayed | 1 | 9,360 | 290,160 | 460.8 | 1,940,869.57 |
+| 20 players, 10% relayed | 1 | 9,360 | 290,160 | 460.8 | 1,940,869.57 |
+| 100 players, 10% relayed | 5 | 46,800 | 1,450,800 | 2,304 | 9,704,347.83 |
+| 20 players, all relayed | 10 | 93,600 | 2,901,600 | 4,608 | 19,408,695.65 |
+| 100 players, all relayed | 50 | 468,000 | 14,508,000 | 23,040 | 97,043,478.26 |
+
+A 75k-unit planning threshold allows **less than eight immediate pair-hours/day after overhead**. Five relayed pair-hours use 46,800 input units and leave 28,200 within that threshold; eight use 74,880 and leave only 120. One pair relaying 24 hours requires 224,640 units/day and cannot remain on DO Free. A monthly total cannot pool daily allowances across busy/quiet days.
+
+Regional probes also count. Two players, eight candidates, six echoes each: 16 upgrades + 96 incoming echoes = 20.8 units (round up to 21), before two gameplay upgrades, admission, retries and controls. Bound attempts/samples, cache results for the connection attempt, and probe only after direct P2P fails.
+
+Both players should test the same candidate endpoints and share results over their authorized private pair channel. Proposed selection: minimize the worse player's p95 RTT, then sum of medians, then stable region order. This is an algorithm proposal, not measured optimal routing. `locationHint` is best-effort and only affects the first lookup; existing objects do not move. Fresh region-scoped match identities are needed after reselection. Hints include `enam`, `wnam`, `weur`, `eeur`, `apac`, `apac-ne`, `apac-se`, `oc`; `sam`, `afr`, `me` currently map to nearby supported locations. [Placement](https://developers.cloudflare.com/durable-objects/reference/data-location/)
+
+Survev's [regional binary echo tests](https://github.com/survev/survev/blob/master/client/src/pingTest.ts) use six samples and bounded retries; its [player renderer](https://github.com/survev/survev/blob/master/client/src/objects/player.ts) has separate visual interpolation fields. Its single-client minimum-RTT selector and server-authoritative architecture do not solve this game's joint routing or deterministic rollback.
+
+**Decision:** a narrowly admitted optional DO fallback is financially plausible on confirmed Workers Free. It is not a production dependency. Before enabling it, test pair membership/assurance, globally reserved requests/duration, connection/rate/size caps, expiry, Hibernation recovery, quota rejection and two-peer failover. A shared server counter must cover every region/session; its own request/storage cost belongs in the budget.
+
+## Exhaustion and persistence
+
+At 75% budget, stop optional uploads/new spectators and reserve control capacity. Prefer direct P2P. A future enabled DO relay must stop admissions and agree a switch before its reservation ends. Reuse packet bytes/epochs; transport replacement must not restart authoritative simulation. Bound reconnection attempts.
+
+Supabase fallback is allowed **only if its separate monthly and per-second budgets can absorb it**. Five DO pair-hours/day cannot be dumped into 2M Supabase messages/month. If both relays and P2P are unavailable, show capacity/retry status and retain local play/progress. Current Free-plan restrictions provide financial protection; graceful global quota-aware admission is a separate availability requirement, **not claimed implemented in the current Supabase-only path**.
+
+Budget all Supabase egress: API/auth, Realtime and verifier replay downloads. A 3.75 GB/month planning threshold reserves 1.25 GB of the published 5 GB. Remaining gameplay budget is `3.75e9 - observed_non_gameplay_egress`, not that amount divided by raw 65-byte inputs. A maximum 1 MiB replay downloaded on three verifier attempts consumes 3 MiB. One thousand such jobs require **3,145,728,000 bytes**, before other API responses.
+
+The verifier's two empty slots poll every two seconds: up to **86,400 empty claims/day, 2,678,400/31 days**, plus renewals/finishes. A 60-second job can renew six times; three attempts cap execution at 180 seconds/job. Preserve its dedicated `fbwg_verifier` login, verified TLS, isolated threads and resource caps. Do not move it to a paid request service labeled free.
+
+A 1 MiB per-replay limit is not a global queue cap. A hypothetical 500,000,000-byte database ceiling minus the observed 13,233,299 bytes leaves 486,766,701 bytes: only **464 full-size replays** before metadata/indexes/MVCC/other growth. Finishing clears payloads but retains attempt/result rows; indefinite retention is unbounded. Keep engine acceptance disabled until queue admission, a compatible verifier and retention are available. At 75% database use stop optional ranked admissions. Do not erase historical results or ordinary progress merely to fit a calculation. Profiles/friendships/progress also require bounded user admission as storage grows. These operational thresholds do not imply that account settings or code already enforce them.
+
+Read-only security advisors reported 10 RLS/no-policy notices for deliberately private/system tables and 28 signed-in SECURITY DEFINER notices for existing controlled APIs. Retain caller/ownership checks; blanket revocation would break the security model. Leaked-password protection is unavailable on Free; no paid upgrade was proposed to silence its warning. Existing RLS/MFA/friendship/replay tests remain gates. [Advisor guidance](https://supabase.com/docs/guides/database/database-linter?lint=0029_authenticated_security_definer_function_executable)
+
+## CI, optional Oracle, and remaining certification
+
+Standard GitHub runners are free for public repositories. This repository was verified **private**. Private GitHub Free includes 2,000 minutes/month, 500 MB artifact storage and 10 GB cache/repository. Nightly job timeouts total 130 minutes, or **4,030 minutes/31 days**, before push jobs/probes/retries. With the new 2-minute keepalive deadline, nightly plus daily keepalive are bounded at **4,092 minutes/31 days**; add at most 20 minutes per fast run, 25 per deployed run and 20 per manual play-release run. This cannot fit the private Free allowance in the worst case. The new job conditions disable private hosted CI without the explicit zero-dollar-budget attestation; run checks locally otherwise. Larger runners remain excluded. Keep cache within the included amount; do not upload large artifacts. No payment method blocks excess usage; unbounded usage with a payment method is unacceptable. [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+
+The daily Supabase liveness workflow adds 31 small requests/month; it does not guarantee uptime or prevent policy changes. CI is not required to serve already-deployed files. Account spending controls were not changed by this audit.
+
+Oracle is **optional only**. Current Always Free: 1,500 A1 OCPU-hours and 9,000 GB-hours/month (2 OCPUs/12 GB), 200 GB block storage, 10 TB outbound/month, home region only. Fixed 2-OCPU/12-GB operation for 31 days uses **1,488 OCPU-hours, 8,928 GB-hours**. Only eligible resources on a non-upgraded Always Free tenancy qualify; no trial credits. Capacity can be unavailable; idle instances can be reclaimed. Optional coturn/relay/verifier loss must not block core play. No Oracle resource was created or made required. [Oracle limits](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
+
+Cloudflare TURN, rented TURN, Cloud Run with billing, paid Render workers, paid-capable object storage, paid SMTP and purchased domains are excluded from the required architecture. Their initial allowances are not this policy.
+
+Before certifying a release, retain final asset inventory, actual benchmark artifacts, Supabase Free evidence, Cloudflare Free/no-paid-service evidence, SMTP verification or use of existing OAuth, and GitHub zero-dollar controls if private hosted CI is used. Exercise quota rejection/failover on actual deployed origins. No source-only document can truthfully substitute for these account and deployment checks.

@@ -48,10 +48,10 @@ hop of latency and needs no TURN server.
 
 ## Accounts
 
-Sign-up needs a confirmed email address, email verification is required, and two-factor is
-optional. The gate is not on sign-up — it cannot be, that is Supabase Auth
-running in a browser — but on `claim_username`, which redeems the code and
-creates the profile in one statement. An account with no profile cannot be
+Sign-up needs a confirmed email address, and two-factor is optional. Google
+sign-in satisfies verification without requiring an outbound email provider.
+`claim_username` creates the profile after verification; invite codes have been
+removed. An account with no profile cannot be
 found, befriended, or reach a row of anybody else's data: migration `0013` makes
 that true by requiring a profile in every policy and every function, where it
 had previously been an argument about what a profile is used for. It was not
@@ -123,19 +123,22 @@ build fails, which is a green check for a deployment that never happened.
 
 ## Deploying
 
-Static, on Vercel: `npm run build`, output `dist/` at the repository root (the
-default the deploy already looks in), no server in the request
-path. Only `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` reach the browser — the
+The selected zero-cost destination is **Cloudflare Workers Static Assets Free**:
+[fireboy-and-watergirl.sjayan009.workers.dev](https://fireboy-and-watergirl.sjayan009.workers.dev).
+Run `npm run build`, then upload only repository-root `dist/` using the
+static-file uploader or `npx wrangler@4.131.1 deploy` with `wrangler.json`.
+The build generates security/cache headers and refuses more than 20,000 files,
+assets over 25 MiB, Worker scripts, resource bindings or build hooks. Pages Free
+can also serve this artifact. See [the deployment runbook](docs/free-hosting.md).
+Only `SUPABASE_URL` and
+`SUPABASE_PUBLISHABLE_KEY` reach the browser — the
 secret key and the database password stay in `.env.local`, which is gitignored
 and must remain so.
 
-Two things live in the Supabase dashboard and cannot be set from here: the
-**redirect allow-list** must include the deployed origin, and **custom SMTP**
-must be configured, because the built-in sender is a few messages an hour and is
-documented as being for testing. Both are done. The allow-list is proved on
-every release -- `test:deployed` signs a real account in against the live
-origin, which would fail without it. That an email *arrives* is still the one
-thing nothing here can check.
+The Supabase **redirect allow-list** must include the deployed origin. Google
+OAuth is the default zero-mail-provider path. Public password signup/reset also
+requires SMTP whose free plan and hard send limit must be verified separately;
+the built-in sender is testing-only. Email confirmation remains required.
 
 CI needs five repository secrets: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`,
 `SUPABASE_SECRET_KEY`, `SUPABASE_DB_PASSWORD` and `SUPABASE_PROJECT_REF`. The
@@ -144,9 +147,23 @@ reach the database tier and `deployed` can sign an account in rather than
 stopping after the headers. The secret key stored there should be one minted
 for CI and used nowhere else, so that revoking it costs nobody their afternoon.
 
-`ICE_SERVERS` is optional: a JSON array of `RTCIceServer`, for adding TURN
-without a release. Unset, a pair gets two public STUN servers and the ones whose
-NAT refuses to be discovered relay over their own Realtime channel instead.
+`ICE_SERVERS` is optional and accepts **STUN only**. The build rejects TURN URLs
+and credentials. Unset, a pair gets two public STUN servers and the ones whose
+NAT refuses to be discovered relay over their own private Realtime channel.
+
+Read [FREE_TIER_BUDGET.md](FREE_TIER_BUDGET.md) before deploying. Quota exhaustion
+must restrict service, never trigger a paid upgrade. Private-repository Actions
+jobs default to disabled; set `FBWG_ZERO_DOLLAR_ACTIONS=1` only after verifying
+the account's $0 stop-spend budget. Local tests do not need hosted CI. The
+optional verifier may be unavailable while ordinary play and progress continue;
+never accept unverified leaderboard scores to work around that.
+
+The [before/after benchmark table](BENCHMARKS.md) records browser frame/render
+times, real visual position updates, input latency proxies, CPU/heap and relay
+traffic. The authoritative simulation remains 26 Hz; renderer-only snapshots
+present motion at the display callback rate. Local visual extrapolation is
+bounded and adds no simulation-tick input delay. Run `npm run bench:render`
+and `npm run test:network-conditions` to reproduce the measurements/tests.
 
 ## A note on the art
 

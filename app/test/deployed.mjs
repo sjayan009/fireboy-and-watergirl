@@ -15,12 +15,13 @@
  * and it asserts things about a deployment that may not exist yet. Run it after
  * a deploy.
  *
- *   node app/test/deployed.mjs [url]
+ *   node app/test/deployed.mjs [url] [--static-only]
+ * `--static-only` performs read-only CDN checks without creating an account.
  */
 import { env } from "../../supabase/connect.mjs";
 
-const SITE = (process.argv[2] ?? process.env.FBWG_URL ??
-              "https://fireboy-and-watergirl-official.vercel.app")
+const SITE = (process.argv.slice(2).find(arg => !arg.startsWith("--")) ?? process.env.FBWG_URL ??
+              "https://fireboy-and-watergirl.sjayan009.workers.dev")
   .replace(/\/+$/, "");
 
 /**
@@ -127,6 +128,11 @@ const hashRoute = await fetch(`${SITE}/#/signup`);
 check("a hash route is just the page", hashRoute.status, 200);
 
 // ---------------------------------------------------------------- the app
+
+if (process.argv.includes("--static-only")) {
+  console.log("\nRead-only CDN checks complete; account sign-in/playback intentionally not run.");
+  process.exit(failures === 0 ? 0 : 1);
+}
 
 /**
  * Everything above needs no credentials. Everything below makes a throwaway

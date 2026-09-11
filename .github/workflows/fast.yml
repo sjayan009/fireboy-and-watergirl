@@ -34,7 +34,10 @@ permissions:
 
 jobs:
   test:
+    # Standard public runners are free. Private repos require a verified $0 stop-spend budget.
+    if: github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       # Pinned to a commit rather than to a tag. `@v5` is a moving reference
       # somebody else can repoint, which for an action that runs before any of

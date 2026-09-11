@@ -1569,6 +1569,11 @@ export class NetSession {
   /** How much of the level has been simulated, in seconds of play. */
   get elapsed(): number { return this.frame * this.timeStep; }
 
+  /** Renderer-only progress through the fixed step; never changes simulation time. */
+  get interpolationAlpha(): number {
+    return Math.max(0, Math.min(1, this.acc / this.timeStep));
+  }
+
   /**
    * Bytes held by the snapshot, so a test can assert what "one snapshot, not a
    * ring" is supposed to mean: a figure that does not grow with the length of

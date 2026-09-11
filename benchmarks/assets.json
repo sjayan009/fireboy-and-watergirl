@@ -1,0 +1,29 @@
+{
+  "recordedAt": "2026-09-11T18:41:05.935Z",
+  "browser": "151.0.7922.34",
+  "preparationMs": 476.80000001192093,
+  "decodePromiseMs": {
+    "count": 463,
+    "p50": 0.30000001192092896,
+    "p95": 1.800000011920929,
+    "p99": 8.900000005960464,
+    "max": 9.900000005960464
+  },
+  "peakDecodePromises": 9,
+  "resourceDurationMs": {
+    "count": 471,
+    "p50": 6.0999999940395355,
+    "p95": 10.099999994039536,
+    "p99": 11.400000005960464,
+    "max": 13.900000005960464
+  },
+  "resourceRequests": 471,
+  "transferredBytes": 4700203,
+  "missing": 0,
+  "submittedRectangles": {
+    "drawCalls": 66,
+    "stageAreaInScreens": 7.305698089717171,
+    "offscreenAreaInScreens": 2.2708020271242297
+  },
+  "scope": "Cold adventure1 source assets on local HTTP, headless Chromium. Decode promise latency includes scheduling, not isolated decoder CPU. Submitted rectangle areas include transparency and ignore clip bounds; not GPU fragment overdraw or VRAM. Separate from timed frame benchmark."
+}

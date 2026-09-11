@@ -1,86 +1,121 @@
-# Free hosting decision — 4 September 2026
+# Free hosting decision — 11 September 2026
 
-The release must not create paid resources. No provider has been upgraded and
-the paid Render blueprint was removed. The Docker verifier can run on an
-existing free Linux VM with `docker compose -f worker/compose.yaml up -d --build`.
-This command requires a provisioned machine and the scoped database credential;
-it does not create either one. The worker exposes no inbound ports.
+Use **Cloudflare Workers Static Assets Free for static files, Supabase Free for account/control
+and persistence, and direct WebRTC for gameplay**. No trials, paid plans,
+automatic upgrades, paid TURN, or usage that can generate overage are permitted.
+When a free limit is reached, reduce availability; never purchase capacity.
 
-| Component | Free option | Relevant limit / qualification |
-| --- | --- | --- |
-| Static app and assets | Cloudflare Pages Free | 500 builds/month, 20,000 files/site, 25 MiB/file. Confirm the built asset inventory before publishing. |
-| Accounts, progress, verification queue | Existing Supabase Free project `hkuhkzcnwircqcmxurxi` | 200 Realtime connections, 100 events/sec, 20 presence messages/sec, 2 million Realtime messages/month. Keep it Free. |
-| Replay verifier | Oracle Always Free A1 Linux VM | Current documentation lists 2 OCPUs and 12 GB total. Provision only resources labeled Always Free in the home region. Capacity can be unavailable and idle VMs can be reclaimed. Container compatibility and actual queue latency still need validation on the chosen VM. |
-| Alternative relay | Cloudflare Durable Objects Free | 100,000 request units/day, 13,000 GB-s/day. Incoming WebSocket messages use a 20:1 request ratio; outgoing messages are not charged. Requires a new authenticated relay integration and hibernation. This is a candidate, not an implemented replacement. |
+[FREE_TIER_BUDGET.md](../FREE_TIER_BUDGET.md) contains current official limits,
+daily/monthly calculations, actual audit observations, and remaining release
+conditions. It supersedes earlier capacity estimates in this repository.
 
-Sources: [Pages limits](https://developers.cloudflare.com/pages/platform/limits/),
-[Supabase Realtime limits](https://supabase.com/docs/guides/realtime/limits),
-[Supabase pricing](https://supabase.com/docs/guides/realtime/pricing),
-[Oracle Always Free](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm),
-[Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
+The connected Supabase organization was verified as `free` during this audit.
+Its database was 13,233,299 bytes with zero accepting verifier versions, zero
+ranked attempts, and no public tables without RLS. The existing linked Vercel
+project is on a verified Hobby team. On the supplied Workers destination, the
+Cloudflare dashboard shows **Free — $0 — Current plan**, and confirms that the
+Worker has only static assets (no runtime variables, bindings or triggers).
+GitHub billing settings and the SMTP service's pricing remain external checks.
 
-## Capacity is an acceptance gate
+## Static delivery
 
-With 100 players, one batched relay message per player every 230 ms is about
-435 sends/second. Counting one recipient per send gives about 870 Supabase
-events/second before presence, control traffic, or spectators. One hour would
-use about 3.13 million events. This estimate alone exceeds both the existing
-Free rate and monthly allowance. Actual transport sends must be measured;
-the release cannot claim the 100-player all-relay target on Supabase Free.
+The user-selected destination is
+`https://fireboy-and-watergirl.sjayan009.workers.dev`. Its account was verified
+on Workers Free. Static asset requests/storage are free, with no Worker script
+required. `wrangler.json` targets this existing account and service; the build
+rejects runtime scripts, resource bindings, environments and build hooks.
+[Static asset billing](https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/)
 
-230 ms is the interval a pair starts on, not the only one they can be on. A
-pair whose measured input age eats more than 60% of its rollback window is
-moved to 115 ms until it drops back under 40% -- because that wait is spent
-before a packet has left the browser, and two people far enough apart are
-stalled by the arithmetic rather than by their connection. Such a pair sends
-about twice as much, so the figure above is a floor: the worst case is an
-all-relay population that is also all struggling, at roughly 870 sends/second.
-Measure the real mix before sizing anything on either number.
+Build with `npm ci` and `npm run build`, then publish only repository-root
+`dist/` through the service's **New deployment → folder** uploader, or run
+`npx wrangler@4.131.1 deploy --dry-run` followed by
+`npx wrangler@4.131.1 deploy` when Wrangler is authenticated. CLI deployment
+uses `wrangler.json`; the browser uploader only accepts static assets and does
+not read that local configuration. Always verify headers and missing-file 404s
+after either method. Do not select an upgrade or add a script to serve files.
 
-Two things changed how often that is reached. The rollback window went from 14
-frames to 30 -- 538 ms to 1154 ms -- because the input redundancy it is capped
-by went from 16 frames to 32, which costs sixteen bytes a packet and about six
-tenths of a millisecond of re-simulation in the worst case measured. And a pair
-that still does not fit buys frames of window with **input delay** before it
-buys them with messages, because a frame of delay costs 38.5 ms of feel and no
-quota at all. The 115 ms interval is now the last lever rather than the first,
-which should make an all-relay population cheaper than the floor above rather
-than dearer.
+The build generates `_headers`, understood by Workers Static Assets and Pages,
+and rejects output exceeding 20,000 files, 25 MiB/file, or containing a Pages
+Function/Worker entry point. No object storage is required. Only the Supabase
+URL and publishable key belong in the browser. The current Git build is linked
+to `main`, with `npm run build` and a static `wrangler deploy --assets=./dist`
+command. Local changes must reach the remote repository before Git builds use
+them; a dashboard upload does not update Git.
 
-The same workload on Durable Objects would use about 78,261 incoming request
-units/hour before connection setup, signalling and spectators. That leaves
-less than the required 25% daily headroom. Moving the relay alone is therefore
-insufficient to certify the planned test. A separately measured batching change
-or a relay on the free VM is needed. Hibernation must be used for a Durable
-Objects implementation; permanently active per-match objects can also exceed
-the duration allowance. These are estimates, not results of a load test.
+Set `FBWG_URL` for deployed checks. Builds recognize `WORKERS_CI_COMMIT_SHA`,
+then `CF_PAGES_COMMIT_SHA`, `VERCEL_GIT_COMMIT_SHA` and `GITHUB_SHA`; an untagged
+local build says `local`. Validate local uploads against their asset hashes,
+since that marker does not identify an uncommitted working tree.
 
-Free resources can support a bounded launch. They do not provide an unlimited
-100-player service or a production availability guarantee. Do not spread the
-same workload across duplicate free accounts to bypass quotas. Keep admission
-and error states honest when the provider has no capacity.
+Supabase's Site URL and redirect allow-list were corrected with user approval
+to the Workers HTTPS origin and `https://fireboy-and-watergirl.sjayan009.workers.dev/**`.
+The app uses the origin root with optional intent query parameters.
 
-## Options excluded from a strict $0 default
+The inspected final artifact contained 2,496 files. Recount every final
+artifact. WebP/audio conversion already
+exists. If assets grow, combine them and validate rendering before considering
+additional infrastructure. Workers Free also permits 20,000 assets/version
+and 25 MiB/asset. Pages Free remains a compatible alternative.
+[Workers limits](https://developers.cloudflare.com/workers/platform/limits/#static-assets),
+[Pages limits](https://developers.cloudflare.com/pages/platform/limits/)
 
-Render offers no free background worker. Its free web services sleep after
-15 minutes without inbound traffic and are not a substitute for this private,
-continuously polling verifier. [Render free services](https://render.com/docs/free)
+Workers Builds Free includes 3,000 build minutes/month, one concurrent build
+and a 20-minute timeout. Three builds/day at the timeout use at most
+`3 × 31 × 20 = 1,860` minutes/month; four use 2,480, above a 75% planning reserve.
+Count branch builds, retries and all other account projects too. Local builds
+and direct uploads consume **zero hosted build minutes**. Exhaustion must
+delay new builds; serving the last static artifact requires no build minutes.
+Do not confuse this with Pages' 500-build monthly quota.
+[Workers Builds limits](https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/)
 
-Cloud Run includes request-based monthly allowances of 180,000 vCPU-seconds,
-360,000 GiB-seconds and 2 million requests, but usage beyond allowances is billed.
-An always-running two-slot worker would need an event-driven redesign. Its
-free allowance is useful, but is not a hard zero-cost guarantee.
-[Cloud Run pricing](https://cloud.google.com/run/pricing)
+## Bounded relay capacity
 
-## External prerequisites
+The Supabase emergency relay remains available. At 230-ms batching a pair-hour
+costs about 62,609 Realtime units; at 115 ms about 125,217, counting both send
+and recipient. Reserving 25% of 2M monthly messages leaves 23.96 or 11.98
+pair-hours/month before other traffic. Do not promise 100 all-relay players or
+route unbounded DO failover into Supabase.
+[Realtime accounting](https://supabase.com/docs/guides/platform/manage-your-usage/realtime-messages)
 
-A free compute account/VM has not been supplied or provisioned. The Supabase
-project alone cannot host the isolated Node worker. Oracle signup, account
-verification, and accepting its terms require the account owner. No credential
-belongs in source control or in a browser build. A private, limited verifier
-login must be created by an administrator after the additive migration passes
-review, then supplied only to the worker.
+An optional Cloudflare Durable Object binary WebSocket relay is evaluated,
+not deployed. Free offers 100k request units/day and 13k GB-s/day; incoming WS
+messages use 20:1 metering. Immediate 26-Hz forwarding consumes 9,360 units per
+pair-hour, before setup/probes/control. A 75% planning threshold permits less
+than eight pair-hours/day after overhead. Authenticated global admission,
+Hibernation, jointly measured region selection and tested failover are required.
+A paid Workers account's included allowance does not qualify.
+[DO pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)
 
-Production remains gated on the real browser-pair flow, deployed database and
-worker checks, and a measured one-hour capacity run with 25% headroom. The
-reproducible local checks do not stand in for these external gates.
+If both relays lack capacity and P2P fails, show unavailable/retry status and
+preserve progress. Financial safety does not mean infinite capacity or uptime.
+The default build accepts STUN only; paid TURN cannot be added by quietly
+changing the ICE environment variable.
+
+## Verification, email and CI
+
+The deterministic replay verifier stays in `worker/`. It can run on an existing
+suitable machine with the scoped database credential; Docker Compose provisions
+neither a machine nor a paid resource. Core play/progress do not require it.
+Keep ranked engine acceptance off without a compatible verifier, bounded queue
+and retention. Never replace verification with trusting client-submitted scores.
+
+Oracle Always Free may optionally host coturn, a relay or the verifier. It is
+home-region-only, can lack capacity and can reclaim idle instances. No Oracle
+machine is required or provisioned. Only Always Free resources qualify; trial
+credits and upgrading a tenancy are excluded.
+[Oracle limits](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
+
+Google OAuth already works as an email-free sign-in route. Email sign-up/reset
+requires a verified non-expiring $0 SMTP contract. Supabase's default sender is
+for testing and restricted to team addresses. Keep confirmation/MFA checks.
+[SMTP limits](https://supabase.com/docs/guides/auth/auth-smtp)
+
+Hosted CI now runs for public repositories or when the owner has set
+`FBWG_ZERO_DOLLAR_ACTIONS=1` after verifying account-level zero-dollar stop-spend
+controls. Private CI otherwise remains disabled; checks can run locally.
+The variable is an operator attestation, not an API-enforced billing setting.
+[GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+
+The budget records unresolved account/deployment checks. No provider promises
+an unchanged free offer forever. If terms change, disable or migrate the
+integration while retaining the $0 constraint.
