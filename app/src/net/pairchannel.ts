@@ -512,6 +512,12 @@ export class PairChannel {
     const channel = this.live;
     /** Which subscription this is, so a discarded one can be ignored. */
     const generation = ++this.generation;
+    // A new subscription has heard nothing from anybody and has said nothing
+    // to them. Carrying either across would let an activity announce go out to
+    // a channel that has not been told who is on it, or let the arrival edge
+    // conclude that a channel built one second ago already knows where we are.
+    this.occupied = false;
+    this.announced = undefined;
 
     /** Parse, then deliver -- or count it against the peer and drop it. */
     const on = <T>(event: string, parse: (p: unknown) => T | null,
@@ -593,6 +599,7 @@ export class PairChannel {
           if (one) all.push(one);
         }
       }
+      if (generation === pair.generation) pair.occupancy(all);
       for (const fn of pair.presenceHandlers) fn(all);
     };
     channel.on("presence", { event: "sync" }, sync);
@@ -714,11 +721,11 @@ export class PairChannel {
   /**
    * Say what we are doing now.
    *
-   * Two things stand between this and the server: saying the same thing twice
-   * is not said at all, and what is left is spaced out. See `PRESENCE_MS` --
-   * the sixth presence call in thirty seconds does not fail, it takes the
-   * channel down, and a pair going from level to level spends five without
-   * doing anything unusual.
+   * Three things stand between this and the server: saying the same thing
+   * twice is not said at all, nobody is told when nobody is listening, and
+   * what is left is spaced out. See `PRESENCE_MS` -- the sixth presence call
+   * in thirty seconds does not fail, it takes the channel down, and a pair
+   * going from level to level spends five without doing anything unusual.
    *
    * Returns as soon as the intention is recorded rather than when it reaches
    * the server, because the only callers are a screen saying what it is doing
@@ -729,6 +736,64 @@ export class PairChannel {
     this.activity = activity;
     this.announce();
   }
+
+  /**
+   * Whether anybody is on the other end of this channel.
+   *
+   * The lobby holds one channel per accepted friend and `Lobby.setActivity`
+   * tells every one of them at once, so entering a level announced to fifty
+   * channels whether or not a soul was listening on any of them. Realtime
+   * meters a presence call when it is sent and again for each subscriber it
+   * reaches, and the cost is that fan-out times the number of transitions the
+   * play loop makes -- which is the largest thing this project spends its
+   * message allowance on, well before a relayed game is in the picture.
+   *
+   * So an activity change is announced only where somebody is there to read
+   * it. The rest is not deferred or queued, it is simply not said: the value
+   * is still kept in `activity`, and the announce that matters happens on the
+   * edge below, when a friend actually arrives.
+   */
+  private occupied = false;
+
+  /**
+   * Recompute occupancy, and catch a friend up when they arrive.
+   *
+   * The false-to-true edge is what makes the gate safe. Without it a friend
+   * joining would find a channel whose other member had gone quiet several
+   * transitions ago and would show them as merely `online` for as long as the
+   * activity held -- so arrival is itself the trigger to say where we are.
+   *
+   * Their arrival is a `join`, which `sync` already listens for, and the
+   * announce it causes is spaced by the same `PRESENCE_MS` budget as any
+   * other: a friend reconnecting in a loop cannot spend the channel's
+   * allowance on our behalf.
+   */
+  private occupancy(all: Presence[]): void {
+    const was = this.occupied;
+    this.occupied = all.some((p) => p.userId !== this.me.userId);
+    if (this.occupied && !was && this.announced !== this.activity) this.announce();
+  }
+
+  /**
+   * The activity this subscription has actually sent, as distinct from the one
+   * we hold.
+   *
+   * Without it the arrival edge double-announces on the ordinary path. The
+   * join reply arrives before the presence state, so `SUBSCRIBED` fires
+   * `announceNow` and the state that follows it is the friend who was already
+   * there -- a false-to-true edge, immediately after an announce that said
+   * exactly what the edge would say again.
+   *
+   * Comparing against what went out settles that, and one other case for
+   * free: a friend who drops and comes back needs nothing re-sent, because
+   * the server holds our presence for as long as we are tracked and hands
+   * them the whole state when they rejoin.
+   *
+   * `undefined` rather than `null` for "nothing sent yet", because `null` is
+   * a legitimate activity to have announced -- it is what `track` sends
+   * before any screen has said what it is doing.
+   */
+  private announced: Activity | null | undefined = undefined;
 
   /**
    * What we last said we were doing, so a rejoin can say it again.
@@ -749,9 +814,17 @@ export class PairChannel {
    * Trailing edge, and deliberately not a queue: what is owed is always just
    * the latest activity, so a pair that starts and finishes three levels
    * inside the window announces the state they ended in, once.
+   *
+   * `force` is for the one announce that cannot wait for somebody to be
+   * listening: the first after a subscription, which is how the other side
+   * discovers us at all. If both members held their announce until the other
+   * appeared, two friends coming online together would sit invisible to each
+   * other forever -- the gate has to be opened by somebody, and it is opened
+   * by whoever joins.
    */
-  private announce(): void {
+  private announce(force = false): void {
     if (this.closing || this.presenceTimer !== null) return;
+    if (!force && !this.occupied) return;
     const since = Date.now() - this.lastPresence;
     if (since >= PRESENCE_MS) { void this.track(); return; }
     this.presenceTimer = setTimeout(() => {
@@ -770,15 +843,19 @@ export class PairChannel {
     if (this.presenceTimer !== null) clearTimeout(this.presenceTimer);
     this.presenceTimer = null;
     this.lastPresence = 0;
-    this.announce();
+    this.announce(true);
   }
 
   private async track(): Promise<void> {
     if (this.closing) return;
     this.lastPresence = Date.now();
+    const sending = this.activity;
     try {
-      await this.live.track(this.activity
-        ? { ...this.me, activity: this.activity } : this.me);
+      await this.live.track(sending ? { ...this.me, activity: sending } : this.me);
+      // Only once it has gone. A failed call has told the channel nothing, and
+      // recording it as sent would let the arrival edge skip the announce that
+      // is meant to repair exactly this.
+      this.announced = sending;
     } catch (e) {
       console.warn("could not announce presence:", e);
     }
