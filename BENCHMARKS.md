@@ -2,6 +2,8 @@
 
 Recorded 2026-09-11. These are actual local measurements with the explicit scopes below; they are not claims about all clients or global Internet routes.
 
+Follow-up: [repeated smoothness verification](docs/benchmarks/SMOOTHNESS_VERIFICATION.md) adds three new before/after comparisons, an actual deployed-level measurement and rerun simulation/input checks. It confirms improvement while documenting dropped frames under the later machine conditions; the original measurements below remain unchanged.
+
 ## Browser renderer: before / after
 
 Same Intel(R) Core(TM) Ultra 9 185H, Windows 10.0.26200, Chromium 151.0.7922.34 headless, Node v22.17.1. Each sample is approximately 20 seconds of adventure level 1 with alternating movement every 120 ms, identical assets and instrumentation. The baseline is the compiled original at 7c399f8603918997197785957bcb05b86c72b89f; the after build includes the working-tree changes in this audit. Both workloads remain alive, with no missing art or page exceptions.

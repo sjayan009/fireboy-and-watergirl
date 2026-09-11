@@ -1,0 +1,111 @@
+{
+  "label": "safe-before-3",
+  "recordedAt": "2026-09-11T19:58:34.979Z",
+  "commit": "60ce7769b91690da50250eecbcdb0a28cfce2839",
+  "environment": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "cpu": "Intel(R) Core(TM) Ultra 9 185H",
+    "logicalCpus": 22,
+    "node": "v22.17.1",
+    "browser": "151.0.7922.34",
+    "headless": true,
+    "engine": "C:\\Users\\jayan\\GeorgiaTech\\Research\\fireboy-and-watergirl\\.cache\\performance\\baseline-engine",
+    "assets": "C:\\Users\\jayan\\GeorgiaTech\\Research\\fireboy-and-watergirl\\extracted\\assets"
+  },
+  "preparation": {
+    "prepareMs": 1738.9000000059605,
+    "missing": 0
+  },
+  "elapsed": 20.098900000005962,
+  "frameMs": {
+    "n": 210,
+    "p50": 100,
+    "p95": 100.10000000000036,
+    "p99": 116.79999999999927,
+    "max": 349.9000000000001
+  },
+  "renderMs": {
+    "n": 211,
+    "p50": 31.5,
+    "p95": 35.5,
+    "p99": 39.70000001788139,
+    "max": 65.5
+  },
+  "inputToRenderMs": {
+    "n": 92,
+    "p50": 97.2000000178814,
+    "p95": 197,
+    "p99": 348.19999998807907,
+    "max": 348.19999998807907
+  },
+  "inputEvents": 166,
+  "inputUnresolved": 74,
+  "renderCallsPerSecond": 10.498086959979771,
+  "distinctVisualUpdatesPerSecond": 10.498086959979771,
+  "localPositionUpdatesPerSecond": 4.77638079695762,
+  "drawCalls": {
+    "n": 211,
+    "p50": 431,
+    "p95": 434,
+    "p99": 436,
+    "max": 826
+  },
+  "traversalNodes": {
+    "n": 211,
+    "p50": 447,
+    "p95": 454,
+    "p99": 460,
+    "max": 843
+  },
+  "mainThreadLongTasksMs": {
+    "n": 209,
+    "p50": 94,
+    "p95": 104,
+    "p99": 126,
+    "max": 359
+  },
+  "methodTimes": {
+    "childXform": {
+      "count": 3335,
+      "ms": 9
+    },
+    "drawFiltered": {
+      "count": 844,
+      "ms": 279.3999997973442
+    },
+    "drawMasked": {
+      "count": 633,
+      "ms": 6048.400000691414
+    },
+    "drawText": {
+      "count": 1266,
+      "ms": 29.300000250339508
+    }
+  },
+  "simFrames": 519,
+  "digest": "13eb7b06",
+  "levelEnded": false,
+  "session": null,
+  "heap": {
+    "used": 9216437,
+    "total": 15622213
+  },
+  "taskCpuPercent": 98.9911352383789,
+  "gc": {
+    "count": 22,
+    "totalMs": 39.947,
+    "maxMs": 26.813
+  },
+  "errors": [],
+  "limitations": [
+    "Native headless rAF cadence, not a physical high-refresh monitor",
+    "Input-to-render callback proxy excludes OS input and display scanout",
+    "Unresolved inputs include events replaced before movement or blocked by collision; reported separately",
+    "Canvas instrumentation and trace overhead included equally in both variants",
+    "GC trace durations are collector activity, not necessarily all stop-the-world time",
+    "CPU is Chromium TaskDuration/wall time including measurement setup/teardown; no process RSS meter",
+    "Solo renderer workload; network results are separate"
+  ],
+  "steering": "position"
+}
