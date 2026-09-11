@@ -43,6 +43,25 @@ const QUICK = process.argv.includes("--quick");
 const LATENCY = QUICK ? [0, 75] : [0, 20, 75, 150];
 const JITTER = QUICK ? [0] : [0, 30];
 const LOSS = QUICK ? [0, 0.05] : [0, 0.05, 0.2];
+/**
+ * How long the sender may sit on a packet before it goes.
+ *
+ * The relay batches, and for a relayed pair that wait is most of the delay
+ * budget -- 230 ms out of what used to be a 538 ms window. The matrix modelled
+ * network latency alone until now, so every cell it called healthy was
+ * answering a question no relayed pair was asking.
+ */
+const BATCH = QUICK ? [0] : [0, 230];
+/**
+ * Clock ratios between the two peers.
+ *
+ * Two browsers on two machines do not advance time together, and until the
+ * harness could say so this was not merely untested but inexpressible. See
+ * `drifttest.ts` for the dedicated version; here it is one more axis, so that
+ * every OTHER thing the matrix sweeps is also swept against a pair whose
+ * clocks disagree.
+ */
+const CLOCKS: [number, number][] = QUICK ? [[1, 1]] : [[1, 1], [1, 1.03]];
 const MODES: [string, boolean][] = [["lockstep", false], ["rollback", true]];
 const PATTERNS: [string, (s: Slot, f: number) => number][] = QUICK
   ? [["held", held], ["twitchy", twitchy]]
@@ -56,13 +75,15 @@ let worstDepth = 0;
 let seed = 1;
 
 console.log(`${LATENCY.length * JITTER.length * LOSS.length * MODES.length *
-  PATTERNS.length} combinations, ${FRAMES} frames each`);
+  PATTERNS.length * BATCH.length * CLOCKS.length} combinations, ${FRAMES} frames each`);
 
 for (const [modeName, rollback] of MODES) {
   console.log(`\n${modeName}`);
   for (const latency of LATENCY) {
     for (const jitter of JITTER) {
       for (const loss of LOSS) {
+       for (const batch of BATCH) {
+        for (const clocks of CLOCKS) {
         const notes: string[] = [];
         let bad = 0;
         let corrections = 0;
@@ -70,9 +91,12 @@ for (const [modeName, rollback] of MODES) {
         let deepest = 0;
         for (const [patternName, input] of PATTERNS) {
           const link = new Link(latency, jitter, loss, seed++);
-          const peers = pair(link, { rollback });
+          link.batchMs = batch;
+          // Time sync is a rollback mechanism: under lockstep a peer cannot run
+          // ahead in the first place, so there is no advantage to give back.
+          const peers = pair(link, { rollback, timeSync: rollback });
           start(link, peers);
-          run(link, peers, FRAMES, input);
+          run(link, peers, FRAMES, input, 0, { clocks });
           converge(link, peers);
           cells++;
 
@@ -114,12 +138,16 @@ for (const [modeName, rollback] of MODES) {
         // here would catch, and a number somebody reads will.
         const label = `rtt ${String(latency * 2).padStart(3)}ms ` +
                       `jitter ${String(jitter).padStart(2)} ` +
-                      `loss ${String(Math.round(loss * 100)).padStart(2)}%`;
+                      `loss ${String(Math.round(loss * 100)).padStart(2)}% ` +
+                      `batch ${String(batch).padStart(3)} ` +
+                      `clock ${clocks[1].toFixed(2)}`;
         const cost = rollback
           ? `  ${corrections} corrections, ${captures} snapshots, deepest ${deepest}`
           : "";
         console.log(`  ${bad === 0 ? "ok  " : "FAIL"} ${label}${cost}` +
                     (notes.length ? "\n       " + notes.join("\n       ") : ""));
+        }
+       }
       }
     }
   }

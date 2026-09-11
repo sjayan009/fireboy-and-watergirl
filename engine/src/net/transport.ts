@@ -39,6 +39,30 @@ export interface Transport {
   readonly rttMs: number | null;
   /** Wire messages, when the transport exposes a counter. */
   readonly sent?: number;
+  /**
+   * How long this transport may sit on a packet before sending it, in ms.
+   *
+   * Zero for anything that sends as it receives. A batching transport spends
+   * this out of the session's rollback window before a packet has left the
+   * browser at all, which is the difference between a delay budget the session
+   * can reason about and one it is guessing at -- a relayed pair used to spend
+   * 230 ms of a 538 ms window here and nothing above the transport knew.
+   */
+  readonly pacingMs?: number;
+  /**
+   * Trade message rate for latency, for a pair that is actually stalling.
+   *
+   * A transport that batches holds packets for a while so that one message
+   * carries several, and that wait is spent inside the session's rollback
+   * window -- so a pair far enough apart can be stalled by the batching alone.
+   * This asks for the shorter wait, at proportionally more messages.
+   *
+   * Optional, and a no-op wherever there is nothing to trade: a data channel
+   * and a BroadcastChannel send each packet as it arrives and have no dial to
+   * turn. The session never calls it; the page does, because the page is what
+   * knows the pair is suffering and what pays for the messages.
+   */
+  hurry?(on: boolean): void;
   close(): void;
 }
 

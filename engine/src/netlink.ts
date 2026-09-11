@@ -20,6 +20,20 @@ export class Link {
   private handlers: [((d: Uint8Array) => void)?, ((d: Uint8Array) => void)?] = [];
   private now = 0;
   private rng: Rng;
+  /**
+   * How long a packet may wait at the sender before it goes, in ms.
+   *
+   * The relay batches, and until this existed the matrix measured network
+   * latency alone -- so a pair modelled as healthy at 300 ms round trip was in
+   * fact spending another 230 ms in a queue the test could not see. Batching
+   * is where most of a relayed pair's delay budget actually goes, so it is
+   * modelled here rather than reasoned about.
+   */
+  batchMs = 0;
+  /** When each side's current batch will be released. */
+  private batchDue: [number, number] = [0, 0];
+  /** The virtual clock, for a session that wants to measure a round trip. */
+  get nowMs(): number { return this.now; }
   /** Packets handed over, and of those, thrown away. */
   sent = 0;
   dropped = 0;
@@ -40,6 +54,7 @@ export class Link {
     const link = this;
     return {
       get rttMs() { return link.latencyMs * 2; },
+      get pacingMs() { return link.batchMs; },
       send(data: Uint8Array) {
         link.sent++;
         if (link.blackhole?.(data)) { link.dropped++; return; }
@@ -47,11 +62,22 @@ export class Link {
         let payload: Uint8Array | null = data.slice();
         if (link.damage) payload = link.damage(payload);
         if (!payload) { link.dropped++; return; }
+        // Leading edge, then batched -- the same rule `RealtimeTransport` uses,
+        // so the first packet after a quiet moment is not delayed and only the
+        // stream behind it waits.
+        let held = 0;
+        if (link.batchMs > 0) {
+          if (link.now >= link.batchDue[side]) {
+            link.batchDue[side] = link.now + link.batchMs;
+          } else {
+            held = link.batchDue[side] - link.now;
+          }
+        }
         const copies = link.duplicate ? 2 : 1;
         for (let i = 0; i < copies; i++) {
           const jitter = (link.rng.next() * 2 - 1) * link.jitterMs;
           link.queue.push({
-            at: link.now + Math.max(0, link.latencyMs + jitter),
+            at: link.now + held + Math.max(0, link.latencyMs + jitter),
             to: other,
             data: payload.slice(),
           });
@@ -79,6 +105,7 @@ export const STEP_MS = STEP * 1000;
 
 export function pair(link: Link, o: {
   rollback?: boolean; delay?: number;
+  timeSync?: boolean; adaptiveDelay?: boolean;
   onDesync?: (slot: Slot) => void;
 } = {}): [Peer, Peer] {
   const make = (slot: Slot): Peer => {
@@ -87,6 +114,12 @@ export function pair(link: Link, o: {
       slot, host, transport: link.endpoint(slot),
       rollback: o.rollback ?? false,
       delay: o.delay,
+      timeSync: o.timeSync,
+      adaptiveDelay: o.adaptiveDelay,
+      // The link's clock, not the wall clock. A test advances time in fixed
+      // steps and never sleeps, so a session reading `performance.now` would
+      // measure how fast the test ran rather than the link it is modelling.
+      now: () => link.nowMs,
       onDesync: () => o.onDesync?.(slot),
     });
     return { session, host };
@@ -100,16 +133,38 @@ export function start(link: Link, peers: [Peer, Peer],
   link.advance(STEP_MS);
 }
 
+/**
+ * Drive both peers for a while.
+ *
+ * `clocks` is what makes drift expressible at all. Until it existed both peers
+ * were ticked with an identical `STEP` on every iteration, so two machines
+ * running at different speeds -- a slower laptop, a 144 Hz display, a tab the
+ * browser throttled, a peer that stalled and discarded the time it owed -- were
+ * not merely untested but impossible to write a test for. Every one of the
+ * matrix's cells passed because the one thing that goes wrong in the field
+ * could not happen in the harness.
+ *
+ * `hitch` is the other half: a peer that simply stops for a while, which is
+ * what a backgrounded tab or a long garbage collection looks like from the
+ * other end.
+ */
 export function run(link: Link, peers: [Peer, Peer], frames: number,
                     input: (slot: Slot, frame: number) => number,
-                    from = 0): void {
+                    from = 0,
+                    o: {
+                      clocks?: [number, number];
+                      hitch?: (slot: Slot, i: number) => boolean;
+                    } = {}): void {
+  const clocks = o.clocks ?? [1, 1];
   for (let i = 0; i < frames; i++) {
     for (const s of [0, 1] as Slot[]) {
       peers[s].session.setLocalInput(input(s, from + i));
     }
     link.advance(STEP_MS);
-    peers[0].session.tick(STEP);
-    peers[1].session.tick(STEP);
+    for (const s of [0, 1] as Slot[]) {
+      if (o.hitch?.(s, i)) continue;
+      peers[s].session.tick(STEP * clocks[s]);
+    }
   }
 }
 

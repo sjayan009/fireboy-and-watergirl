@@ -18,7 +18,8 @@ if (social) {
 }
 const fixture = {
   peers, fail: "", calls: [] as string[], boardDelay: {} as Record<number,number>,
-  board: [] as {rank:number; a_username:string; b_username:string; best_time_str:string; is_mine:boolean}[],
+  board: [] as {rank:number; a_username:string; b_username:string; medal?:number; best_time_str:string; is_mine:boolean}[],
+  standing: [] as {node:number; rank:number; entries:number}[],
 };
 (window as any).socialFixture = fixture;
 Object.assign(auth(), { stage: "in", user: { id: owner }, profile: { id: owner, username: "Temple explorer" }, session: null });
@@ -26,13 +27,21 @@ Object.assign(auth(), { stage: "in", user: { id: owner }, profile: { id: owner, 
 const chain = (data: unknown) => new Proxy(Promise.resolve({ data, error: null }), {
   get(target, prop) { if (prop === "then") return target.then.bind(target); return () => chain(data); },
 });
-(supabase as any).from = (table: string) => chain(table === "friendships" ? peers.map(p => ({ user_a: owner, user_b: p.id, status: "accepted" })) : table === "profiles" ? peers : []);
+// One row per friend, so the Progress panel's picker has a shared map to read
+// for whichever of them is selected. `readPairProgress` filters on the pair in
+// the query rather than here, and the fixture answers every pair the same way.
+const sharedMap = [
+  { node: 1, medal: 3, best_time_s: 41, best_time_str: "00:41" },
+  { node: 2, medal: 1, best_time_s: 122, best_time_str: "02:02" },
+];
+(supabase as any).from = (table: string) => chain(table === "friendships" ? peers.map(p => ({ user_a: owner, user_b: p.id, status: "accepted" })) : table === "profiles" ? peers : table === "pair_progress" ? sharedMap : []);
 (supabase as any).rpc = async (name: string, args: any = {}) => {
   fixture.calls.push(name);
   if (fixture.fail === name) return {data:null,error:{message:"Test connection interrupted"}};
   if (name === "list_friends") return {data:peers.map(p=>({...p})),error:null};
-  if (name === "verified_leaderboard") {
-    const data = fixture.board.map(r=>({...r, best_time_str: `${args.p_node}:00`}));
+  if (name === "leaderboard_standing") return {data:fixture.standing,error:null};
+  if (name === "leaderboard") {
+    const data = fixture.board.map(r=>({...r, medal: r.medal ?? 3, best_time_str: `${args.p_node}:00`}));
     await new Promise(resolve=>setTimeout(resolve,fixture.boardDelay[args.p_node] ?? 0));
     return {data,error:null};
   }
@@ -45,6 +54,17 @@ const chain = (data: unknown) => new Proxy(Promise.resolve({ data, error: null }
     const existing = peers.find(p=>p.username.toLowerCase() === args.their_username.toLowerCase());
     if (existing?.ourMove) Object.assign(existing,{status:"accepted",ourMove:false,theirMove:false});
     else if (!existing) peers.push({id:`00000000-0000-4000-8000-${String(100+peers.length).padStart(12,"0")}`,username:args.their_username,status:"pending",ourMove:false,theirMove:true,blockedByMe:false});
+    // The FRIENDSHIP row, not an empty array.
+    //
+    // `request_friend` is declared `returns public.friendships`, and `request`
+    // reads `data.user_a` to tell a real answer from the all-null row a name
+    // nobody has comes back as -- so a fixture answering `[]` is a fixture
+    // where every request fails with "No player with that name.", including
+    // the crossed one this file asserts becomes a friendship. That is what it
+    // had been answering since the `user_a` check was added, and the drift was
+    // invisible because the fixture was never taught the new shape.
+    const them = peers.find(p=>p.username.toLowerCase() === args.their_username.toLowerCase())!;
+    return {data:{user_a:owner < them.id ? owner : them.id,user_b:owner < them.id ? them.id : owner,status:them.status,requested_by:owner},error:null};
   }
   return {data:[],error:null};
 };

@@ -27,6 +27,20 @@
  * something like thirty hours. Nothing is dropped: a message carries every
  * packet queued since the last one, so a command still gets through.
  *
+ * ## Except when it costs a great deal
+ *
+ * "Almost nothing" is true of the pairs the window fits. A peer stalls once the
+ * other's input is delayed by more than the rollback window, and for a relayed
+ * pair that delay is this wait PLUS a server hop each way -- so 230 ms of a
+ * 539 ms window is spent before a packet has left the browser, and two people
+ * far enough apart spend the evening watching each other freeze.
+ *
+ * `hurry` is the dial, and it is turned by the page rather than set here,
+ * because the page is what can see a pair stalling and what pays for the
+ * messages. A hurried session sends about twice as many -- the honest price --
+ * and only the sessions that were stalling pay it. Nobody's ordinary evening
+ * costs more than it did.
+ *
  * Verify the quota against current pricing before relying on those numbers.
  */
 import { Transport } from "@engine/net/transport.js";
@@ -67,7 +81,18 @@ export interface ByteChannel {
  * for every frame or `ready` stalls, so packets have to flow whether or not
  * anybody moved. This is the only lever here, and it moves with the window.
  */
-const FLUSH_MS = 230;
+const SLOW_MS = 230;
+/**
+ * The same lever, for a pair the slow one is failing.
+ *
+ * Three frames rather than six. It gives back 115 ms of a 539 ms window, which
+ * is the difference between stalling at a 310 ms round trip and stalling at a
+ * 540 ms one -- and 540 ms is further than two people in one country are from
+ * each other, relay hop included. It is deliberately not lower than this: the
+ * next halving buys 57 ms for another doubling of the bill, and `WatchMirror`
+ * settled on the same 115 ms for the same reason.
+ */
+const FAST_MS = 115;
 
 export class RealtimeTransport implements Transport {
   private queue: string[] = [];
@@ -80,7 +105,34 @@ export class RealtimeTransport implements Transport {
   /** Messages actually put on the wire, so the cost is observable. */
   sent = 0;
 
+  /** How long a queued packet may wait. See `hurry`. */
+  private flushMs = SLOW_MS;
+
   constructor(private readonly pair: ByteChannel) {}
+
+  /**
+   * Spend more messages to stop stalling, or stop spending them.
+   *
+   * A timer already running keeps the deadline it was given: it is at most one
+   * interval away and rescheduling it would delay the very packets this exists
+   * to hurry. Everything queued after this call uses the new one.
+   */
+  hurry(on: boolean): void {
+    this.flushMs = on ? FAST_MS : SLOW_MS;
+  }
+
+  /** What a queued packet is currently waiting, in ms. Read by the readout. */
+  get waitMs(): number { return this.flushMs; }
+
+  /**
+   * The same number, under the name the session asks for it by.
+   *
+   * This is most of a relayed pair's delay budget and nothing above the
+   * transport used to know it existed: the session reasoned about round trips
+   * and the page reasoned about stalls, while 230 ms of a 538 ms window was
+   * being spent in a queue neither could see.
+   */
+  get pacingMs(): number { return this.flushMs; }
 
   /**
    * Realtime gives no round-trip figure, and measuring one would mean sending
@@ -128,12 +180,12 @@ export class RealtimeTransport implements Transport {
     if (this.queue.length >= 32) { this.flush(); return; }
 
     const since = Date.now() - this.lastSent;
-    if (since >= FLUSH_MS) { this.flush(); return; }
+    if (since >= this.flushMs) { this.flush(); return; }
     if (this.timer !== null) return;
     this.timer = setTimeout(() => {
       this.timer = null;
       this.flush();
-    }, FLUSH_MS - since);
+    }, this.flushMs - since);
   }
   private lastInput: { frame: number; slot: number; epoch: number } | null = null;
 
