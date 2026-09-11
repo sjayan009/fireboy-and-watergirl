@@ -15,6 +15,17 @@
   --gold: #f0ce7b; --silver: #ded7cc; --bronze: #d6a686;
   --radius: 10px; --press: 100ms; --settle: 180ms; --ease: cubic-bezier(.22,.61,.36,1);
   /*
+   * Leaving, and the curve that mirrors arriving.
+   *
+   * `--ease-in` is `--ease` reflected through the diagonal -- for
+   * cubic-bezier(x1,y1,x2,y2) the reverse is (1-x2,1-y2,1-x1,1-y1) -- so a
+   * surface goes out along the path it came in on rather than on some other
+   * curve that happens to look similar. Shorter than `--settle` on purpose:
+   * something arriving is asking to be read, and something leaving has already
+   * been read.
+   */
+  --leave: 140ms; --ease-in: cubic-bezier(.64,0,.78,.39);
+  /*
    * The reader's own system font, which is the one typeface already tuned for
    * the screen it is being read on.
    *
@@ -327,6 +338,24 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .banner { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:15px; background:#2b241b; border:1px solid #6b6151; border-radius:10px; font-size:.875rem; box-shadow:0 8px 24px #0003; }
 .banner > span:first-child { flex-basis:100%; }
 .banner .dim { color:var(--dim); }
+/*
+ * It arrives from the edge it lives on, and leaves back through it.
+ *
+ * The banner is pinned to the top of the stage, so down-from-above is the only
+ * direction that reads as the same object coming and going -- in from the top
+ * and out through the bottom would be two different events. Scale travels with
+ * the opacity so a bordered, shadowed card reads as a surface arriving rather
+ * than a rectangle being turned up; 0.98 is small enough that nothing reflows
+ * around it, because `transform` does not.
+ *
+ * Automatic dismissal is the reason this exists at all: a message that takes
+ * itself away after eight seconds and does it by blinking out of existence
+ * looks like a bug in the page.
+ */
+@keyframes banner-arrive { from { opacity:0; transform:translateY(-8px) scale(.98); } to { opacity:1; transform:none; } }
+@keyframes banner-leave  { from { opacity:1; transform:none; } to { opacity:0; transform:translateY(-8px) scale(.98); } }
+.banner:not([hidden]) { animation:banner-arrive var(--settle) var(--ease); }
+.banner.leaving { animation:banner-leave var(--leave) var(--ease-in) forwards; pointer-events:none; }
 .play-toast { position:absolute; z-index:9; bottom:48px; left:50%; transform:translateX(-50%); width:max-content; max-width:calc(100% - 32px); padding:10px 16px; border-radius:8px; color:var(--ink); background:#2a2520; border:1px solid #5b5346; font-size:.875rem; pointer-events:none; box-shadow:0 6px 24px #0004; }
 .play-toast:empty { display:none; }
 
@@ -374,24 +403,66 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .watch-list:empty { display:none; }
 .watch-list { margin-top:22px; }
 
-/* Results are a table, with paired names and quiet, aligned timing. */
-.board-intro { margin-bottom:12px; }
-.board-intro h3 { font-size:1.15rem; line-height:1.3; margin:12px 0 0; }
-.trophy-mark { color:var(--gold); font-size:2rem; }
-.board-filters { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:22px 0; }
+/*
+ * Results are a table, with paired names and quiet, aligned timing.
+ *
+ * The header above them used to cost 124px and the filters another 109, out of
+ * a panel that is 364px tall on a 1024x600 laptop -- so 233px went by before
+ * the first result and the board opened already scrolled past its own title.
+ * The trophy is now ON the heading line at text size, and the sentence about
+ * who is listed sits under the table rather than over it.
+ */
+.board-title { display:flex; align-items:center; gap:8px; font-family:var(--heading); font-size:1.0625rem; line-height:1.3; letter-spacing:-.01em; margin:2px 0 0; }
+.trophy-mark { flex:none; display:flex; color:var(--gold); }
+.board-filters { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:14px 0 4px; }
 .board-filters label { display:grid; gap:6px; }
+.board-footnote { margin-top:14px; padding-top:12px; border-top:1px solid var(--edge); }
+/*
+ * Where you stand, for the pairs the table cannot answer for.
+ *
+ * Outside the top twenty the board is a list of other people, and this is the
+ * one line that is about the reader. Shown only when their own row is absent --
+ * over a highlighted row it would be narrating something already on screen.
+ */
+.board-standing { margin:0 0 10px; font-size:.8125rem; color:var(--water); }
 .leaderboard-table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:.875rem; }
-.leaderboard-table th { text-align:left; color:var(--dim); font-weight:400; font-size:.75rem; padding:8px 4px; border-bottom:1px solid #57503f; }
-.leaderboard-table th:first-child { width:38px; }
-.leaderboard-table th:last-child { width:64px; text-align:right; }
-.leaderboard-table td { padding:13px 4px; border-bottom:1px solid var(--edge); overflow-wrap:anywhere; }
+.leaderboard-table td { padding:11px 4px; border-bottom:1px solid var(--edge); overflow-wrap:anywhere; vertical-align:middle; }
+.col-rank { width:30px; } .col-grade { width:24px; } .col-time { width:56px; }
 .leaderboard-table .mine { background:#2e2820; }
 .leaderboard-table .mine td:first-child { border-left:2px solid var(--water); }
 .pair-and { color:var(--dim); }
-.your-pair { display:block; font-size:.75rem; color:var(--water); padding-top:3px; }
+/*
+ * Inline, not a block underneath.
+ *
+ * As its own line this made the reader's row 88.8px against everybody else's
+ * 47.1px -- a jump in the one column that gets scanned vertically, in aid of
+ * saying something the row's own background already said.
+ */
+.your-pair { font-size:.75rem; color:var(--water); margin-left:6px; white-space:nowrap; }
 .time, .grade, .rank { font-variant-numeric:tabular-nums; }
 .time { text-align:right; white-space:nowrap; }
 .rank { color:var(--dim); }
+/*
+ * Centred in its own column, overriding the Progress row's right-aligned one.
+ *
+ * The grade markup is shared with Progress on purpose -- the same `.g1`/`.g2`/
+ * `.g3` tokens colour the same three grades in both places -- but Progress
+ * pushes it to the end of a flex row and this is the third of four table
+ * columns, with a time hard right after it. Scoped rather than reordered: the
+ * unscoped rule below is the flex one and must keep winning there.
+ */
+.leaderboard-table .grade { text-align:center; min-width:0; }
+/*
+ * The podium, in the three colours this app already awards.
+ *
+ * `medal` has come back from the query since the board was written and was
+ * never drawn -- so the panel that exists to say how well a pair did showed
+ * only how fast. Progress has been colouring the same three tokens the whole
+ * time, which is the other half of why these and not new ones.
+ */
+.leaderboard-table .p1 .rank { color:var(--gold); font-weight:600; }
+.leaderboard-table .p2 .rank { color:var(--silver); font-weight:600; }
+.leaderboard-table .p3 .rank { color:var(--bronze); font-weight:600; }
 .board-empty { border-top:1px solid var(--edge); padding-top:20px; }
 .board-empty h3 { font-size:1rem; line-height:1.4; }
 

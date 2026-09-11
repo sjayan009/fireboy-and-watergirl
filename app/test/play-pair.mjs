@@ -57,19 +57,29 @@ try {
   assert(await left.evaluate(()=>window.__fbwg.view.held.has("ArrowRight")),"muting does not require another click to keep playing");
   await left.keyboard.up("ArrowRight");
   /*
-   * In a match the panel is just "Progress": the pair's map is the one in front
-   * of you, and the app says which mode you are in rather than asking.
+   * A match points the Progress picker at the pair, without renaming the tab.
    *
-   * `textContent`, not `innerText`, and no `waitFor`. Ready peers collapse the
-   * drawer -- the assertion three lines above this is the one that checks it --
-   * so the tab is in the document and not on the screen, and every Playwright
-   * call that insists on visibility would be waiting for something the test
-   * itself just asked for.
+   * Read off the select rather than off the label: the tab is called Progress
+   * either way, on purpose, and what actually changed is which map is on show.
+   * Ready peers collapse the drawer -- the assertion three lines above is the
+   * one that checks it -- so this reads the detached control directly rather
+   * than through a locator that insists on visibility.
    */
   for (const page of [left,right]) {
-    await page.waitForFunction(() =>
-      document.querySelector(".drawer-tabs button[data-panel='progress']")?.textContent === "Progress");
+    // The tab strip is always in the document; the PANEL is only in it while it
+    // is the one showing, so the picker has to be opened to be read.
+    assert.equal(await page.locator(".drawer-tabs button[data-panel='progress']").textContent(),"Progress",
+      "the tab keeps its name, so it stays where you last found it");
+    await page.locator(".tool-leaderboard").click();
+    await page.locator(".drawer-tabs button[data-panel='progress']").click();
+    const whose = page.getByLabel("Whose progress",{exact:true});
+    assert.notEqual(await whose.inputValue(),"","a match points the picker at the pair's map");
+    assert.match(await whose.locator("option:checked").innerText(),/^With /);
+    assert.equal(await page.locator("#drawer-title").innerText(),"Progress");
+    await page.keyboard.press("Escape");
+    await page.locator(".play-drawer").waitFor({state:"hidden"});
   }
+  await left.locator("#stage").focus();
 
   // Real shared Quit followed by the chooser's next Start.
   await left.evaluate(()=>window.__fbwg.view.session.send(4,window.__fbwg.view.slot));

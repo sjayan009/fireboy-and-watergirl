@@ -117,6 +117,11 @@ const STALL_FRAMES = 52;
  */
 const RECOVERED_FRAMES = 26;
 
+/** `--leave` in styles.css. The attribute follows the animation, so they agree. */
+const LEAVE_MS = 140;
+/** Asked rather than assumed, and re-asked: the setting can change mid-session. */
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+
 export function playScreen(host: HTMLElement): () => void {
   const flow = new PlayController();
   const canvas = el("canvas", {
@@ -268,6 +273,8 @@ export function playScreen(host: HTMLElement): () => void {
    */
   let noticed: { kind: NoticeKind; text: string } | null = null;
   let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The exit animation in flight, so an arriving message can cancel it. */
+  let leaving: ReturnType<typeof setTimeout> | null = null;
   /** What the status line last said, so it is not rewritten 26 times a second. */
   let lastStatus = "";
   /** Whether presence has been told a level is running. */
@@ -457,6 +464,13 @@ export function playScreen(host: HTMLElement): () => void {
    * same trigger.
    */
   let lastSelection = "";
+  /** Who this account last played with, for the two panels that open on a pair. */
+  function rememberPartner(id: string): void {
+    if (lastPartner === id) return;
+    lastPartner = id;
+    leaderboard.invalidate();
+    try { localStorage.setItem(`fbwg.lastPartner.${auth().user!.id}`, id); } catch { /* optional */ }
+  }
   function rememberSelection(playing: boolean): void {
     if (!playing || !match || !view.session) return;
     const selection = view.session.selection;
@@ -621,9 +635,15 @@ export function playScreen(host: HTMLElement): () => void {
         !between || !view.canChooseLevel);
   }
 
-  const leaderboard = new Leaderboard(board, () => view.game.Translation as string[] | undefined);
+  // The partner is handed in as a getter rather than a value: the board outlives
+  // any one match, and `leaderboard_standing` is a question about a PAIR.
   let lastPartner: string | null = null;
   try { lastPartner = localStorage.getItem(`fbwg.lastPartner.${auth().user!.id}`); } catch { /* optional */ }
+  // The partner is handed in as a getter rather than a value: the board outlives
+  // any one match, and `leaderboard_standing` is a question about a PAIR.
+  const leaderboard = new Leaderboard(board,
+    () => view.game.Translation as string[] | undefined,
+    () => match?.friend.id ?? lastPartner);
   const shell = new PlayShell(host, {
     canvas, name, status, mute, banner, friends: panel, times, board,
     input: (enabled) => view.setInputEnabled(enabled),
@@ -641,15 +661,11 @@ export function playScreen(host: HTMLElement): () => void {
       },
     }, "Sign out")],
   });
-  // After the shell, because it renames one of the shell's own tabs: "Progress
-  // (Local)" over this account's map and "Progress" over a shared one, which is
-  // how the app says which of the two you are in without ever asking.
   const progressPanel = new ProgressPanel(times, {
     progress,
     friends: () => lobby?.list ?? [],
     partner: () => partner,
     table: () => view.game.Translation as string[] | undefined,
-    onLabel: (label) => shell.setPanelLabel("progress", label),
   });
   const friendsUI = new FriendsPanel(panel, { onInvite: showInviteForm, busy: () => match !== null || pending !== null });
   const watchList = el("section", { class: "watch-list" });
@@ -670,6 +686,7 @@ export function playScreen(host: HTMLElement): () => void {
     if (progress.saves !== sentResults) {
       sentResults = progress.saves;
       leaderboardCache.clear();
+      leaderboard.invalidate();
       void drawBoard();
     }
     void progressPanel.refresh();
@@ -736,7 +753,7 @@ export function playScreen(host: HTMLElement): () => void {
     if (noticed?.kind === kind && noticed.text === text && extra.length === 0) return;
     shell.showNotice();
     noticed = { kind, text };
-    banner.hidden = false;
+    showBanner();
     clear(banner);
     banner.append(el("span", {}, text), ...extra,
       el("button", { class: "ghost", onclick: () => clearNotice() }, "Dismiss"));
@@ -757,8 +774,41 @@ export function playScreen(host: HTMLElement): () => void {
   function takeBanner(): void {
     if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
     noticed = null;
-    banner.hidden = false;
+    showBanner();
     clear(banner);
+  }
+
+  /**
+   * Put the banner on screen, cancelling an exit that had already begun.
+   *
+   * Interruptibility, in the one place on this screen that has any: a message
+   * arriving while the last one is on its way out must not wait for it, and
+   * must not be left invisible because the exit's timer fires afterwards and
+   * hides what has since replaced it.
+   */
+  function showBanner(): void {
+    if (leaving !== null) { clearTimeout(leaving); leaving = null; }
+    banner.classList.remove("leaving");
+    banner.hidden = false;
+  }
+
+  /**
+   * Take it off screen the way it came on.
+   *
+   * `[hidden]` is `display:none`, which cannot be animated, so the exit plays
+   * first and the attribute follows it. Reduced motion skips straight to the
+   * end -- the point of that setting is not to see the travel, and a 140ms
+   * pause with nothing moving in it would be the worst of both.
+   */
+  function hideBanner(): void {
+    if (banner.hidden || leaving !== null) return;
+    if (reduceMotion.matches) { banner.hidden = true; return; }
+    banner.classList.add("leaving");
+    leaving = setTimeout(() => {
+      leaving = null;
+      banner.classList.remove("leaving");
+      banner.hidden = true;
+    }, LEAVE_MS);
   }
 
   /**
@@ -776,7 +826,7 @@ export function playScreen(host: HTMLElement): () => void {
     if (kinds.length && (!noticed || !kinds.includes(noticed.kind))) return;
     noticed = null;
     if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
-    banner.hidden = true;
+    hideBanner();
     shell.notify("");
   }
 
@@ -1025,8 +1075,6 @@ export function playScreen(host: HTMLElement): () => void {
         await view.prepareLevel(mode.value, Number(num.value), abort.signal);
         if (!flow.owns(abort) || gone) return;
         try { localStorage.setItem(selectionKey(auth().user!.id, friend.id), JSON.stringify({ mode: mode.value, num: Number(num.value), iAmFireboy: roles.value === "me" })); } catch { /* optional preference */ }
-        lastPartner = friend.id;
-        try { localStorage.setItem(`fbwg.lastPartner.${auth().user!.id}`,friend.id); } catch { /* optional */ }
         const ready = await lobby!.invite(friend.id, {
           mode: mode.value,
           num: Number(num.value),
@@ -1165,6 +1213,15 @@ export function playScreen(host: HTMLElement): () => void {
     hurried = false;
     leave.hidden = false;
     lobby?.setActivity("in_game");
+    // Remembered HERE rather than where the invitation is sent.
+    //
+    // It was written only by the person who did the inviting, so somebody who
+    // always accepts never had a last partner -- and that name is what the
+    // Leaderboard opens on and what `leaderboard_standing` is a question
+    // about. Half the pairs in every game had the feature turned off by which
+    // of them pressed the button. A match beginning is the event that is true
+    // for both of them.
+    rememberPartner(ready.friend.id);
     // Whose map the Progress panel shows, unless the reader has already said.
     progressPanel.follow();
 
@@ -1448,6 +1505,8 @@ export function playScreen(host: HTMLElement): () => void {
   return () => {
     gone = true;
     flow.cancel();
+    if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
+    if (leaving !== null) { clearTimeout(leaving); leaving = null; }
     shell.destroy();
     friendsUI.destroy();
     leaderboard.destroy();

@@ -113,32 +113,34 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
     await saved.click();
 
     /*
-     * The panel's NAME is how the app answers "am I playing locally or
-     * online", and it is the only place it answers it.
+     * The panel is called Progress, and stays called Progress.
      *
-     * There is no mode screen and there deliberately never was one: the app
-     * already knows -- a match makes it online, nobody makes it local -- and
-     * asking somebody a question you can answer yourself is a step in the way
-     * of playing. So the answer rides on the label. Nobody is in a match here,
-     * so both the tab and the heading say so, and they have to agree: a tab
-     * reading one thing over a heading reading another is worse than either.
+     * It briefly renamed itself to match whichever map was on show, which
+     * fought the thing a tab is for -- you find it again by it being in the
+     * same place with the same name. The picker one line below the heading
+     * already says which map it is.
      */
-    assert.equal(await page.locator("#drawer-title").innerText(),"Progress (Local)");
-    assert.equal(await page.locator(".drawer-tabs button[data-panel='progress']").innerText(),"Progress (Local)");
+    assert.equal(await page.locator("#drawer-title").innerText(),"Progress");
+    assert.equal(await page.locator(".drawer-tabs button[data-panel='progress']").innerText(),"Progress");
 
     /*
-     * And the picker that chooses which map is on show.
+     * And the picker that chooses which map is on show -- which is also the
+     * only place the app answers "am I playing locally or online". There is no
+     * mode screen and deliberately never was one: the app already knows, and
+     * asking a question you can answer yourself is a step in the way of
+     * playing.
      *
-     * Best Times used to draw whatever store the game happened to be holding,
-     * which meant the pair's map during a match and this account's afterwards,
-     * with no way to ask for either on purpose. Two people who play together
-     * and also play alone had two maps and one window onto them, and which one
-     * they got was decided by whether a friend was online.
+     * "On This Device", not "Just me". The subject is a SAVE, and this game has
+     * never had a one-person mode -- somebody playing "alone" is driving both
+     * characters, or sharing a keyboard with whoever is next to them. What
+     * distinguishes this option is where the progress lives.
      */
     const whose = page.getByLabel("Whose progress",{ exact:true });
     assert.equal(await whose.inputValue(),"","alone, the panel starts on this account's own map");
     const options = await whose.locator("option").allInnerTexts();
-    assert.equal(options[0],"Just me");
+    assert.equal(options[0],"On This Device");
+    assert(!/just me/i.test(options.join(" ")),
+      `the local save is not "just me" -- two characters are always playing: ${JSON.stringify(options)}`);
     assert(options.length > 1,`the picker should offer the friends there are: ${JSON.stringify(options)}`);
     assert(options.slice(1).every(o => o.startsWith("With ")),
       `every other option names a friend: ${JSON.stringify(options)}`);
@@ -172,14 +174,14 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
      */
     const before = await page.evaluate(() => window.__fbwg.view.game.The_cookie.data.stats.join(","));
     await whose.selectOption({ index: 1 });
-    await page.waitForFunction(() => document.getElementById("drawer-title")?.textContent === "Progress");
-    assert.equal(await page.locator(".drawer-tabs button[data-panel='progress']").innerText(),"Progress");
+    await page.locator(".drawer-content .note").filter({ hasText: "together with" }).waitFor();
     const shared = await page.locator(".drawer-content .note").filter({ hasText: "of 32 finished" }).innerText();
     assert(/together with /.test(shared),`a shared map says whose it is: ${shared}`);
     assert.equal(await page.evaluate(() => window.__fbwg.view.game.The_cookie.data.stats.join(",")),before,
       "reading a friend's progress never touches the save the game is writing through");
+    assert.equal(await page.locator("#drawer-title").innerText(),"Progress","the heading does not follow the subject");
     await whose.selectOption({ index: 0 });
-    await page.waitForFunction(() => document.getElementById("drawer-title")?.textContent === "Progress (Local)");
+    await page.locator(".drawer-content .note").filter({ hasText: "on your account" }).waitFor();
 
     assert.equal(await saved.getAttribute("aria-expanded"),"true");
     await saved.click();
