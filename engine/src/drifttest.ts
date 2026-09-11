@@ -96,6 +96,25 @@ console.log("a link that batches is a link with more delay than its latency");
          b[0].host.hash() === b[1].host.hash()], [true, true]);
 }
 
+console.log("\nequal clocks do not acquire false drift from relay batching");
+{
+  for (const batchMs of [0, 115, 230]) {
+    const link = new Link(20, 0, 0, 47);
+    link.batchMs = batchMs;
+    const peers = begin(link, { timeSync: true });
+    run(link, peers, 120, () => 0); // fill the advantage smoothing window
+    let correctedSamples = 0;
+    for (let i = 0; i < 300; i++) {
+      run(link, peers, 1, () => 0);
+      for (const peer of peers) if (peer.session.dilation !== 1) correctedSamples++;
+    }
+    check(`${batchMs} ms batches: equal clocks remain undilated`, correctedSamples, 0);
+    converge(link, peers);
+    check(`${batchMs} ms batches: both worlds agree`,
+          peers[0].host.hash() === peers[1].host.hash(), true);
+  }
+}
+
 console.log("\nclocks that differ by 5% do not split the input log");
 {
   for (const ratio of [1.01, 1.05, 0.95]) {

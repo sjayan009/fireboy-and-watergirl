@@ -66,8 +66,12 @@ try {
     // Thirty frames at 26 Hz. It was fourteen, and the redundancy that caps it
     // was sixteen -- a ratio of 1.14 where GGPO runs eight.
     assert(Math.round(link.window) === 1154, `the window is thirty frames: ${link.window}`);
-    // Two tabs on one machine share a clock, so there is nothing to correct.
-    assert(link.dilation === 1, `a pair on one clock is not dilated: ${link.dilation}`);
+    // A shared wall clock does not give two renderer processes identical rAF
+    // schedules. CI contention and batched delivery can legitimately engage
+    // the one-sided regulator. Exact equal-clock behavior is checked with a
+    // virtual clock in drifttest; this real-browser path must respect its cap.
+    assert(link.dilation >= 0.95 && link.dilation <= 1,
+      `clock correction stays within its one-sided 5% bound: ${JSON.stringify(link)}`);
     assert(link.delay === 0, `and is given no input delay: ${link.delay}`);
     assert(link.pressure < 1, `with the window comfortably covering it: ${link.pressure}`);
   }
