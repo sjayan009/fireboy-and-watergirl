@@ -1068,9 +1068,18 @@ try {
     // The wait is asserted rather than passed through. A pair that published a
     // feed on one consent would be a real hole, and it would show up here as
     // nothing worse than a test that got further than usual.
+    // Exercise a control-plane response that outlives the menu animation.
+    await a.route('**/rest/v1/rpc/match_consent', async route => {
+      await new Promise(resolve => setTimeout(resolve,750));
+      await route.continue();
+    }, {times:1});
     await menuAction(a, "Let friends watch");
     const shareLabels = (p) =>
       p.locator(".menu-actions button").allTextContents();
+    // Consent is an RPC followed by a UI refresh. Closing the menu does not
+    // wait for that round trip, so wait for its acknowledged pending state.
+    await a.waitForFunction(() => [...document.querySelectorAll('.menu-actions button')]
+      .some(button => button.textContent === 'Cancel sharing request'));
     check("one player asking is not enough",
           (await shareLabels(a)).some((t) => t === "Cancel sharing request"),
           true);
