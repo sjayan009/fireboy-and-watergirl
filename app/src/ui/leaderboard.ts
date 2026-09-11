@@ -1,3 +1,27 @@
+/**
+ * The board, and which board it is.
+ *
+ * It used to read `verified_leaderboard`, which returns rows published by the
+ * replay verifier and by nothing else. That worker has never been deployed and
+ * `play_private.engine_versions` is seeded empty on purpose, so
+ * `register_ranked_attempt` refuses every run and the table it reads can never
+ * have a row in it. The board was not slow or stale; it was structurally
+ * incapable of showing anybody their time, which is exactly how it behaved:
+ * a pair would finish a level, watch Progress update, and find the board still
+ * saying it was waiting for its first pair.
+ *
+ * So it reads `public.leaderboard` -- the same seven columns, over
+ * `pair_progress`, which `sync_progress` writes the moment a level is saved.
+ * These times are reported by the client. `sync_progress` bounds them to what a
+ * running timer can produce and derives the label from the number rather than
+ * accepting one alongside it (see `0016_progress_writes.sql`), so the remaining
+ * forgery is "a plausible time you did not earn". That is the honest residue of
+ * a client-authoritative design and the copy below says so rather than claiming
+ * a verification that is not happening.
+ *
+ * When the verifier is deployed, `verified_results` comes back as a BADGE on
+ * these rows -- not as the only source, which is what made the board empty.
+ */
 import { el, note } from "./dom.js";
 import { auth } from "../auth.js";
 import { supabase } from "../supabase.js";
@@ -16,7 +40,7 @@ export class Leaderboard {
     host.classList.add("leaderboard-panel");
     host.append(el("div", { class:"board-intro" }, el("span", {class:"trophy-mark", "aria-hidden":"true", html:'<svg width="36" height="36" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.7" xmlns="http://www.w3.org/2000/svg"><path d="M9 5h14v7a7 7 0 0 1-14 0V5Zm7 14v7m-6 2h12M9 8H4v3a6 6 0 0 0 7 6m12-9h5v3a6 6 0 0 1-7 6"/><path d="m16 8 1 2 2 .3-1.5 1.5.4 2.2-1.9-1-1.9 1 .4-2.2-1.5-1.5 2-.3 1-2Z" fill="currentColor" stroke="none"/></svg>'}),
       el("h3", {}, "Two players. One great time.")),
-      note("Verified finishes from pairs who chose to be listed."),
+      note("Finished levels from pairs who chose to be listed. Times come from the pair that played them."),
       el("div", {class:"board-filters"}, el("label", {}, "Mode", this.mode), el("label", {}, "Level", this.num)), this.results);
     this.fill(1);
     this.mode.addEventListener("change", () => { this.fill(1); void this.refresh(); });
@@ -42,12 +66,12 @@ export class Leaderboard {
     const key = `${auth().user?.id}:${node}`;
     const cached = leaderboardCache.get(key);
     try {
-      const {data,error} = cached && Date.now()-cached.at < 15000 ? {data:cached.data,error:null} : await supabase.rpc("verified_leaderboard", {p_node:node});
+      const {data,error} = cached && Date.now()-cached.at < 15000 ? {data:cached.data,error:null} : await supabase.rpc("leaderboard", {p_node:node});
       if (this.gone || generation !== this.generation) return;
       if (error) throw new Error(error.message);
       leaderboardCache.set(key,{at:Date.now(),data});
       const rows = (data ?? []) as {rank:number; a_username:string; b_username:string; best_time_str:string; is_mine:boolean}[];
-      if (!rows.length) { this.results.replaceChildren(el("div", {class:"board-empty"}, el("h3", {}, "This level is waiting for its first pair."), note("Finish it together to set a verified time. Your earlier personal results remain in Progress."))); return; }
+      if (!rows.length) { this.results.replaceChildren(el("div", {class:"board-empty"}, el("h3", {}, "This level is waiting for its first pair."), note("Finish it together and your names go here. What you have played on your own stays in Progress."))); return; }
       this.results.replaceChildren(el("table", {class:"leaderboard-table"},
         el("caption", {class:"sr-only"}, `${this.mode.value} level ${this.num.value} verified leaderboard`),
         el("thead", {}, el("tr", {}, el("th", {scope:"col"},"Rank"), el("th", {scope:"col"},"Pair"), el("th", {scope:"col"},"Time"))),

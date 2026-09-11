@@ -66,7 +66,18 @@ export class Ranking {
       run = { id, finished: false };
       this.runs.set(key,run);
       if (this.runs.size > 100) this.runs.delete(this.runs.keys().next().value!);
-      void id.catch(() => { if (!this.closed) this.changed("Not ranked · registration unavailable"); });
+      // Silent, not "Not ranked · registration unavailable".
+      //
+      // `register_ranked_attempt` refuses every engine absent from
+      // `play_private.engine_versions`, and that table is seeded empty until an
+      // operator enables the exact version the deployed verifier runs. Until
+      // then this rejection is the ORDINARY case rather than a fault, and it
+      // was putting a permanent red-looking line in the footer of every match
+      // about a subsystem the player cannot see, cause or fix. The verifier
+      // being off is an operations fact; it is not news for the person playing.
+      // Everything downstream of a registration that never resolves already
+      // does nothing, so there is nothing else to suppress.
+      void id.catch(() => { if (!this.closed) this.changed(""); });
     }
     return run;
   }

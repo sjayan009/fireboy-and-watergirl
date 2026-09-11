@@ -394,6 +394,13 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .rank { color:var(--dim); }
 .board-empty { border-top:1px solid var(--edge); padding-top:20px; }
 .board-empty h3 { font-size:1rem; line-height:1.4; }
+
+/* Progress is Best Times for one chosen map: your own, or one you share. The
+   picker carries the local/shared distinction that the panel's own name also
+   carries, so it sits above the heading rather than beside a second filter. */
+.progress-filters { margin:0 0 18px; }
+.progress-filters label { display:grid; gap:6px; font-size:.8125rem; color:var(--dim); }
+.progress-results .note:first-of-type { margin-bottom:4px; }
 .panel h2 { margin-bottom:12px; font-size:1.1rem; }
 .row { display:flex; align-items:center; gap:8px; padding:10px 0; border-bottom:1px solid var(--edge); font-size:.875rem; }
 .row .name { flex:1; min-width:0; overflow-wrap:anywhere; font-weight:600; }

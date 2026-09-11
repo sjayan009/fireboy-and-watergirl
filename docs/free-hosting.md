@@ -28,6 +28,15 @@ use about 3.13 million events. This estimate alone exceeds both the existing
 Free rate and monthly allowance. Actual transport sends must be measured;
 the release cannot claim the 100-player all-relay target on Supabase Free.
 
+230 ms is the interval a pair starts on, not the only one they can be on. A
+pair that stalls twice in a match is moved to 115 ms for the rest of it --
+because 230 ms of a 539 ms rollback window is spent before a packet has left
+the browser, and two people far enough apart are stalled by the arithmetic
+rather than by their connection. Such a pair sends about twice as much, so the
+figure above is a floor: the worst case is an all-relay population that is also
+all stalling, at roughly 870 sends/second. Measure the real mix before sizing
+anything on either number.
+
 The same workload on Durable Objects would use about 78,261 incoming request
 units/hour before connection setup, signalling and spectators. That leaves
 less than the required 25% daily headroom. Moving the relay alone is therefore

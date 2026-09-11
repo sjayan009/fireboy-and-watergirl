@@ -111,7 +111,37 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
      */
     const saved = page.locator(".save-status");
     await saved.click();
-    assert.equal(await page.locator("#drawer-title").innerText(),"Your Progress");
+
+    /*
+     * The panel's NAME is how the app answers "am I playing locally or
+     * online", and it is the only place it answers it.
+     *
+     * There is no mode screen and there deliberately never was one: the app
+     * already knows -- a match makes it online, nobody makes it local -- and
+     * asking somebody a question you can answer yourself is a step in the way
+     * of playing. So the answer rides on the label. Nobody is in a match here,
+     * so both the tab and the heading say so, and they have to agree: a tab
+     * reading one thing over a heading reading another is worse than either.
+     */
+    assert.equal(await page.locator("#drawer-title").innerText(),"Progress (Local)");
+    assert.equal(await page.locator(".drawer-tabs button[data-panel='progress']").innerText(),"Progress (Local)");
+
+    /*
+     * And the picker that chooses which map is on show.
+     *
+     * Best Times used to draw whatever store the game happened to be holding,
+     * which meant the pair's map during a match and this account's afterwards,
+     * with no way to ask for either on purpose. Two people who play together
+     * and also play alone had two maps and one window onto them, and which one
+     * they got was decided by whether a friend was online.
+     */
+    const whose = page.getByLabel("Whose progress",{ exact:true });
+    assert.equal(await whose.inputValue(),"","alone, the panel starts on this account's own map");
+    const options = await whose.locator("option").allInnerTexts();
+    assert.equal(options[0],"Just me");
+    assert(options.length > 1,`the picker should offer the friends there are: ${JSON.stringify(options)}`);
+    assert(options.slice(1).every(o => o.startsWith("With ")),
+      `every other option names a friend: ${JSON.stringify(options)}`);
 
     /*
      * What the panel CLAIMS about where progress lives.
@@ -133,6 +163,24 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
       `the progress panel still claims progress is browser-local: ${summary}`);
     assert(/on your account|together/.test(summary),
       `the progress panel should say whose progress it is: ${summary}`);
+    /*
+     * Ask for a friend's shared map, and the label stops saying "Local".
+     *
+     * Reading one must never adopt it: `adopt` swaps the store the running
+     * engine writes through, and looking at what you and somebody else managed
+     * on Puzzle 3 is not a reason to change what the game is saving into.
+     */
+    const before = await page.evaluate(() => window.__fbwg.view.game.The_cookie.data.stats.join(","));
+    await whose.selectOption({ index: 1 });
+    await page.waitForFunction(() => document.getElementById("drawer-title")?.textContent === "Progress");
+    assert.equal(await page.locator(".drawer-tabs button[data-panel='progress']").innerText(),"Progress");
+    const shared = await page.locator(".drawer-content .note").filter({ hasText: "of 32 finished" }).innerText();
+    assert(/together with /.test(shared),`a shared map says whose it is: ${shared}`);
+    assert.equal(await page.evaluate(() => window.__fbwg.view.game.The_cookie.data.stats.join(",")),before,
+      "reading a friend's progress never touches the save the game is writing through");
+    await whose.selectOption({ index: 0 });
+    await page.waitForFunction(() => document.getElementById("drawer-title")?.textContent === "Progress (Local)");
+
     assert.equal(await saved.getAttribute("aria-expanded"),"true");
     await saved.click();
     assert(await drawer.isHidden(),"the save indicator closes the panel it opened");
