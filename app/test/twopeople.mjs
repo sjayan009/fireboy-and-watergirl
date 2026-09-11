@@ -329,6 +329,58 @@ try {
 
   console.log("\nand see each other come online");
   await goPlay(a);
+
+  // Alice is in the lobby and bob is not yet, which is the only window in this
+  // file where somebody holds a channel with nobody on the other end -- and it
+  // is the ordinary case in production, where most of a friends list is
+  // offline most of the time.
+  //
+  // `Lobby.setActivity` tells every open channel at once, so before the gate
+  // an activity change announced to all of them regardless. Realtime meters a
+  // presence call on the way out and again per subscriber, and that fan-out
+  // times the transitions the play loop makes is the largest standing draw on
+  // the message allowance -- larger than a relayed game, and it is spent
+  // talking to nobody.
+  //
+  // Asked of the channel's own state rather than by watching the socket for a
+  // send that should not happen: proving a negative over the wire means
+  // waiting out a full `PRESENCE_MS` window to be sure nothing was merely
+  // deferred, and the two things this needs to distinguish -- not announced,
+  // and not scheduled either -- are both readable here immediately.
+  {
+    const gated = await a.evaluate(() => {
+      const lobby = window.__fbwg?.lobby;
+      const pair = [...(lobby?.channels?.values() ?? [])][0];
+      if (!pair) return "alice has no channel";
+      // The premise, not the assertion. If bob's context has already put him
+      // on the channel there is nothing here to test, and a pass would mean
+      // nothing.
+      if (pair.occupied) return "bob is already on the channel";
+      lobby.setActivity("in_game");
+      const seen = {
+        scheduled: pair.presenceTimer !== null,
+        held: pair.activity,
+        announced: pair.announced,
+      };
+      lobby.setActivity("in_lobby");
+      return seen;
+    });
+    // Said out loud, because the two ways this can be vacuous both return a
+    // sentence explaining themselves and would otherwise read as three
+    // assertions failing on `undefined`.
+    if (typeof gated === "string") check("the window is there to test", gated, "");
+    check("an activity change with nobody listening is not announced",
+          gated.scheduled, false);
+    check("and is not quietly deferred to the next window either",
+          gated.announced === "in_game", false);
+    // The other half of the gate, and the reason it can be a gate at all: what
+    // was not said is still known, so the arrival edge has something true to
+    // send when bob turns up. A version that dropped the value instead would
+    // leave him reading `online` for a player who is mid-level.
+    check("but the activity is still held for when they arrive",
+          gated.held, "in_game");
+  }
+
   await goPlay(b);
   const seeEachOther = async () => {
     for (let i = 0; i < 150; i++) {
