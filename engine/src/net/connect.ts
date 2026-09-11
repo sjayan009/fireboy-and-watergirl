@@ -3,14 +3,14 @@
  *
  * Try a direct peer connection first; if it does not come up, keep using the
  * channel the two peers already found each other on. That fallback is the
- * reason this project needs no TURN server: a lockstep session is about ten
- * bytes a second, so relaying it through the rendezvous channel costs a hop of
- * latency and nothing else. The pairs whose NAT refuses a peer connection --
- * usually 10-20% -- still get to play.
+ * reason this project needs no TURN server. Full input packets are 65 bytes,
+ * normally 26 per second per player, before transport headers. Supabase relay
+ * batching reduces message count but adds queue time and JSON/base64 overhead;
+ * its finite Free quota is modelled in FREE_TIER_BUDGET.md.
  *
  * What they do not get is cam and mic, which need the direct connection. That
- * is the honest cost of not renting a relay, and adding TURN later fixes it
- * without touching anything above this file.
+ * is the cost of the zero-dollar architecture; TURN is not a production
+ * dependency. No provider is permitted to silently upgrade or bill overages.
  */
 import { Transport } from "./transport.js";
 import { connectWebRTC } from "./webrtc.js";

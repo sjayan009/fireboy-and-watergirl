@@ -92,8 +92,10 @@ export class Link {
     this.now += ms;
     const due = this.queue.filter((p) => p.at <= this.now);
     this.queue = this.queue.filter((p) => p.at > this.now);
-    // Delivered in send order among those due; jitter has already reordered
-    // them, which is the point.
+    // Deliver by arrival deadline, not insertion order. A coarse advance can
+    // make several differently delayed packets due at once; insertion order
+    // accidentally erased that reordering from the old test harness.
+    due.sort((a, b) => a.at - b.at);
     for (const p of due) this.handlers[p.to]?.(p.data);
   }
 }

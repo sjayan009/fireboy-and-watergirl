@@ -44,6 +44,7 @@ export function boundedTransport(inner: Transport): Transport & { inner: Transpo
     inner,
     get rttMs() { return inner.rttMs; },
     get sent() { return inner.sent; },
+    get stats() { return inner.stats; },
     get pacingMs() { return inner.pacingMs; },
     hurry: on => inner.hurry?.(on),
     send: data => { if (!ended) inner.send(data); },

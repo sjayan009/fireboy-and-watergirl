@@ -4,6 +4,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveUnder } from "../safepath.mjs";
 import { assetRelease } from "./scripts/release.mjs";
+import { freeIceServers } from "./scripts/free-config.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
@@ -46,10 +47,8 @@ function publicEnv(): Record<string, string> {
   return {
     __SUPABASE_URL__: JSON.stringify(url),
     __SUPABASE_KEY__: JSON.stringify(key),
-    // Empty unless somebody sets it. Public by nature -- a TURN credential is
-    // handed to the browser to be used by the browser -- so it belongs with the
-    // other two rather than anywhere near the secret key.
-    __ICE_SERVERS__: JSON.stringify(pick("ICE_SERVERS")),
+    // A configuration change must never silently add a metered TURN service.
+    __ICE_SERVERS__: JSON.stringify(freeIceServers(pick("ICE_SERVERS"))),
   };
 }
 

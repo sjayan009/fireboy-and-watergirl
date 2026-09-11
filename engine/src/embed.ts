@@ -23,6 +23,7 @@ import {
   SoundBus, Keyboard, advanceTree, enterFrameTree,
 } from "./flash/flash.js";
 import { SpriteRenderer } from "./render/sprites.js";
+import { VisualSnapshots } from "./render/interpolation.js";
 import { ShellInput } from "./game/shellinput.js";
 import { AudioPlayer } from "./audio/player.js";
 import { NetSession, Slot } from "./net/session.js";
@@ -51,6 +52,8 @@ export interface GameViewOptions {
   canvas: HTMLCanvasElement;
   /** Where the extracted art and audio live. */
   assets?: string;
+  /** Exact simulation-frame rendering for comparisons; smooth display rendering is the default. */
+  smoothing?: boolean;
   /**
    * Where this view's progress is kept.
    *
@@ -121,6 +124,10 @@ export class GameView {
   private preparationGeneration = 0;
   private prepared = false;
   private lastAssetRevision = -1;
+  private readonly smoothing: boolean;
+  private readonly visuals = new VisualSnapshots();
+  private visualAlpha = 1;
+  private needsVisualReconcile = false;
   private readonly onRefused?: (reason: RefusedReason) => void;
   private readonly onPrepareRun?: (view: GameView) => Promise<void>;
 
@@ -157,6 +164,7 @@ export class GameView {
     this.onConfirmed = o.onConfirmed;
     this.onRefused = o.onRefused;
     this.onPrepareRun = o.onPrepareRun;
+    this.smoothing = o.smoothing !== false;
 
     resetClock();
     // Scoped, not installed: `Game`'s constructor calls `openSave` once and
@@ -367,6 +375,7 @@ export class GameView {
       e.preventDefault();
     }
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (MOVEMENT.includes(key) && !e.repeat) this.visuals.inputChanged();
 
     // Only while a LEVEL is running. Between levels the same keys are the map's
     // -- the arrows walk its nodes -- and a session that is not running a level
@@ -394,6 +403,7 @@ export class GameView {
 
   private keyUp(e: KeyboardEvent): void {
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (MOVEMENT.includes(key)) this.visuals.inputChanged();
     // The release clears the held set wherever it happened. A key pressed over
     // the game and released after focus has moved into a picker is the one way
     // a direction could otherwise stay down forever, and window `blur` does not
@@ -443,6 +453,7 @@ export class GameView {
    */
   get artComplete(): boolean { return (this.sprites?.missing ?? 0) === 0; }
   private prepareScene(): void {
+    this.visuals.clear();
     this.preparationGeneration++;
     this.prepared = false;
     this.preparation = null;
@@ -462,6 +473,8 @@ export class GameView {
         await this.onPrepareRun?.(this);
         if (this.destroyed || generation !== this.preparationGeneration) return;
         this.prepared = true;
+        this.visuals.clear();
+        this.captureVisuals();
         this.render();
       })().catch(e => {
         if (generation === this.preparationGeneration) this.preparation = null;
@@ -481,6 +494,7 @@ export class GameView {
   }
 
   clearInput(): void {
+    this.visuals.inputChanged();
     this.held.clear();
     for (const c of [Keyboard.LEFT, Keyboard.RIGHT, Keyboard.UP, Keyboard.A, Keyboard.D, Keyboard.W]) this.shell.forwardUp(c);
     this.session?.setLocalInput(0);
@@ -537,7 +551,7 @@ export class GameView {
       // it with input delay rather than stalling. Zero on any healthy pair,
       // which is nearly all of them now the window is thirty frames.
       adaptiveDelay: true,
-      slot, transport, host: new GameHost(this.game, (frame) => this.onConfirmed?.(this, frame), () => this.prepareScene(), () => this.prepared),
+      slot, transport, host: this.visualHost((frame) => this.onConfirmed?.(this, frame), () => this.prepareScene(), () => this.prepared),
       mayReceiveStart: (mode,num) => {
         if (this.session?.runSerial === 0 && o.initialLevel) return mode === o.initialLevel.mode && num === o.initialLevel.num;
         return !this.canChooseLevel;
@@ -563,7 +577,7 @@ export class GameView {
     this.watching = true;
     this.transport = transport;
     this.session = new NetSession({
-      slot: 0, observer: true, transport, host: new GameHost(this.game),
+      slot: 0, observer: true, transport, host: this.visualHost(),
       onQuit: o.onQuit, onLinkDown: o.onLinkDown,
     });
     return this.session;
@@ -579,6 +593,7 @@ export class GameView {
    * link or nothing at all, and both want this first.
    */
   dropLink(): void {
+    this.visuals.clear();
     this.session = null;
     this.watching = false;
     this.transport?.close();
@@ -619,6 +634,36 @@ export class GameView {
 
   // ---- the loop ---------------------------------------------------------
 
+  private captureVisuals(reconcile = false): void {
+    if (!this.smoothing || !this.sprites) return;
+    const local = this.watching ? 0 : this.live ? (1 << this.slot) : 3;
+    this.sprites.captureTransforms(this.game, this.visuals, local, reconcile);
+  }
+
+  private reconcileVisuals(): void {
+    if (!this.needsVisualReconcile) return;
+    this.captureVisuals(true);
+    // A replay can also change discrete art/visibility or remove a node while
+    // every surviving transform stays stationary. Present that final state
+    // once even if no normal simulation frame ran in this display callback.
+    this.visuals.invalidate();
+    this.needsVisualReconcile = false;
+  }
+
+  /** The hook belongs to this view; snapshots of Game never reach it. */
+  private visualHost(confirmed?: (frame: number) => void,
+                     preparing?: () => void, prepared?: () => boolean): GameHost {
+    const view = this;
+    return new class extends GameHost {
+      override step(bits: number, frame = 0, replaying = false): void {
+        if (!replaying) view.reconcileVisuals();
+        super.step(bits, frame, replaying);
+        if (replaying) view.needsVisualReconcile = true;
+        else view.captureVisuals();
+      }
+    }(this.game, confirmed, preparing, prepared);
+  }
+
   /** One frame, in Flash's order: playheads and frame scripts, then events. */
   private step(): void {
     tickClock();
@@ -626,6 +671,7 @@ export class GameView {
     advanceTree(this.game);
     enterFrameTree(this.game);
     this.frame++;
+    this.captureVisuals();
   }
 
   private tick = (now: number): void => {
@@ -643,7 +689,10 @@ export class GameView {
       // the other player and corrects itself when the prediction was wrong.
       session.setLocalInput(this.bits());
       session.tick(dt);
+      this.reconcileVisuals();
       this.frame = session.frame;
+      this.visualAlpha = session.interpolationAlpha;
+      if (session.stalled) this.visuals.inputChanged();
     } else {
       // No level running -- either solo, or a pair sitting on the map between
       // levels. `NetSession.tick` returns immediately when it is not started,
@@ -658,7 +707,11 @@ export class GameView {
         this.acc -= TIME_STEP;
         steps++;
       }
+      this.visualAlpha = Math.max(0, Math.min(1, this.acc / TIME_STEP));
     }
+    // A throttled/hidden tab resumes on the latest state, never on a long
+    // visual sweep across frames that were not presented.
+    if (dt > TIME_STEP * 2) { this.visuals.clear(); this.captureVisuals(); }
 
     this.showMute();
 
@@ -689,7 +742,8 @@ export class GameView {
     }
 
     if (document.visibilityState !== "hidden" &&
-        (this.lastDrawnFrame !== this.frame || this.lastAssetRevision !== this.sprites?.revision)) {
+        (this.lastDrawnFrame !== this.frame || this.lastAssetRevision !== this.sprites?.revision ||
+          (this.smoothing && this.visuals.hasMotion) || this.visuals.presentationDirty)) {
       this.render();
       this.lastDrawnFrame = this.frame;
       this.lastAssetRevision = this.sprites?.revision ?? 0;
@@ -726,7 +780,10 @@ export class GameView {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, STAGE_W, STAGE_H);
-    if (this.sprites) this.sprites.draw(ctx, this.game);
+    if (this.sprites) {
+      this.sprites.draw(ctx, this.game, this.smoothing ? this.visuals : null, this.visualAlpha);
+      this.visuals.presented();
+    }
   }
 
   /** The level currently on screen, or null -- `m_level` outlives its level. */
@@ -753,7 +810,10 @@ export class GameView {
   setMuted(muted: boolean): void { this.muted = muted; }
   /** This player's mute, which the game's own button now also drives. */
   get isMuted(): boolean { return this.muted; }
-  setRunning(on: boolean): void { this.running = on; }
+  setRunning(on: boolean): void {
+    if (on && !this.running) { this.visuals.clear(); this.captureVisuals(); this.last = performance.now(); }
+    this.running = on;
+  }
 
   /**
    * Whether this view has been torn down.

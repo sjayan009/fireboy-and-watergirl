@@ -21,6 +21,25 @@
  * the game did until this existed: a character that stopped moving, and no way
  * to tell a crash from a hiccup.
  */
+/** Application packet counters. They exclude SCTP/WebSocket/TLS/IP headers. */
+export interface TransportStats {
+  sentPackets: number;
+  receivedPackets: number;
+  sentBytes: number;
+  receivedBytes: number;
+  /** Local rejection/send failure only; not an estimate of remote packet loss. */
+  droppedPackets: number;
+  queueSamples: number;
+  queueTotalMs: number;
+  queueMaxMs: number;
+  bufferedBytes: number;
+}
+
+export function transportStats(): TransportStats {
+  return { sentPackets: 0, receivedPackets: 0, sentBytes: 0, receivedBytes: 0,
+    droppedPackets: 0, queueSamples: 0, queueTotalMs: 0, queueMaxMs: 0, bufferedBytes: 0 };
+}
+
 export interface Transport {
   /** Fire and forget. May silently drop. */
   send(data: Uint8Array): void;
@@ -37,8 +56,10 @@ export interface Transport {
   onClosed?(fn: (why: string) => void): void;
   /** Best-effort round-trip estimate in ms, or null while unknown. */
   readonly rttMs: number | null;
-  /** Wire messages, when the transport exposes a counter. */
+  /** Transport dispatches; a reconnecting provider channel may still queue them. */
   readonly sent?: number;
+  /** Passive measurements; never drive simulation or quota authorization. */
+  readonly stats?: TransportStats;
   /**
    * How long this transport may sit on a packet before sending it, in ms.
    *

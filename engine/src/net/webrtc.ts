@@ -2,7 +2,7 @@
  * A direct peer connection, over an RTCDataChannel.
  *
  * The channel is deliberately **unreliable and unordered**. Retransmission is
- * the wrong tool here: every input packet already repeats the last 16 frames,
+ * the wrong tool here: every input packet already repeats the last 32 frames,
  * so a lost packet is repaired by the next one to arrive, whereas SCTP's
  * retransmission would hold newer input behind older input that no longer
  * matters. Head-of-line blocking is exactly what a lockstep session cannot
@@ -13,7 +13,7 @@
  * channel is also the fallback transport if this never connects, so a session
  * needs exactly one rendezvous and no dedicated signalling server.
  */
-import { Transport } from "./transport.js";
+import { Transport, transportStats } from "./transport.js";
 
 /** Marks a signalling message on the shared channel, so it is never mistaken
  *  for a game packet. protocol.ts only ever emits 1 and 2. */
@@ -108,6 +108,8 @@ export function decodeSignal(d: Uint8Array): Signal | null {
 }
 
 class DataChannelTransport implements Transport {
+  readonly stats = transportStats();
+  get sent(): number { return this.stats.sentPackets; }
   private handler: ((d: Uint8Array) => void) | null = null;
   private _rtt: number | null = null;
 
@@ -117,7 +119,14 @@ class DataChannelTransport implements Transport {
 
   constructor(private pc: RTCPeerConnection, private dc: RTCDataChannel) {
     dc.binaryType = "arraybuffer";
-    dc.onmessage = (e) => this.handler?.(new Uint8Array(e.data as ArrayBuffer));
+    dc.onmessage = (e) => {
+      if (!(e.data instanceof ArrayBuffer) || e.data.byteLength > MAX_SIGNAL_CHARS) {
+        this.stats.droppedPackets++; return;
+      }
+      this.stats.receivedPackets++;
+      this.stats.receivedBytes += e.data.byteLength;
+      this.handler?.(new Uint8Array(e.data));
+    };
     // WebRTC reports round trip time in its stats; the session uses it to size
     // the input delay rather than guessing.
     this.rttTimer = setInterval(() => void this.sampleRtt(), 2000);
@@ -144,6 +153,8 @@ class DataChannelTransport implements Transport {
   private linkGone(why: string): void {
     if (this.gone) return;
     this.gone = true;
+    if (this.rttTimer !== null) clearInterval(this.rttTimer);
+    this.rttTimer = null;
     this.closedHandler?.(why);
   }
 
@@ -162,13 +173,18 @@ class DataChannelTransport implements Transport {
   get rttMs(): number | null { return this._rtt; }
 
   send(data: Uint8Array): void {
-    if (this.dc.readyState !== "open") return;
-    // Copy into a plain ArrayBuffer: the caller's view may be a slice of a
-    // larger buffer, and RTCDataChannel.send would put the whole thing on the
-    // wire.
+    this.stats.bufferedBytes = this.dc.bufferedAmount;
+    if (this.dc.readyState !== "open") { this.stats.droppedPackets++; return; }
+    // An owned plain ArrayBuffer supports all caller buffer types and preserves
+    // the exact byte range of a subarray. The caller keeps its buffer.
     const buf = new ArrayBuffer(data.byteLength);
     new Uint8Array(buf).set(data);
-    try { this.dc.send(buf); } catch { /* closing; the peer will notice */ }
+    try {
+      this.dc.send(buf);
+      this.stats.sentPackets++;
+      this.stats.sentBytes += data.byteLength;
+      this.stats.bufferedBytes = this.dc.bufferedAmount;
+    } catch { this.stats.droppedPackets++; /* closing; the peer will notice */ }
   }
 
   onMessage(fn: (d: Uint8Array) => void): void { this.handler = fn; }

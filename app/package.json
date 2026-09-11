@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && node scripts/assets.mjs",
+    "build": "tsc --noEmit && vite build && node scripts/assets.mjs && node scripts/pages.mjs",
     "preview": "vite preview",
     "test": "node test/accounts.mjs && node test/interface.mjs && node test/production.mjs && node test/twopeople.mjs",
     "check": "node scripts/check.mjs",

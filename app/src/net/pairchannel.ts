@@ -23,6 +23,8 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "../supabase.js";
 import { ENGINE_VERSION } from "@engine/version.js";
+import { decode } from "./base64.js";
+export { encode, decode } from "./base64.js";
 
 /** What a friend is doing, as far as their client last said. */
 export type Activity = "online" | "in_lobby" | "in_game";
@@ -942,24 +944,4 @@ export class PairChannel {
     this.presenceHandlers.clear();
     await supabase.removeChannel(this.live);
   }
-}
-
-/**
- * Realtime carries JSON, so the netcode's packets ride as base64.
- *
- * A 32-byte input packet becomes 44 characters, which is nothing against a
- * message frame -- and doing it here means neither the netcode nor the channel
- * has to know the other exists.
- */
-export function encode(bytes: Uint8Array): string {
-  let s = "";
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-  return btoa(s);
-}
-
-export function decode(b64: string): Uint8Array {
-  const s = atob(b64);
-  const out = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
-  return out;
 }
