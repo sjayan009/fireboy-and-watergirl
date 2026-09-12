@@ -1,16 +1,6 @@
-/**
- * Choosing a transport.
- *
- * Try a direct peer connection first; if it does not come up, keep using the
- * channel the two peers already found each other on. That fallback is the
- * reason this project needs no TURN server. Full input packets are 65 bytes,
- * normally 26 per second per player, before transport headers. Supabase relay
- * batching reduces message count but adds queue time and JSON/base64 overhead;
- * its finite Free quota is modelled in FREE_TIER_BUDGET.md.
- *
- * What they do not get is cam and mic, which need the direct connection. That
- * is the cost of the zero-dollar architecture; TURN is not a production
- * dependency. No provider is permitted to silently upgrade or bill overages.
+/** Legacy connection owner retained for rollout rollback. RTC may use direct
+ * or runtime TURN ICE; Supabase rendezvous is the emergency gameplay fallback.
+ * Managed pairs use the app PathManager and keep this channel available.
  */
 import { Transport } from "./transport.js";
 import { connectWebRTC } from "./webrtc.js";
@@ -34,6 +24,8 @@ export async function connect(
   rendezvous: Transport, caller: boolean,
   opts: {
     timeoutMs?: number; iceServers?: RTCIceServer[]; signal?: AbortSignal;
+    /** Test/dev callers only; production leaves ICE to choose a candidate. */
+    iceTransportPolicy?: RTCIceTransportPolicy;
     /**
      * Do not try for a peer connection at all.
      *
