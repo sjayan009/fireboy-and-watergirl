@@ -14,7 +14,9 @@ middleware and no serverless function in the request path, so a page load costs
 one round trip to the nearest edge and nothing else. That matters here more than
 it usually does: the point of the whole project is latency, and a framework that
 answers `/login` from a function in one region would put a server hop in front
-of a game whose netcode goes peer to peer.
+of a game whose netcode goes peer to peer. Link creation may call the
+authenticated Supabase TURN credential function; it does not sit on page
+delivery or the per-frame gameplay path.
 
 Auth is therefore client-side, against Supabase. That is not a compromise on
 security -- **row level security is the boundary**, it is enforced in Postgres
@@ -40,7 +42,7 @@ show a screen the current stage is not standing in front of:
 
 Every one of these is also true in the database, and since migration `0013` that
 is enforced rather than argued. An account with no profile is refused by every
-policy and every function -- it cannot even read the user directory, which is
+gameplay-data policy and function -- it cannot even read the user directory, which is
 where an attacker used to get the id they needed. A session that has not
 answered an enrolled second factor is refused the same way, so the `locked`
 screen is a convenience and not the boundary.
@@ -121,9 +123,20 @@ them into `dist/extracted/assets` once.
 `extracted/assets/_raw/` is excluded and must stay excluded: 116 MB of JPEXS
 intermediates that the shipped assets were derived from.
 
+## Runtime ICE configuration
+
+The optional build-time `ICE_SERVERS` setting accepts public STUN URLs only.
+`net/turn.ts` obtains short-lived ICE credentials from the authenticated
+`turn-credentials` function at link creation, caches them in memory and falls
+back to public STUN on failure. Cloudflare TURN is selected by WebRTC ICE;
+Supabase gameplay relay remains the emergency application path. Master
+Cloudflare tokens never belong in client source, Vite configuration or public
+assets. See [TURN setup and live acceptance](../docs/NETWORK_ROLLOUT_TURN.md)
+and [migration flags and benchmarks](../docs/NETWORK_ROLLOUT.md).
+
 ## Configuration the dashboard has to supply
 
-Two things live in the Supabase dashboard and cannot be set from here:
+The following production settings require operator configuration:
 
 1. **Redirect URLs.** Add the deployed origin and `http://localhost:5174` to
    Auth → URL Configuration. Emailed links come back to the bare origin with
@@ -133,3 +146,7 @@ Two things live in the Supabase dashboard and cannot be set from here:
 2. **Custom SMTP.** The built-in sender is rate-limited to a few messages an
    hour and is documented as being for testing. Email verification is required
    here, so it needs a real sender before anyone but you signs up.
+3. **TURN broker.** Deploy the Edge Function, store its Cloudflare key/token
+   only as server secrets, configure `TURN_ALLOWED_ORIGINS`, and verify a full
+   forced-TURN pair session. Monitor the free allowance; alerts are not a
+   spending cap. The runbook contains CLI commands and rollback instructions.

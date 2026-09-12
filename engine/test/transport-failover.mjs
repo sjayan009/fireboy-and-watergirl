@@ -93,7 +93,8 @@ try {
   });
   assert.deepEqual(errors, []);
   await mkdir(resolve(ROOT,"docs/benchmarks"),{recursive:true});
-  await writeFile(resolve(ROOT,"docs/benchmarks/webrtc-local.json"),JSON.stringify({capturedAt:new Date().toISOString(),browser:browser.version(),scope:"Actual loopback Chromium RTC; relay transport is local rendezvous, not hosted Supabase. No global WAN/NAT hardware tested.",...result},null,2)+"\n");
+  const report = process.argv.includes("--rollout") ? "webrtc-rollout-local.json" : "webrtc-local.json";
+  await writeFile(resolve(ROOT,"docs/benchmarks",report),JSON.stringify({capturedAt:new Date().toISOString(),browser:browser.version(),scope:"Actual loopback Chromium RTC; relay transport is local rendezvous, not hosted Supabase. No global WAN/NAT hardware tested.",...result},null,2)+"\n");
   console.log(JSON.stringify(result,null,2));
   console.log("TRANSPORT FAILURE / RELAY RECONNECT PASSED");
 } finally { await browser?.close(); server.kill(); }
