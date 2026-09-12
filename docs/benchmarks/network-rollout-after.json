@@ -1,0 +1,2153 @@
+{
+  "label": "rollout-after",
+  "capturedAt": "2026-09-12T23:39:43.231Z",
+  "node": "v22.17.1",
+  "description": "Actual 26Hz NetSession/LevelHost and production RealtimeTransport; seeded simulated network, 20s per cell. CPU is local Node. Payload excludes Phoenix/WebSocket/TLS/IP overhead. Heap is process-wide, not per session. No global WAN or provider usage was measured.",
+  "realtimeSource": "/** Emergency gameplay and signaling over the existing private pair channel.\n * NetSession still generates 26 Hz inputs. Changed bits and boundaries publish\n * immediately; unchanged inputs publish the newest redundant history at 115 ms.\n * legacyBatching retains the original 230/115 ms queue for rollout rollback.\n */\nimport { Transport, transportStats } from \"@engine/net/transport.js\";\nimport { decode, type InputPacket } from \"@engine/net/protocol.js\";\nimport { encode } from \"./base64.js\";\n\n/**\n * The three things this needs from a channel, and nothing else.\n *\n * Named rather than taking a `PairChannel`, because a watcher rides the same\n * transport over a different topic -- and asking for the whole pair channel\n * would have meant handing a spectator an object that also carries the two\n * players' presence and invitations.\n */\nexport type ByteLane = \"gameplay\" | \"signaling\" | \"control\";\nexport interface ByteChannel {\n  onBytes(fn: (d: Uint8Array) => void): () => void;\n  /** Local buffering metadata; scoping carries the corresponding on-wire lane. */\n  sendBytes(packets: string[], lane?: ByteLane): void;\n  onStatus(fn: (status: string) => void): () => void;\n}\n\nconst SLOW_MS = 230;\nconst FAST_MS = 115;\n\nexport class RealtimeTransport implements Transport {\n  readonly kind = \"relay\" as const;\n  readonly activePath = \"relay\" as const;\n  readonly stats = { ...transportStats(), queueRecentMs: [] as number[] };\n  private queue: string[] = [];\n  private queuedAt: number[] = [];\n  private queuedBytes: number[] = [];\n  private timer: ReturnType<typeof setTimeout> | null = null;\n  private off: (() => void) | null = null;\n  private offStatus: (() => void) | null = null;\n  private closed = false;\n  private gone = false;\n\n  /** Batch dispatches; PairChannel may hold/retry these during reconnection. */\n  sent = 0;\n\n  /** How long a queued packet may wait. See `hurry`. */\n  private flushMs = SLOW_MS;\n\n  constructor(private readonly pair: ByteChannel, private readonly options: {\n    /** Temporary rollout rollback switch: original 230/115 ms batching. */\n    legacyBatching?: boolean;\n    /** Monotonic sample clock; tests supply a virtual timestamp. */\n    now?: () => number;\n  } = {}) {}\n\n  private now(): number { return this.options.now?.() ?? performance.now(); }\n\n  /**\n   * Spend more messages to stop stalling, or stop spending them.\n   *\n   * A timer already running keeps the deadline it was given: it is at most one\n   * interval away and rescheduling it would delay the very packets this exists\n   * to hurry. Everything queued after this call uses the new one.\n   */\n  hurry(on: boolean): void {\n    this.flushMs = this.options.legacyBatching && !on ? SLOW_MS : FAST_MS;\n  }\n\n  /** What a queued packet is currently waiting, in ms. Read by the readout. */\n  get waitMs(): number { return this.options.legacyBatching ? this.flushMs : FAST_MS; }\n\n  /**\n   * The same number, under the name the session asks for it by.\n   *\n   * This is most of a relayed pair's delay budget and nothing above the\n   * transport used to know it existed: the session reasoned about round trips\n   * and the page reasoned about stalls, while 230 ms of a 538 ms window was\n   * being spent in a queue neither could see.\n   */\n  get pacingMs(): number { return this.waitMs; }\n\n  /**\n   * The transport itself adds no paid-quota ping messages. NetSession estimates\n   * RTT/jitter from timing trailers already attached to normal input packets.\n   */\n  readonly rttMs = null;\n\n  private lastSent = 0;\n\n  /**\n   * Leading edge, then batched.\n   *\n   * The first packet after a quiet moment goes out at once and only the stream\n   * behind it waits. That matters because this same transport carries the SDP\n   * and ICE of the peer-connection handshake: a few messages, each one blocking\n   * the next, where a flat delay would put 115 ms into every step of a\n   * negotiation the pair is sitting and waiting on.\n   */\n  send(data: Uint8Array): void {\n    if (this.closed) return;\n    const input = decode(data);\n    // Commands and negotiation unblock the next action. They must not wait for input batching.\n    if (!input || input.kind !== 1 || input.bits.length === 0) {\n      this.flush();\n      this.pair.sendBytes([encode(data)]);\n      this.sent++;\n      this.stats.sentPackets++;\n      this.stats.sentBytes += data.byteLength;\n      return;\n    }\n    if (!this.options.legacyBatching) { this.sendEdge(data, input); return; }\n    // An input packet carries a window of history ending at `frame`, so two\n    // packets queued for the SAME frame, slot and epoch say the same thing\n    // twice and only the newer one is worth sending. That is the whole rule:\n    // strictly the same frame, never an overlap.\n    //\n    // Dropping packets whose window a later one merely covers would save more,\n    // and is deliberately not done here -- it is a change to what goes on the\n    // wire, and the netcode matrix is what would have to say it is safe.\n    const previous = this.lastInput;\n    const frame = input.frame;\n    if (previous && input.slot === previous.slot && input.epoch === previous.epoch && frame === previous.frame) {\n      this.queue.pop();\n      this.queuedAt.pop();\n      this.stats.bufferedBytes -= this.queuedBytes.pop()!;\n    }\n    this.queue.push(encode(data));\n    this.queuedAt.push(this.now());\n    this.queuedBytes.push(data.byteLength);\n    this.stats.bufferedBytes += data.byteLength;\n    this.lastInput = { frame, slot: input.slot, epoch: input.epoch };\n    if (this.queue.length >= 32) { this.flush(); return; }\n\n    const since = Date.now() - this.lastSent;\n    if (since >= this.flushMs) { this.flush(); return; }\n    if (this.timer !== null) return;\n    this.timer = setTimeout(() => {\n      this.timer = null;\n      this.flush();\n    }, this.flushMs - since);\n  }\n  private lastInput: { frame: number; slot: number; epoch: number } | null = null;\n\n  private observed: InputPacket | null = null;\n\n  /** Per-frame logical inputs still come from NetSession. Only publication is\n   * coalesced: the newest packet carries the skipped frames in its history. */\n  private sendEdge(data: Uint8Array, input: InputPacket): void {\n    const previous = this.observed;\n    const boundary = !previous || input.slot !== previous.slot || input.epoch !== previous.epoch ||\n      input.frame < previous.frame;\n    const edge = boundary || input.bits[0] !== previous.bits[0];\n    // Never discard a packet outside the replacement's redundant history.\n    const covers = previous && !boundary && input.frame >= previous.frame &&\n      input.frame - previous.frame < input.bits.length;\n    if (covers) this.discardPending();\n    else this.flush();\n    this.observed = input;\n    this.queue.push(encode(data));\n    this.queuedAt.push(this.now());\n    this.queuedBytes.push(data.byteLength);\n    this.stats.bufferedBytes += data.byteLength;\n    const since = Date.now() - this.lastSent;\n    if (edge || since >= FAST_MS) { this.flush(); return; }\n    this.timer = setTimeout(() => { this.timer = null; this.flush(); }, FAST_MS - since);\n  }\n\n  /** Promotion stops pending emergency gameplay while retaining its receiver. */\n  discardPending(): void {\n    if (this.timer !== null) clearTimeout(this.timer);\n    this.timer = null;\n    this.queue = []; this.queuedAt = []; this.queuedBytes = [];\n    this.stats.bufferedBytes = 0;\n    this.lastInput = null;\n  }\n\n  private flush(): void {\n    // Keep the original timer semantics verbatim behind the rollback switch.\n    if (!this.options.legacyBatching) {\n      if (this.timer !== null) clearTimeout(this.timer);\n      this.timer = null;\n    }\n    if (this.closed || this.queue.length === 0) return;\n    const packets = this.queue;\n    const now = this.now();\n    for (let i = 0; i < this.queuedAt.length; i++) {\n      const wait = Math.max(0, now - this.queuedAt[i]);\n      this.stats.queueSamples++;\n      this.stats.queueTotalMs += wait;\n      this.stats.queueMaxMs = Math.max(this.stats.queueMaxMs, wait);\n      const samples = this.stats.queueRecentMs ??= [];\n      samples.push(wait);\n      if (samples.length > 512) samples.shift();\n      this.stats.sentPackets++;\n      this.stats.sentBytes += this.queuedBytes[i];\n    }\n    this.queue = [];\n    this.queuedAt = [];\n    this.queuedBytes = [];\n    this.stats.bufferedBytes = 0;\n    this.lastInput = null;\n    this.sent++;\n    this.lastSent = Date.now();\n    this.pair.sendBytes(packets);\n  }\n\n  onMessage(fn: (data: Uint8Array) => void): void {\n    this.off?.();\n    this.off = this.pair.onBytes(data => {\n      this.stats.receivedPackets++;\n      this.stats.receivedBytes += data.byteLength;\n      fn(data);\n    });\n  }\n\n  /**\n   * The channel's own status, for a pair whose game is riding on it.\n   *\n   * A relayed session has no peer connection to lose, so the only way this link\n   * dies is the websocket underneath it -- which the Supabase client will try\n   * to bring back on its own. Saying so anyway is right: the page can tell\n   * somebody why their game stopped, and a reconnect that succeeds clears the\n   * message it put up.\n   */\n  onClosed(fn: (why: string) => void): void {\n    this.offStatus?.();\n    this.offStatus = this.pair.onStatus((status) => {\n      if (this.closed || this.gone) return;\n      if (status === \"SUBSCRIBED\") return;\n      this.gone = true;\n      fn(\"the channel went \" + status.toLowerCase());\n    });\n  }\n\n  close(): void {\n    // Flushed FIRST. Whatever is still queued is the last thing this session\n    // had to say, and the one message that is reliably in there is the Quit\n    // that tells the other person their partner has gone -- dropping it on the\n    // floor turns leaving into a peer who simply stops responding forever.\n    this.flush();\n    this.closed = true;\n    if (this.timer !== null) clearTimeout(this.timer);\n    this.timer = null;\n    this.off?.();\n    this.off = null;\n    this.offStatus?.();\n    this.offStatus = null;\n    // The channel itself is NOT closed here. It outlives any one game: it is\n    // also the pair's presence and their invitations, and hanging up on those\n    // because a level ended would take the pair offline to each other.\n  }\n}\n",
+  "rows": [
+    {
+      "mode": "direct",
+      "scenario": "LAN",
+      "injectedRttMs": 0,
+      "injectedJitterMs": 0,
+      "injectedLoss": 0,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.013,
+      "tickP95Ms": 7.295,
+      "tickP99Ms": 13.854,
+      "measuredRttP50Ms": 0.468,
+      "measuredRttP95Ms": 0.478,
+      "jitterMs": [
+        0.307,
+        0.307
+      ],
+      "relayQueueP50Ms": 0,
+      "relayQueueP95Ms": 0.333,
+      "relayQueueP99Ms": 0.333,
+      "relayQueueMaxMs": 0.3333333330228925,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 1041,
+      "messagesPerSecond": 52.05,
+      "payloadBytes": 66620,
+      "payloadBytesPerSecond": 3331,
+      "binaryPacketBytes": 66620,
+      "droppedMessages": 0,
+      "observedLoss": 0,
+      "rollbacks": [
+        74,
+        74
+      ],
+      "deepestRollback": [
+        7,
+        7
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        519
+      ],
+      "cpuMs": 2297,
+      "wallMs": 1922.632,
+      "heapUsedBytes": 94204328,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "75e85c16",
+        "75e85c16"
+      ],
+      "replayHashes": [
+        "75e85c16",
+        "75e85c16"
+      ],
+      "sharedFrames": 571,
+      "sharedHash": "75e85c16"
+    },
+    {
+      "mode": "direct",
+      "scenario": "regional",
+      "injectedRttMs": 80,
+      "injectedJitterMs": 10,
+      "injectedLoss": 0,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.019,
+      "tickP95Ms": 7.171,
+      "tickP99Ms": 12.689,
+      "measuredRttP50Ms": 78.489,
+      "measuredRttP95Ms": 83.206,
+      "jitterMs": [
+        8.03,
+        5.925
+      ],
+      "relayQueueP50Ms": 0,
+      "relayQueueP95Ms": 0.333,
+      "relayQueueP99Ms": 0.333,
+      "relayQueueMaxMs": 0.3333333330228925,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 1044,
+      "messagesPerSecond": 52.2,
+      "payloadBytes": 66603,
+      "payloadBytesPerSecond": 3330.15,
+      "binaryPacketBytes": 66603,
+      "droppedMessages": 0,
+      "observedLoss": 0,
+      "rollbacks": [
+        150,
+        74
+      ],
+      "deepestRollback": [
+        9,
+        7
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        519
+      ],
+      "cpuMs": 1984,
+      "wallMs": 1983.265,
+      "heapUsedBytes": 100923088,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "replayHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "sharedFrames": 571,
+      "sharedHash": "6f09685c"
+    },
+    {
+      "mode": "direct",
+      "scenario": "150ms",
+      "injectedRttMs": 150,
+      "injectedJitterMs": 30,
+      "injectedLoss": 0.05,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.014,
+      "tickP95Ms": 6.936,
+      "tickP99Ms": 12.725,
+      "measuredRttP50Ms": 146.101,
+      "measuredRttP95Ms": 158.811,
+      "jitterMs": [
+        16.569,
+        25.591
+      ],
+      "relayQueueP50Ms": 0,
+      "relayQueueP95Ms": 0.333,
+      "relayQueueP99Ms": 0.333,
+      "relayQueueMaxMs": 0.4051358699798584,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 1049,
+      "messagesPerSecond": 52.45,
+      "payloadBytes": 66663,
+      "payloadBytesPerSecond": 3333.15,
+      "binaryPacketBytes": 66663,
+      "droppedMessages": 52,
+      "observedLoss": 0.04957102001906578,
+      "rollbacks": [
+        135,
+        111
+      ],
+      "deepestRollback": [
+        11,
+        9
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        518
+      ],
+      "cpuMs": 1781,
+      "wallMs": 1986.565,
+      "heapUsedBytes": 152915416,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "e376c025",
+        "e376c025"
+      ],
+      "replayHashes": [
+        "e376c025",
+        "e376c025"
+      ],
+      "sharedFrames": 570,
+      "sharedHash": "e376c025"
+    },
+    {
+      "mode": "direct",
+      "scenario": "300ms",
+      "injectedRttMs": 300,
+      "injectedJitterMs": 50,
+      "injectedLoss": 0.1,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.009,
+      "tickP95Ms": 6.339,
+      "tickP99Ms": 11.371,
+      "measuredRttP50Ms": 297.433,
+      "measuredRttP95Ms": 315.056,
+      "jitterMs": [
+        37.216,
+        30.308
+      ],
+      "relayQueueP50Ms": 0,
+      "relayQueueP95Ms": 0.333,
+      "relayQueueP99Ms": 0.333,
+      "relayQueueMaxMs": 0.3333333330228925,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 1054,
+      "messagesPerSecond": 52.7,
+      "payloadBytes": 66511,
+      "payloadBytesPerSecond": 3325.55,
+      "binaryPacketBytes": 66511,
+      "droppedMessages": 110,
+      "observedLoss": 0.10436432637571158,
+      "rollbacks": [
+        124,
+        133
+      ],
+      "deepestRollback": [
+        15,
+        12
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        518,
+        516
+      ],
+      "cpuMs": 1577,
+      "wallMs": 1789.354,
+      "heapUsedBytes": 209471544,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "945408df",
+        "945408df"
+      ],
+      "replayHashes": [
+        "945408df",
+        "945408df"
+      ],
+      "sharedFrames": 568,
+      "sharedHash": "945408df"
+    },
+    {
+      "mode": "direct",
+      "scenario": "600ms",
+      "injectedRttMs": 600,
+      "injectedJitterMs": 100,
+      "injectedLoss": 0.2,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.01,
+      "tickP95Ms": 6.102,
+      "tickP99Ms": 12.335,
+      "measuredRttP50Ms": 599.811,
+      "measuredRttP95Ms": 636.458,
+      "jitterMs": [
+        83.505,
+        73.063
+      ],
+      "relayQueueP50Ms": 0,
+      "relayQueueP95Ms": 0.333,
+      "relayQueueP99Ms": 0.333,
+      "relayQueueMaxMs": 0.35045289993286133,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 1057,
+      "messagesPerSecond": 52.85,
+      "payloadBytes": 66176,
+      "payloadBytesPerSecond": 3308.8,
+      "binaryPacketBytes": 66176,
+      "droppedMessages": 203,
+      "observedLoss": 0.19205298013245034,
+      "rollbacks": [
+        113,
+        103
+      ],
+      "deepestRollback": [
+        22,
+        17
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        514,
+        513
+      ],
+      "cpuMs": 1532,
+      "wallMs": 1765.993,
+      "heapUsedBytes": 80868704,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "a3f76378",
+        "a3f76378"
+      ],
+      "replayHashes": [
+        "a3f76378",
+        "a3f76378"
+      ],
+      "sharedFrames": 565,
+      "sharedHash": "a3f76378"
+    },
+    {
+      "mode": "direct",
+      "scenario": "burst_loss",
+      "injectedRttMs": 150,
+      "injectedJitterMs": 20,
+      "injectedLoss": 0.02,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.014,
+      "tickP95Ms": 7.317,
+      "tickP99Ms": 16.134,
+      "measuredRttP50Ms": 145.66,
+      "measuredRttP95Ms": 154.083,
+      "jitterMs": [
+        15.256,
+        9.193
+      ],
+      "relayQueueP50Ms": 0,
+      "relayQueueP95Ms": 0.333,
+      "relayQueueP99Ms": 0.333,
+      "relayQueueMaxMs": 0.3333333330228925,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 1045,
+      "messagesPerSecond": 52.25,
+      "payloadBytes": 66509,
+      "payloadBytesPerSecond": 3325.45,
+      "binaryPacketBytes": 66509,
+      "droppedMessages": 54,
+      "observedLoss": 0.05167464114832536,
+      "rollbacks": [
+        122,
+        111
+      ],
+      "deepestRollback": [
+        16,
+        20
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        518
+      ],
+      "cpuMs": 1765,
+      "wallMs": 2245.81,
+      "heapUsedBytes": 149640416,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "eeba622a",
+        "eeba622a"
+      ],
+      "replayHashes": [
+        "eeba622a",
+        "eeba622a"
+      ],
+      "sharedFrames": 570,
+      "sharedHash": "eeba622a"
+    },
+    {
+      "mode": "direct",
+      "scenario": "background_tab",
+      "injectedRttMs": 150,
+      "injectedJitterMs": 20,
+      "injectedLoss": 0.02,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.056,
+      "tickP95Ms": 10.975,
+      "tickP99Ms": 16.367,
+      "measuredRttP50Ms": 146.298,
+      "measuredRttP95Ms": 154.739,
+      "jitterMs": [
+        16.741,
+        15.837
+      ],
+      "relayQueueP50Ms": 0,
+      "relayQueueP95Ms": 0.333,
+      "relayQueueP99Ms": 0.333,
+      "relayQueueMaxMs": 0.3333333330228925,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 985,
+      "messagesPerSecond": 49.25,
+      "payloadBytes": 62609,
+      "payloadBytesPerSecond": 3130.45,
+      "binaryPacketBytes": 62609,
+      "droppedMessages": 27,
+      "observedLoss": 0.027411167512690356,
+      "rollbacks": [
+        110,
+        360
+      ],
+      "deepestRollback": [
+        37,
+        8
+      ],
+      "stalledCallbacks": [
+        288,
+        0
+      ],
+      "stallFraction": [
+        0.24,
+        0
+      ],
+      "frames": [
+        497,
+        479
+      ],
+      "cpuMs": 3734,
+      "wallMs": 4561.739,
+      "heapUsedBytes": 222512504,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "62b6dec5",
+        "62b6dec5"
+      ],
+      "replayHashes": [
+        "62b6dec5",
+        "62b6dec5"
+      ],
+      "sharedFrames": 531,
+      "sharedHash": "62b6dec5"
+    },
+    {
+      "mode": "direct",
+      "scenario": "144hz",
+      "injectedRttMs": 80,
+      "injectedJitterMs": 10,
+      "injectedLoss": 0.05,
+      "callbackHz": 144,
+      "durationSeconds": 20,
+      "tickP50Ms": 0,
+      "tickP95Ms": 0.475,
+      "tickP99Ms": 11.398,
+      "measuredRttP50Ms": 77.915,
+      "measuredRttP95Ms": 82.302,
+      "jitterMs": [
+        7.237,
+        6.242
+      ],
+      "relayQueueP50Ms": 0,
+      "relayQueueP95Ms": 0.389,
+      "relayQueueP99Ms": 0.444,
+      "relayQueueMaxMs": 0.44444459211081266,
+      "edgeQueueP95Ms": 0.389,
+      "wireMessages": 1050,
+      "messagesPerSecond": 52.5,
+      "payloadBytes": 66675,
+      "payloadBytesPerSecond": 3333.75,
+      "binaryPacketBytes": 66675,
+      "droppedMessages": 52,
+      "observedLoss": 0.049523809523809526,
+      "rollbacks": [
+        146,
+        75
+      ],
+      "deepestRollback": [
+        10,
+        8
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        520,
+        519
+      ],
+      "cpuMs": 2032,
+      "wallMs": 2207.624,
+      "heapUsedBytes": 292286832,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "replayHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "sharedFrames": 571,
+      "sharedHash": "6f09685c"
+    },
+    {
+      "mode": "supabase230",
+      "scenario": "LAN",
+      "injectedRttMs": 0,
+      "injectedJitterMs": 0,
+      "injectedLoss": 0,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.01,
+      "tickP95Ms": 4.021,
+      "tickP99Ms": 13.796,
+      "measuredRttP50Ms": 119.961,
+      "measuredRttP95Ms": 140.831,
+      "jitterMs": [
+        60.623,
+        60.623
+      ],
+      "relayQueueP50Ms": 113,
+      "relayQueueP95Ms": 217,
+      "relayQueueP99Ms": 227,
+      "relayQueueMaxMs": 227,
+      "edgeQueueP95Ms": 217,
+      "wireMessages": 175,
+      "messagesPerSecond": 8.75,
+      "payloadBytes": 196284,
+      "payloadBytesPerSecond": 9814.2,
+      "binaryPacketBytes": 65840,
+      "droppedMessages": 0,
+      "observedLoss": 0,
+      "rollbacks": [
+        82,
+        75
+      ],
+      "deepestRollback": [
+        13,
+        13
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        519
+      ],
+      "cpuMs": 1640,
+      "wallMs": 1610.488,
+      "heapUsedBytes": 106475928,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "75e85c16",
+        "75e85c16"
+      ],
+      "replayHashes": [
+        "75e85c16",
+        "75e85c16"
+      ],
+      "sharedFrames": 571,
+      "sharedHash": "75e85c16"
+    },
+    {
+      "mode": "supabase230",
+      "scenario": "regional",
+      "injectedRttMs": 80,
+      "injectedJitterMs": 10,
+      "injectedLoss": 0,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.013,
+      "tickP95Ms": 4.737,
+      "tickP99Ms": 15.595,
+      "measuredRttP50Ms": 199.776,
+      "measuredRttP95Ms": 226.17,
+      "jitterMs": [
+        60.376,
+        60.762
+      ],
+      "relayQueueP50Ms": 113.135,
+      "relayQueueP95Ms": 219.135,
+      "relayQueueP99Ms": 227,
+      "relayQueueMaxMs": 229.1350452899933,
+      "edgeQueueP95Ms": 220,
+      "wireMessages": 179,
+      "messagesPerSecond": 8.95,
+      "payloadBytes": 196788,
+      "payloadBytesPerSecond": 9839.4,
+      "binaryPacketBytes": 65888,
+      "droppedMessages": 0,
+      "observedLoss": 0,
+      "rollbacks": [
+        73,
+        77
+      ],
+      "deepestRollback": [
+        14,
+        13
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        519
+      ],
+      "cpuMs": 1484,
+      "wallMs": 1744.509,
+      "heapUsedBytes": 150337992,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "replayHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "sharedFrames": 571,
+      "sharedHash": "6f09685c"
+    },
+    {
+      "mode": "supabase230",
+      "scenario": "150ms",
+      "injectedRttMs": 150,
+      "injectedJitterMs": 30,
+      "injectedLoss": 0.05,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.01,
+      "tickP95Ms": 3.213,
+      "tickP99Ms": 11.002,
+      "measuredRttP50Ms": 271.026,
+      "measuredRttP95Ms": 301.171,
+      "jitterMs": [
+        60.892,
+        58.787
+      ],
+      "relayQueueP50Ms": 113,
+      "relayQueueP95Ms": 216.405,
+      "relayQueueP99Ms": 226.405,
+      "relayQueueMaxMs": 227,
+      "edgeQueueP95Ms": 207,
+      "wireMessages": 187,
+      "messagesPerSecond": 9.35,
+      "payloadBytes": 197439,
+      "payloadBytesPerSecond": 9871.95,
+      "binaryPacketBytes": 65948,
+      "droppedMessages": 11,
+      "observedLoss": 0.058823529411764705,
+      "rollbacks": [
+        68,
+        73
+      ],
+      "deepestRollback": [
+        26,
+        19
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        518
+      ],
+      "cpuMs": 1046,
+      "wallMs": 1238.689,
+      "heapUsedBytes": 208258704,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "e376c025",
+        "e376c025"
+      ],
+      "replayHashes": [
+        "e376c025",
+        "e376c025"
+      ],
+      "sharedFrames": 570,
+      "sharedHash": "e376c025"
+    },
+    {
+      "mode": "supabase230",
+      "scenario": "300ms",
+      "injectedRttMs": 300,
+      "injectedJitterMs": 50,
+      "injectedLoss": 0.1,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.011,
+      "tickP95Ms": 2.838,
+      "tickP99Ms": 12.623,
+      "measuredRttP50Ms": 413.415,
+      "measuredRttP95Ms": 457.184,
+      "jitterMs": [
+        57.214,
+        56.993
+      ],
+      "relayQueueP50Ms": 113,
+      "relayQueueP95Ms": 217,
+      "relayQueueP99Ms": 227,
+      "relayQueueMaxMs": 227.67522644996643,
+      "edgeQueueP95Ms": 210,
+      "wireMessages": 198,
+      "messagesPerSecond": 9.9,
+      "payloadBytes": 198205,
+      "payloadBytesPerSecond": 9910.25,
+      "binaryPacketBytes": 65926,
+      "droppedMessages": 23,
+      "observedLoss": 0.11616161616161616,
+      "rollbacks": [
+        68,
+        66
+      ],
+      "deepestRollback": [
+        24,
+        26
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        517,
+        516
+      ],
+      "cpuMs": 1141,
+      "wallMs": 1319.674,
+      "heapUsedBytes": 247926688,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "5ff12fb7",
+        "5ff12fb7"
+      ],
+      "replayHashes": [
+        "5ff12fb7",
+        "5ff12fb7"
+      ],
+      "sharedFrames": 568,
+      "sharedHash": "5ff12fb7"
+    },
+    {
+      "mode": "supabase230",
+      "scenario": "600ms",
+      "injectedRttMs": 600,
+      "injectedJitterMs": 100,
+      "injectedLoss": 0.2,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.01,
+      "tickP95Ms": 1.89,
+      "tickP99Ms": 12.644,
+      "measuredRttP50Ms": 715.543,
+      "measuredRttP95Ms": 802.53,
+      "jitterMs": [
+        57.844,
+        64.006
+      ],
+      "relayQueueP50Ms": 110,
+      "relayQueueP95Ms": 214.35,
+      "relayQueueP99Ms": 227,
+      "relayQueueMaxMs": 228.35045289993286,
+      "edgeQueueP95Ms": 210,
+      "wireMessages": 222,
+      "messagesPerSecond": 11.1,
+      "payloadBytes": 198605,
+      "payloadBytesPerSecond": 9930.25,
+      "binaryPacketBytes": 65492,
+      "droppedMessages": 45,
+      "observedLoss": 0.20270270270270271,
+      "rollbacks": [
+        54,
+        65
+      ],
+      "deepestRollback": [
+        36,
+        30
+      ],
+      "stalledCallbacks": [
+        18,
+        2
+      ],
+      "stallFraction": [
+        0.015,
+        0.0016666666666666668
+      ],
+      "frames": [
+        513,
+        513
+      ],
+      "cpuMs": 1281,
+      "wallMs": 1363.696,
+      "heapUsedBytes": 95479248,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "935704b9",
+        "935704b9"
+      ],
+      "replayHashes": [
+        "935704b9",
+        "935704b9"
+      ],
+      "sharedFrames": 565,
+      "sharedHash": "935704b9"
+    },
+    {
+      "mode": "supabase230",
+      "scenario": "burst_loss",
+      "injectedRttMs": 150,
+      "injectedJitterMs": 20,
+      "injectedLoss": 0.02,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.011,
+      "tickP95Ms": 3,
+      "tickP99Ms": 11.848,
+      "measuredRttP50Ms": 268.129,
+      "measuredRttP95Ms": 293.596,
+      "jitterMs": [
+        60.595,
+        58.352
+      ],
+      "relayQueueP50Ms": 113,
+      "relayQueueP95Ms": 217.27,
+      "relayQueueP99Ms": 227,
+      "relayQueueMaxMs": 227.27009057998657,
+      "edgeQueueP95Ms": 220,
+      "wireMessages": 187,
+      "messagesPerSecond": 9.35,
+      "payloadBytes": 197248,
+      "payloadBytesPerSecond": 9862.4,
+      "binaryPacketBytes": 65883,
+      "droppedMessages": 10,
+      "observedLoss": 0.053475935828877004,
+      "rollbacks": [
+        77,
+        77
+      ],
+      "deepestRollback": [
+        21,
+        19
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        518
+      ],
+      "cpuMs": 1280,
+      "wallMs": 1348.177,
+      "heapUsedBytes": 144932112,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "5aaa4c5b",
+        "5aaa4c5b"
+      ],
+      "replayHashes": [
+        "5aaa4c5b",
+        "5aaa4c5b"
+      ],
+      "sharedFrames": 570,
+      "sharedHash": "5aaa4c5b"
+    },
+    {
+      "mode": "supabase230",
+      "scenario": "background_tab",
+      "injectedRttMs": 150,
+      "injectedJitterMs": 20,
+      "injectedLoss": 0.02,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.044,
+      "tickP95Ms": 11.195,
+      "tickP99Ms": 16.747,
+      "measuredRttP50Ms": 266.124,
+      "measuredRttP95Ms": 300.556,
+      "jitterMs": [
+        56.314,
+        62.189
+      ],
+      "relayQueueP50Ms": 113,
+      "relayQueueP95Ms": 217,
+      "relayQueueP99Ms": 227,
+      "relayQueueMaxMs": 230.33333331346512,
+      "edgeQueueP95Ms": 219.667,
+      "wireMessages": 181,
+      "messagesPerSecond": 9.05,
+      "payloadBytes": 184600,
+      "payloadBytesPerSecond": 9230,
+      "binaryPacketBytes": 61593,
+      "droppedMessages": 6,
+      "observedLoss": 0.03314917127071823,
+      "rollbacks": [
+        71,
+        312
+      ],
+      "deepestRollback": [
+        36,
+        13
+      ],
+      "stalledCallbacks": [
+        83,
+        0
+      ],
+      "stallFraction": [
+        0.06916666666666667,
+        0
+      ],
+      "frames": [
+        487,
+        479
+      ],
+      "cpuMs": 3516,
+      "wallMs": 4052.914,
+      "heapUsedBytes": 226650776,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "3422a288",
+        "3422a288"
+      ],
+      "replayHashes": [
+        "3422a288",
+        "3422a288"
+      ],
+      "sharedFrames": 531,
+      "sharedHash": "3422a288"
+    },
+    {
+      "mode": "supabase230",
+      "scenario": "144hz",
+      "injectedRttMs": 80,
+      "injectedJitterMs": 10,
+      "injectedLoss": 0.05,
+      "callbackHz": 144,
+      "durationSeconds": 20,
+      "tickP50Ms": 0,
+      "tickP95Ms": 0.207,
+      "tickP99Ms": 8.509,
+      "measuredRttP50Ms": 199.268,
+      "measuredRttP95Ms": 223.528,
+      "jitterMs": [
+        59.68,
+        59.01
+      ],
+      "relayQueueP50Ms": 113.135,
+      "relayQueueP95Ms": 215.135,
+      "relayQueueP99Ms": 226,
+      "relayQueueMaxMs": 230,
+      "edgeQueueP95Ms": 213,
+      "wireMessages": 186,
+      "messagesPerSecond": 9.3,
+      "payloadBytes": 197933,
+      "payloadBytesPerSecond": 9896.65,
+      "binaryPacketBytes": 66090,
+      "droppedMessages": 11,
+      "observedLoss": 0.05913978494623656,
+      "rollbacks": [
+        70,
+        65
+      ],
+      "deepestRollback": [
+        20,
+        19
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        519
+      ],
+      "cpuMs": 1015,
+      "wallMs": 1220.063,
+      "heapUsedBytes": 270380168,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "replayHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "sharedFrames": 571,
+      "sharedHash": "6f09685c"
+    },
+    {
+      "mode": "supabase115",
+      "scenario": "LAN",
+      "injectedRttMs": 0,
+      "injectedJitterMs": 0,
+      "injectedLoss": 0,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.01,
+      "tickP95Ms": 4.793,
+      "tickP99Ms": 11.071,
+      "measuredRttP50Ms": 74.2,
+      "measuredRttP95Ms": 96.537,
+      "jitterMs": [
+        49.107,
+        49.107
+      ],
+      "relayQueueP50Ms": 57,
+      "relayQueueP95Ms": 110,
+      "relayQueueP99Ms": 113,
+      "relayQueueMaxMs": 113,
+      "edgeQueueP95Ms": 108,
+      "wireMessages": 349,
+      "messagesPerSecond": 17.45,
+      "payloadBytes": 198648,
+      "payloadBytesPerSecond": 9932.4,
+      "binaryPacketBytes": 66230,
+      "droppedMessages": 0,
+      "observedLoss": 0,
+      "rollbacks": [
+        100,
+        95
+      ],
+      "deepestRollback": [
+        10,
+        10
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        519
+      ],
+      "cpuMs": 1437,
+      "wallMs": 1492.959,
+      "heapUsedBytes": 104654536,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "75e85c16",
+        "75e85c16"
+      ],
+      "replayHashes": [
+        "75e85c16",
+        "75e85c16"
+      ],
+      "sharedFrames": 571,
+      "sharedHash": "75e85c16"
+    },
+    {
+      "mode": "supabase115",
+      "scenario": "regional",
+      "injectedRttMs": 80,
+      "injectedJitterMs": 10,
+      "injectedLoss": 0,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.011,
+      "tickP95Ms": 5.787,
+      "tickP99Ms": 11.307,
+      "measuredRttP50Ms": 150.661,
+      "measuredRttP95Ms": 178.759,
+      "jitterMs": [
+        48.868,
+        49.318
+      ],
+      "relayQueueP50Ms": 57,
+      "relayQueueP95Ms": 110,
+      "relayQueueP99Ms": 113.135,
+      "relayQueueMaxMs": 114.13504528999329,
+      "edgeQueueP95Ms": 109.135,
+      "wireMessages": 353,
+      "messagesPerSecond": 17.65,
+      "payloadBytes": 199152,
+      "payloadBytesPerSecond": 9957.6,
+      "binaryPacketBytes": 66278,
+      "droppedMessages": 0,
+      "observedLoss": 0,
+      "rollbacks": [
+        113,
+        97
+      ],
+      "deepestRollback": [
+        11,
+        10
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        519
+      ],
+      "cpuMs": 1546,
+      "wallMs": 1627.61,
+      "heapUsedBytes": 159069456,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "replayHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "sharedFrames": 571,
+      "sharedHash": "6f09685c"
+    },
+    {
+      "mode": "supabase115",
+      "scenario": "150ms",
+      "injectedRttMs": 150,
+      "injectedJitterMs": 30,
+      "injectedLoss": 0.05,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.01,
+      "tickP95Ms": 5.421,
+      "tickP99Ms": 12.174,
+      "measuredRttP50Ms": 222.66,
+      "measuredRttP95Ms": 245.183,
+      "jitterMs": [
+        49.884,
+        52.49
+      ],
+      "relayQueueP50Ms": 56.405,
+      "relayQueueP95Ms": 108,
+      "relayQueueP99Ms": 113,
+      "relayQueueMaxMs": 113.40513586997986,
+      "edgeQueueP95Ms": 107,
+      "wireMessages": 360,
+      "messagesPerSecond": 18,
+      "payloadBytes": 199796,
+      "payloadBytesPerSecond": 9989.8,
+      "binaryPacketBytes": 66338,
+      "droppedMessages": 16,
+      "observedLoss": 0.044444444444444446,
+      "rollbacks": [
+        107,
+        102
+      ],
+      "deepestRollback": [
+        14,
+        14
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        518
+      ],
+      "cpuMs": 1453,
+      "wallMs": 1609.725,
+      "heapUsedBytes": 213289848,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "c94f1cc2",
+        "c94f1cc2"
+      ],
+      "replayHashes": [
+        "c94f1cc2",
+        "c94f1cc2"
+      ],
+      "sharedFrames": 570,
+      "sharedHash": "c94f1cc2"
+    },
+    {
+      "mode": "supabase115",
+      "scenario": "300ms",
+      "injectedRttMs": 300,
+      "injectedJitterMs": 50,
+      "injectedLoss": 0.1,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.008,
+      "tickP95Ms": 5.464,
+      "tickP99Ms": 11.639,
+      "measuredRttP50Ms": 369.201,
+      "measuredRttP95Ms": 396.327,
+      "jitterMs": [
+        50.436,
+        54.611
+      ],
+      "relayQueueP50Ms": 57,
+      "relayQueueP95Ms": 108,
+      "relayQueueP99Ms": 113,
+      "relayQueueMaxMs": 113.67522644996643,
+      "edgeQueueP95Ms": 107,
+      "wireMessages": 370,
+      "messagesPerSecond": 18.5,
+      "payloadBytes": 199982,
+      "payloadBytesPerSecond": 9999.1,
+      "binaryPacketBytes": 66121,
+      "droppedMessages": 41,
+      "observedLoss": 0.11081081081081082,
+      "rollbacks": [
+        101,
+        95
+      ],
+      "deepestRollback": [
+        19,
+        19
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        517,
+        516
+      ],
+      "cpuMs": 1360,
+      "wallMs": 1506.413,
+      "heapUsedBytes": 279110448,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "d8101402",
+        "d8101402"
+      ],
+      "replayHashes": [
+        "d8101402",
+        "d8101402"
+      ],
+      "sharedFrames": 568,
+      "sharedHash": "d8101402"
+    },
+    {
+      "mode": "supabase115",
+      "scenario": "600ms",
+      "injectedRttMs": 600,
+      "injectedJitterMs": 100,
+      "injectedLoss": 0.2,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.019,
+      "tickP95Ms": 7.225,
+      "tickP99Ms": 18.23,
+      "measuredRttP50Ms": 667.861,
+      "measuredRttP95Ms": 729.052,
+      "jitterMs": [
+        55.298,
+        48.614
+      ],
+      "relayQueueP50Ms": 53.35,
+      "relayQueueP95Ms": 108.35,
+      "relayQueueP99Ms": 113.35,
+      "relayQueueMaxMs": 114.35045289993286,
+      "edgeQueueP95Ms": 109.35,
+      "wireMessages": 392,
+      "messagesPerSecond": 19.6,
+      "payloadBytes": 200941,
+      "payloadBytesPerSecond": 10047.05,
+      "binaryPacketBytes": 65882,
+      "droppedMessages": 72,
+      "observedLoss": 0.1836734693877551,
+      "rollbacks": [
+        85,
+        85
+      ],
+      "deepestRollback": [
+        27,
+        22
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        514,
+        513
+      ],
+      "cpuMs": 2235,
+      "wallMs": 2370.319,
+      "heapUsedBytes": 97046304,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "0c9aea93",
+        "0c9aea93"
+      ],
+      "replayHashes": [
+        "0c9aea93",
+        "0c9aea93"
+      ],
+      "sharedFrames": 565,
+      "sharedHash": "0c9aea93"
+    },
+    {
+      "mode": "supabase115",
+      "scenario": "burst_loss",
+      "injectedRttMs": 150,
+      "injectedJitterMs": 20,
+      "injectedLoss": 0.02,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.016,
+      "tickP95Ms": 6.257,
+      "tickP99Ms": 15.07,
+      "measuredRttP50Ms": 221.965,
+      "measuredRttP95Ms": 240.723,
+      "jitterMs": [
+        50.115,
+        49.591
+      ],
+      "relayQueueP50Ms": 55,
+      "relayQueueP95Ms": 109.27,
+      "relayQueueP99Ms": 113,
+      "relayQueueMaxMs": 114.27009057998657,
+      "edgeQueueP95Ms": 110,
+      "wireMessages": 360,
+      "messagesPerSecond": 18,
+      "payloadBytes": 199605,
+      "payloadBytesPerSecond": 9980.25,
+      "binaryPacketBytes": 66273,
+      "droppedMessages": 18,
+      "observedLoss": 0.05,
+      "rollbacks": [
+        105,
+        100
+      ],
+      "deepestRollback": [
+        22,
+        15
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        518
+      ],
+      "cpuMs": 1812,
+      "wallMs": 1971.819,
+      "heapUsedBytes": 159956536,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "91acb759",
+        "91acb759"
+      ],
+      "replayHashes": [
+        "91acb759",
+        "91acb759"
+      ],
+      "sharedFrames": 570,
+      "sharedHash": "91acb759"
+    },
+    {
+      "mode": "supabase115",
+      "scenario": "background_tab",
+      "injectedRttMs": 150,
+      "injectedJitterMs": 20,
+      "injectedLoss": 0.02,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.05,
+      "tickP95Ms": 10.174,
+      "tickP99Ms": 14.328,
+      "measuredRttP50Ms": 218.051,
+      "measuredRttP95Ms": 244.481,
+      "jitterMs": [
+        45.738,
+        50.239
+      ],
+      "relayQueueP50Ms": 47.27,
+      "relayQueueP95Ms": 109.27,
+      "relayQueueP99Ms": 113.667,
+      "relayQueueMaxMs": 115.33333331451286,
+      "edgeQueueP95Ms": 108.667,
+      "wireMessages": 346,
+      "messagesPerSecond": 17.3,
+      "payloadBytes": 187856,
+      "payloadBytesPerSecond": 9392.8,
+      "binaryPacketBytes": 62308,
+      "droppedMessages": 9,
+      "observedLoss": 0.02601156069364162,
+      "rollbacks": [
+        99,
+        354
+      ],
+      "deepestRollback": [
+        37,
+        12
+      ],
+      "stalledCallbacks": [
+        276,
+        0
+      ],
+      "stallFraction": [
+        0.23,
+        0
+      ],
+      "frames": [
+        495,
+        479
+      ],
+      "cpuMs": 3562,
+      "wallMs": 4195.099,
+      "heapUsedBytes": 242768856,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "61ffb1b1",
+        "61ffb1b1"
+      ],
+      "replayHashes": [
+        "61ffb1b1",
+        "61ffb1b1"
+      ],
+      "sharedFrames": 531,
+      "sharedHash": "61ffb1b1"
+    },
+    {
+      "mode": "supabase115",
+      "scenario": "144hz",
+      "injectedRttMs": 80,
+      "injectedJitterMs": 10,
+      "injectedLoss": 0.05,
+      "callbackHz": 144,
+      "durationSeconds": 20,
+      "tickP50Ms": 0,
+      "tickP95Ms": 0.407,
+      "tickP99Ms": 9.806,
+      "measuredRttP50Ms": 151.266,
+      "measuredRttP95Ms": 178.364,
+      "jitterMs": [
+        49.732,
+        50.385
+      ],
+      "relayQueueP50Ms": 55.135,
+      "relayQueueP95Ms": 106.135,
+      "relayQueueP99Ms": 113.135,
+      "relayQueueMaxMs": 115.13504528999329,
+      "edgeQueueP95Ms": 105.135,
+      "wireMessages": 360,
+      "messagesPerSecond": 18,
+      "payloadBytes": 200106,
+      "payloadBytesPerSecond": 10005.3,
+      "binaryPacketBytes": 66415,
+      "droppedMessages": 16,
+      "observedLoss": 0.044444444444444446,
+      "rollbacks": [
+        110,
+        94
+      ],
+      "deepestRollback": [
+        13,
+        14
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        519
+      ],
+      "cpuMs": 1578,
+      "wallMs": 1734.651,
+      "heapUsedBytes": 78811216,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "replayHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "sharedFrames": 571,
+      "sharedHash": "6f09685c"
+    },
+    {
+      "mode": "supabaseEdge",
+      "scenario": "LAN",
+      "injectedRttMs": 0,
+      "injectedJitterMs": 0,
+      "injectedLoss": 0,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.011,
+      "tickP95Ms": 5.964,
+      "tickP99Ms": 10.997,
+      "measuredRttP50Ms": 46.737,
+      "measuredRttP95Ms": 59.882,
+      "jitterMs": [
+        22.882,
+        25.917
+      ],
+      "relayQueueP50Ms": 29.667,
+      "relayQueueP95Ms": 48.667,
+      "relayQueueP99Ms": 48.667,
+      "relayQueueMaxMs": 48.66666666418314,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 431,
+      "messagesPerSecond": 21.55,
+      "payloadBytes": 84598,
+      "payloadBytesPerSecond": 4229.9,
+      "binaryPacketBytes": 27487,
+      "droppedMessages": 0,
+      "observedLoss": 0,
+      "rollbacks": [
+        64,
+        64
+      ],
+      "deepestRollback": [
+        10,
+        9
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        519
+      ],
+      "cpuMs": 1281,
+      "wallMs": 1346.93,
+      "heapUsedBytes": 130728696,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "75e85c16",
+        "75e85c16"
+      ],
+      "replayHashes": [
+        "75e85c16",
+        "75e85c16"
+      ],
+      "sharedFrames": 571,
+      "sharedHash": "75e85c16"
+    },
+    {
+      "mode": "supabaseEdge",
+      "scenario": "regional",
+      "injectedRttMs": 80,
+      "injectedJitterMs": 10,
+      "injectedLoss": 0,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.02,
+      "tickP95Ms": 6.949,
+      "tickP99Ms": 16.54,
+      "measuredRttP50Ms": 119.848,
+      "measuredRttP95Ms": 129.626,
+      "jitterMs": [
+        27.047,
+        28.661
+      ],
+      "relayQueueP50Ms": 29.667,
+      "relayQueueP95Ms": 48.333,
+      "relayQueueP99Ms": 48.667,
+      "relayQueueMaxMs": 48.6666666661622,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 433,
+      "messagesPerSecond": 21.65,
+      "payloadBytes": 84726,
+      "payloadBytesPerSecond": 4236.3,
+      "binaryPacketBytes": 27424,
+      "droppedMessages": 0,
+      "observedLoss": 0,
+      "rollbacks": [
+        91,
+        64
+      ],
+      "deepestRollback": [
+        12,
+        9
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        519
+      ],
+      "cpuMs": 1766,
+      "wallMs": 1918.159,
+      "heapUsedBytes": 172386408,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "replayHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "sharedFrames": 571,
+      "sharedHash": "6f09685c"
+    },
+    {
+      "mode": "supabaseEdge",
+      "scenario": "150ms",
+      "injectedRttMs": 150,
+      "injectedJitterMs": 30,
+      "injectedLoss": 0.05,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.015,
+      "tickP95Ms": 6.161,
+      "tickP99Ms": 10.958,
+      "measuredRttP50Ms": 189.175,
+      "measuredRttP95Ms": 203.809,
+      "jitterMs": [
+        26.289,
+        33.815
+      ],
+      "relayQueueP50Ms": 16.333,
+      "relayQueueP95Ms": 48.667,
+      "relayQueueP99Ms": 48.667,
+      "relayQueueMaxMs": 48.666666665580124,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 437,
+      "messagesPerSecond": 21.85,
+      "payloadBytes": 85070,
+      "payloadBytesPerSecond": 4253.5,
+      "binaryPacketBytes": 27352,
+      "droppedMessages": 23,
+      "observedLoss": 0.05263157894736842,
+      "rollbacks": [
+        117,
+        105
+      ],
+      "deepestRollback": [
+        15,
+        14
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        518
+      ],
+      "cpuMs": 1546,
+      "wallMs": 1636.094,
+      "heapUsedBytes": 242601232,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "e376c025",
+        "e376c025"
+      ],
+      "replayHashes": [
+        "e376c025",
+        "e376c025"
+      ],
+      "sharedFrames": 570,
+      "sharedHash": "e376c025"
+    },
+    {
+      "mode": "supabaseEdge",
+      "scenario": "300ms",
+      "injectedRttMs": 300,
+      "injectedJitterMs": 50,
+      "injectedLoss": 0.1,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.017,
+      "tickP95Ms": 6.38,
+      "tickP99Ms": 12.72,
+      "measuredRttP50Ms": 336.108,
+      "measuredRttP95Ms": 356.687,
+      "jitterMs": [
+        39.868,
+        39.617
+      ],
+      "relayQueueP50Ms": 29.667,
+      "relayQueueP95Ms": 48.333,
+      "relayQueueP99Ms": 48.667,
+      "relayQueueMaxMs": 48.66666665987577,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 449,
+      "messagesPerSecond": 22.45,
+      "payloadBytes": 86742,
+      "payloadBytesPerSecond": 4337.1,
+      "binaryPacketBytes": 27613,
+      "droppedMessages": 50,
+      "observedLoss": 0.111358574610245,
+      "rollbacks": [
+        112,
+        101
+      ],
+      "deepestRollback": [
+        16,
+        16
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        517,
+        516
+      ],
+      "cpuMs": 1780,
+      "wallMs": 1866.319,
+      "heapUsedBytes": 294562624,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "b006347a",
+        "b006347a"
+      ],
+      "replayHashes": [
+        "b006347a",
+        "b006347a"
+      ],
+      "sharedFrames": 568,
+      "sharedHash": "b006347a"
+    },
+    {
+      "mode": "supabaseEdge",
+      "scenario": "600ms",
+      "injectedRttMs": 600,
+      "injectedJitterMs": 100,
+      "injectedLoss": 0.2,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.014,
+      "tickP95Ms": 6.441,
+      "tickP99Ms": 14.121,
+      "measuredRttP50Ms": 634.811,
+      "measuredRttP95Ms": 676.863,
+      "jitterMs": [
+        86.819,
+        86.181
+      ],
+      "relayQueueP50Ms": 30,
+      "relayQueueP95Ms": 48.333,
+      "relayQueueP99Ms": 48.667,
+      "relayQueueMaxMs": 48.66666665917728,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 472,
+      "messagesPerSecond": 23.6,
+      "payloadBytes": 89908,
+      "payloadBytesPerSecond": 4495.4,
+      "binaryPacketBytes": 28093,
+      "droppedMessages": 90,
+      "observedLoss": 0.1906779661016949,
+      "rollbacks": [
+        93,
+        97
+      ],
+      "deepestRollback": [
+        24,
+        21
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        514,
+        513
+      ],
+      "cpuMs": 1704,
+      "wallMs": 1806.849,
+      "heapUsedBytes": 128903064,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "11a137b2",
+        "11a137b2"
+      ],
+      "replayHashes": [
+        "11a137b2",
+        "11a137b2"
+      ],
+      "sharedFrames": 565,
+      "sharedHash": "11a137b2"
+    },
+    {
+      "mode": "supabaseEdge",
+      "scenario": "burst_loss",
+      "injectedRttMs": 150,
+      "injectedJitterMs": 20,
+      "injectedLoss": 0.02,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.014,
+      "tickP95Ms": 6.45,
+      "tickP99Ms": 12.194,
+      "measuredRttP50Ms": 188.452,
+      "measuredRttP95Ms": 199.682,
+      "jitterMs": [
+        22.549,
+        25.698
+      ],
+      "relayQueueP50Ms": 29.667,
+      "relayQueueP95Ms": 48.333,
+      "relayQueueP99Ms": 48.667,
+      "relayQueueMaxMs": 48.66666666348465,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 442,
+      "messagesPerSecond": 22.1,
+      "payloadBytes": 86048,
+      "payloadBytesPerSecond": 4302.4,
+      "binaryPacketBytes": 27671,
+      "droppedMessages": 26,
+      "observedLoss": 0.058823529411764705,
+      "rollbacks": [
+        99,
+        77
+      ],
+      "deepestRollback": [
+        23,
+        19
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        518
+      ],
+      "cpuMs": 1485,
+      "wallMs": 1684.801,
+      "heapUsedBytes": 174248288,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "eeba622a",
+        "eeba622a"
+      ],
+      "replayHashes": [
+        "eeba622a",
+        "eeba622a"
+      ],
+      "sharedFrames": 570,
+      "sharedHash": "eeba622a"
+    },
+    {
+      "mode": "supabaseEdge",
+      "scenario": "background_tab",
+      "injectedRttMs": 150,
+      "injectedJitterMs": 20,
+      "injectedLoss": 0.02,
+      "callbackHz": 60,
+      "durationSeconds": 20,
+      "tickP50Ms": 0.053,
+      "tickP95Ms": 9.707,
+      "tickP99Ms": 13.018,
+      "measuredRttP50Ms": 190.499,
+      "measuredRttP95Ms": 211.115,
+      "jitterMs": [
+        24.738,
+        27.072
+      ],
+      "relayQueueP50Ms": 29.667,
+      "relayQueueP95Ms": 48.667,
+      "relayQueueP99Ms": 115,
+      "relayQueueMaxMs": 115.33333331393078,
+      "edgeQueueP95Ms": 0.333,
+      "wireMessages": 418,
+      "messagesPerSecond": 20.9,
+      "payloadBytes": 81296,
+      "payloadBytesPerSecond": 4064.8,
+      "binaryPacketBytes": 26111,
+      "droppedMessages": 13,
+      "observedLoss": 0.03110047846889952,
+      "rollbacks": [
+        108,
+        348
+      ],
+      "deepestRollback": [
+        37,
+        9
+      ],
+      "stalledCallbacks": [
+        275,
+        0
+      ],
+      "stallFraction": [
+        0.22916666666666666,
+        0
+      ],
+      "frames": [
+        495,
+        479
+      ],
+      "cpuMs": 3515,
+      "wallMs": 3958.233,
+      "heapUsedBytes": 268023232,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "62b6dec5",
+        "62b6dec5"
+      ],
+      "replayHashes": [
+        "62b6dec5",
+        "62b6dec5"
+      ],
+      "sharedFrames": 531,
+      "sharedHash": "62b6dec5"
+    },
+    {
+      "mode": "supabaseEdge",
+      "scenario": "144hz",
+      "injectedRttMs": 80,
+      "injectedJitterMs": 10,
+      "injectedLoss": 0.05,
+      "callbackHz": 144,
+      "durationSeconds": 20,
+      "tickP50Ms": 0,
+      "tickP95Ms": 0.279,
+      "tickP99Ms": 8.465,
+      "measuredRttP50Ms": 103.112,
+      "measuredRttP95Ms": 115.137,
+      "jitterMs": [
+        21.183,
+        21.049
+      ],
+      "relayQueueP50Ms": 0.722,
+      "relayQueueP95Ms": 38.833,
+      "relayQueueP99Ms": 39,
+      "relayQueueMaxMs": 39.05555568402633,
+      "edgeQueueP95Ms": 0.389,
+      "wireMessages": 433,
+      "messagesPerSecond": 21.65,
+      "payloadBytes": 84306,
+      "payloadBytesPerSecond": 4215.3,
+      "binaryPacketBytes": 27107,
+      "droppedMessages": 23,
+      "observedLoss": 0.053117782909930716,
+      "rollbacks": [
+        108,
+        63
+      ],
+      "deepestRollback": [
+        12,
+        11
+      ],
+      "stalledCallbacks": [
+        0,
+        0
+      ],
+      "stallFraction": [
+        0,
+        0
+      ],
+      "frames": [
+        519,
+        519
+      ],
+      "cpuMs": 1313,
+      "wallMs": 1494.259,
+      "heapUsedBytes": 95734104,
+      "snapshotBytes": [
+        1179648,
+        1179648
+      ],
+      "finalHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "replayHashes": [
+        "6f09685c",
+        "6f09685c"
+      ],
+      "sharedFrames": 571,
+      "sharedHash": "6f09685c"
+    }
+  ]
+}

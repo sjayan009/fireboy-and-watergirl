@@ -1,6 +1,6 @@
 # Backend
 
-Postgres, auth and row level security for online co-op.
+Postgres, auth, row level security and the TURN credential broker for online co-op.
 
 ```bash
 npm run db:migrate     # apply migrations, in order, once each
@@ -9,7 +9,19 @@ npm run db:test        # prove RLS, the assurance matrix and the load tests
 
 Both read `.env.local` at the repo root, which is **gitignored and must stay
 that way**: it holds the secret key, which bypasses RLS entirely, and the
-database password. Only `SUPABASE_PUBLISHABLE_KEY` may ever reach a browser.
+database password. Of the Supabase API keys, only `SUPABASE_PUBLISHABLE_KEY`
+may reach a browser. Short-lived TURN credentials are delivered separately
+at runtime; the Cloudflare master token never reaches client code.
+
+`functions/turn-credentials` validates callers with Supabase Auth and mints
+four-hour Cloudflare TURN credentials. Store `CLOUDFLARE_TURN_KEY_ID` and
+`CLOUDFLARE_TURN_API_TOKEN` only as Edge Function secrets. Configure exact
+allowed origins and usage monitoring before enabling the function. It uses no
+service-role key and creates no gameplay-data authorization; existing
+profile/MFA/friendship policies still govern game data. Its eight-attempt
+per-user throttle is local to an isolate, not a global spend cap. See the
+[TURN deployment runbook](../docs/NETWORK_ROLLOUT_TURN.md) and
+[full networking rollout](../docs/NETWORK_ROLLOUT.md).
 
 There is no Supabase CLI or Docker on this machine, so `migrate.mjs` connects
 straight to Postgres and applies the files itself. The files are plain SQL, so

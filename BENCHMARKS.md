@@ -67,3 +67,12 @@ node relay/region-selection.test.mjs
 For a fresh baseline, build commit `7c399f8603918997197785957bcb05b86c72b89f` in a separate checkout, set `FBWG_BENCH_ENGINE` to its compiled engine directory, and use the current `performance.mjs before` harness with the same asset directory. `FBWG_BENCH_SECONDS` adjusts sample length. The preserved local baseline directory is not a committed dependency. Raw browser records: [before](benchmarks/before.json), [after](benchmarks/after.json).
 
 Unmeasured field acceptance remains: physical input-to-photon and high-refresh hardware, mobile/low-end GPU behavior, real NAT combinations, two-user regional relay paths and provider quota refusal. The subsequent [production verification](docs/DEPLOYMENT_STATUS.md) records successful deployment/sign-in/assets checks and observed Free account settings; it does not turn controlled local benchmarks into physical-display or WAN measurements.
+# September 12 networking rollout
+
+The [rollout measurements](docs/benchmarks/NETWORK_ROLLOUT_BENCHMARK.md) add fresh
+direct/legacy baselines, immediate relay edges, same-session RTC migration and
+opt-in rollback/descendant rendering. The
+[release report and checklist](docs/NETWORK_ROLLOUT.md) distinguish local passes
+from unconfigured hosted TURN acceptance. Presentation flags remain off after
+their enabled comparison worsened tail frame/render timing. Earlier evidence
+below is retained as historical data.

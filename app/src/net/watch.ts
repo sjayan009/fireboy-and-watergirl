@@ -83,6 +83,9 @@ export class WatchMirror implements Transport {
 
   get rttMs(): number | null { return this.inner.rttMs; }
   get stats() { return this.inner.stats; }
+  get rtc() { return this.inner.rtc; }
+  get kind() { return this.inner.kind; }
+  get activePath() { return this.inner.activePath; }
 
   /**
    * Passed straight through. The mirror's own 115 ms is already the hurried

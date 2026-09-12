@@ -1,12 +1,12 @@
-# Zero-dollar production budget
+# Production free-tier budget
 
-Audited 11 September 2026. Current official limits were researched before proposing infrastructure changes. Workload calculations below are models, not live network benchmarks.
+Account settings audited 11 September 2026; those observations and legacy relay numbers remain dated evidence. Updated 12 September 2026 for the authorized short-lived Cloudflare TURN rollout and immediate-edge emergency relay. Workload calculations are models unless explicitly tied to a benchmark artifact. See [network rollout](docs/NETWORK_ROLLOUT.md) and [TURN deployment/security gates](docs/NETWORK_ROLLOUT_TURN.md).
 
 ## Financial boundary and verified evidence
 
-The deployment policy is **$0 in provider charges, including when overloaded**. No trials, paid plans, metered overage, paid TURN, automatic upgrades, paid storage, or required VM. Capacity exhaustion must reduce availability, never authorize spending. No software can guarantee that a third party retains today's free offering indefinitely. If terms change, disable or migrate the integration; do not upgrade it.
+The target is **$0/month at current and modest usage**. The September 12 authorized rollout permits Cloudflare Realtime TURN's published free allowance and Supabase's credential broker; it supersedes the earlier blanket TURN exclusion. Cloudflare TURN has metered overage, so the earlier guarantee of no charges even when overloaded does **not** apply to this integration. Existing static hosting, Supabase and hosted-CI free-plan controls remain in place. No authoritative gameplay server, SFU, paid upgrade, required VM or paid storage is added. Capacity exhaustion must lead to reduced availability or rollback, not an automatic upgrade.
 
-Unlimited players, retries or hostile requests have no finite worst-case traffic volume. Free-plan enforcement is the final financial protection; admission budgets protect availability. Notifications and browser-local usage counters are not spend caps. This document cannot certify unknown account settings.
+Unlimited players, retries or hostile requests have no finite worst-case traffic volume. Provider-enforced limits protect the services that have them; TURN's free allowance alone does not. Notifications, credential issuance throttles and browser-local usage counters are not spend caps. Assign usage review and rollback/revocation ownership before TURN rollout. This document cannot certify unknown account settings or guarantee a zero invoice.
 
 Read-only Supabase connector checks against the repository's production project returned:
 
@@ -28,9 +28,9 @@ Read-only Supabase connector checks against the repository's production project 
 | GitHub included usage at restoration | GitHub Free; 573 / 2,000 minutes used; $0 billable Actions usage |
 | GitHub retained storage | 2 caches, 86,199,572 bytes; 0 artifacts, 0 artifact bytes |
 
-These are point-in-time observations. The selected production dependencies are on verified Free plans; the authenticated SMTP provider account has no payment method or prepaid credits. Private hosted CI is enabled under GitHub's verified account-wide $0 Actions stop-usage budget, and retained storage is within the included limits. Under these observed settings, this release adds no automatic provider-overage billing path. Account-wide invoices, unrelated purchases and future administrator/provider changes are outside this evidence; source configuration cannot prove that external settings remain unchanged indefinitely. See [deployment evidence](docs/DEPLOYMENT_STATUS.md).
+These are September 11 point-in-time observations, before TURN was authorized. Those existing dependencies were on verified Free plans; the authenticated SMTP provider account had no payment method or prepaid credits. Private hosted CI was enabled under GitHub's verified account-wide $0 Actions stop-usage budget. This evidence does not certify the new Cloudflare TURN account configuration or prevent its overage charges. Account-wide invoices, unrelated purchases and future administrator/provider changes are outside this evidence. See [dated deployment evidence](docs/DEPLOYMENT_STATUS.md).
 
-Implemented repository safeguards: `app/scripts/pages.mjs` emits Cloudflare static security headers and rejects over-limit or non-static output. `static-hosting.mjs` restricts `wrangler.json` to this service's static assets, with no script, binding, alternate environment or build hook. `app/scripts/free-config.mjs` rejects TURN/credentials in the default ICE configuration. Every hosted CI job is gated to public repositories or `FBWG_ZERO_DOLLAR_ACTIONS=1`, which may be set only after a zero-dollar account stop-spend budget is verified. The flag is an operator attestation, not a billing API check. Fast CI now has a 20-minute deadline and keepalive a 2-minute deadline.
+Implemented repository safeguards: `app/scripts/pages.mjs` emits Cloudflare static security headers and rejects over-limit or non-static output. `static-hosting.mjs` restricts `wrangler.json` to this service's static assets, with no script, binding, alternate environment or build hook. `app/scripts/free-config.mjs` rejects static TURN/credentials; the runtime broker is the supported route for short-lived TURN. `check.mjs` scans client/public/output text for master references and configured secret values. Every hosted CI job is gated to public repositories or `FBWG_ZERO_DOLLAR_ACTIONS=1`, which may be set only after a zero-dollar account stop-spend budget is verified. The flag is an operator attestation, not a billing API check. Fast CI has a 20-minute deadline and keepalive a 2-minute deadline.
 
 ## Production dependency ledger
 
@@ -40,14 +40,15 @@ Implemented repository safeguards: `app/scripts/pages.mjs` emits Cloudflare stat
 | Cloudflare Pages (compatible alternative) | Free `pages.dev` hostname; no Functions or paid resources. Free: 500 builds/month, 20,000 files/site, 25 MiB/file. Static requests are unlimited. At build exhaustion retain the last good deployment. [Limits](https://developers.cloudflare.com/pages/platform/limits/) |
 | Existing Vercel hosting during migration | The linked project is on a verified Hobby team. Hobby is free, restricts use to personal/non-commercial projects, and blocks features at limits rather than charging usage overage. Do not upgrade it or add paid integrations. The user selected the existing Workers destination. [Hobby plan](https://vercel.com/docs/plans/hobby) |
 | Supabase Free | Auth, Postgres, private friends/presence/signalling, persistence and bounded emergency relay. Free: 500 MB database, 5 GB uncached egress, 50,000 MAU, 2M Realtime messages/month, 200 peak connections. No paid add-ons, branching, compute upgrade, custom domain, phone MFA or log drains. Free may restrict service or pause after inactivity; it does not bill overages. [Pricing](https://supabase.com/pricing), [cost control](https://supabase.com/docs/guides/platform/cost-control) |
-| Direct WebRTC | Existing unordered data channel with `maxRetransmits: 0`. Public STUN discovers addresses; it is not TURN. Gameplay compute/bandwidth belongs to the peers, with no provider relay charge. A STUN outage cannot authorize buying TURN. |
+| Direct WebRTC | Existing unordered data channel with `maxRetransmits: 0`. Direct host/srflx gameplay avoids provider relay usage. Public STUN remains the only static ICE configuration. |
+| Cloudflare Realtime TURN (authorized rollout) | Short-lived credentials minted by an authenticated Supabase Edge Function; master token stays server-side. 1,000 GB/month shared with SFU, then $0.05/GB egress including TURN overhead. No SFU is used here. Usage alerts and the local issuance throttle are not spend caps; live acceptance and account monitoring remain gates. [Allowance](https://developers.cloudflare.com/realtime/), [pricing](https://developers.cloudflare.com/realtime/sfu/pricing/), [accounting](https://developers.cloudflare.com/realtime/turn/faq/) |
 | Google OAuth through Supabase | Already implemented; avoids an email-delivery prerequisite for this sign-in route. Verify provider configuration and redirects. Preserve assurance/profile checks and enrolled TOTP. |
 | Email sign-up/reset | Existing Brevo SMTP; authenticated account verified Free, 300 emails/day, no saved payment method or prepaid credits. The published Free plan has no expiry. Keep it on Free; no paid credits, upgrades or recharge. Preserve confirmation/MFA and the OAuth alternative. Default Supabase SMTP is restricted to team addresses and is not the configured public sender. [Brevo Free limits](https://help.brevo.com/hc/en-us/articles/208580669-FAQs-What-are-the-limits-of-the-Free-plan), [plans](https://help.brevo.com/hc/en-us/articles/208589409-About-Brevo-s-pricing-plans), [Supabase SMTP](https://supabase.com/docs/guides/auth/auth-smtp) |
 | Replay verifier | Preserve isolated Node worker and replay validation. Ordinary play/progress already tolerate unavailable ranking registration. Keep engine acceptance disabled without a compatible verifier and bounded queue. No VM is required to play. |
 | Optional DO relay | Evaluated below, not deployed or enabled by this audit. Must run on Workers **Free**, using SQLite-backed objects, Hibernation and server-enforced admission. A free allowance on a paid account is insufficient. |
 | Local toolchain | npm/Node/TypeScript/Vite/sharp/Playwright are not hosted production services. Use the committed lockfile. Local image builds avoid any required paid registry. Serving an existing static artifact does not require CI to run. |
 
-Supabase Storage (1 GB) and Edge Functions (500,000 invocations/month) are included on Free but not needed: planned production consumption is **zero**. Game assets stay on the static host. The selected design adds no hosted production dependency.
+The September 11 ledger listed Supabase Storage (1 GB) and Edge Functions (500,000 invocations/month) as unused. Storage remains unused and game assets stay on the static host. The new `turn-credentials` function consumes the Edge Function allowance: budget initial issuance, refreshes, retries and rejected calls. Its browser cache reduces normal issuance to roughly once per account per four hours of continuous use, but multiple tabs, restarts and abuse add invocations. The rollout adds managed TURN and the credential function, with no gameplay server.
 
 ## Asset inventory and delivery
 
@@ -76,9 +77,18 @@ input payload/pair-hour   = 187,200 * 65 = 12,168,000 bytes
 input payload/peer-second = 26 * 65 = 1,690 bytes
 ```
 
+Both players therefore generate at most **3,380 input payload bytes/second**
+at this full-packet size, approximately 3.3 kB/s. The regional direct benchmark
+measured 3,330.15 bytes/s. For scale, 100 relayed pair-hours/day over 31 days
+would carry **37.72 GB of input payload** before TURN/DTLS/SCTP/network
+headers, control traffic and other account usage. Cloudflare's 1,000 GB
+allowance leaves substantial room at modest input-only usage; this example
+is not a measured bill, guaranteed session capacity or admission limit.
+Measure actual TURN egress and retain headroom for abuse and protocol overhead.
+
 Exclude commands, negotiation, lower-layer retransmissions and DTLS/SCTP/UDP/IP or TLS/TCP/WebSocket framing from that payload figure. Never call it NIC bandwidth. Supabase adds a connection prefix: with `L` prefix bytes, base64 length is `4 * ceil((65 + L) / 3)` ASCII bytes/input, plus JSON arrays/envelopes and Phoenix framing. Actual serialized messages and transport counters must be measured.
 
-### Existing Supabase emergency relay
+### Legacy Supabase emergency relay baseline (September 11)
 
 A broadcast counts once sent plus once per receiving subscriber. With one recipient, that is **two units**. Inputs are batched at 230 ms normally and 115 ms hurried. [Accounting](https://supabase.com/docs/guides/platform/manage-your-usage/realtime-messages)
 
@@ -104,9 +114,39 @@ The audit's actual 20-second production-transport baseline, with seeded 80-ms RT
 
 Presence is change-triggered and spaced 8 seconds **per pair channel**. Up to 50 channels means one client's simultaneous activity change can exceed the project presence rate. Rejoining announces again. The channel cap does not prove project-wide presence compliance. Multiple tabs consume actual connections. Reserve budget for the friends graph, startup bursts and reconnects.
 
+### Immediate-edge emergency relay rollout (September 12)
+
+Input transitions and epoch/reset boundaries now publish immediately. Unchanged
+holds retain the newest history-bearing packet for an approximately 115 ms
+heartbeat. The old 230/115 ms implementation remains available through the
+documented rollback flag; its table above is historical comparison, not the
+new path's quota estimate.
+
+The matched regional cell (80 ms injected RTT, 10 ms jitter) measured:
+
+| Publication policy | Pair publishes/s | Sent JSON payload bytes/s | Implied Realtime units/pair-hour at that observed rate |
+| --- | ---: | ---: | ---: |
+| Legacy 230 ms | 8.95 | 9,839.4 | 64,440 |
+| Legacy 115 ms | 17.65 | 9,957.6 | 127,080 |
+| Immediate edges / coalesced heartbeat | 21.65 | 4,236.3 | 155,880 |
+
+The new policy reduces serialized bytes and input-edge batching delay while
+increasing message count in this workload. At 21.65 publishes/s, a 1.5M-message
+planning budget would cover only about **9.62 pair-hours/month**, before
+presence, signaling, spectators and other traffic. Quota remains finite and
+depends on actual input patterns. Prefer healthy WebRTC (direct or TURN);
+keep Supabase gameplay as emergency fallback and stop publishing gameplay
+there after RTC promotion. [Before](docs/benchmarks/network-rollout-before.json),
+[after](docs/benchmarks/network-rollout-after.json),
+[rollout analysis](docs/NETWORK_ROLLOUT.md)
+
 Spectating adds traffic even for direct players: one sharing peer mirrors both input directions every 115 ms. With `V` recipients, units/watched pair-hour are `(1 + V) * 3,600 / 0.115`, before catch-up snapshots, presence and control. One viewer adds **62,608.70 units/hour**. Stop admitting new spectators before reducing player connectivity.
 
-### Optional Durable Object binary relay
+### Historical optional Durable Object binary relay analysis (not selected)
+
+This September 11 alternative is retained for comparison. The September 12
+rollout selects TURN inside WebRTC and the existing emergency Supabase path;
+it adds no Durable Object relay.
 
 DO Free: SQLite only; 100,000 request units/day, 13,000 GB-s/day, reset 00:00 UTC. Incoming application WS messages count 20:1; outgoing messages are unmetered for requests. An upgrade is a request. Eligible idle time is excluded from duration; active objects are metered at 0.128 GB. Free quota exhaustion fails operations, without overage billing. [DO pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)
 
@@ -150,9 +190,9 @@ Survev's [regional binary echo tests](https://github.com/survev/survev/blob/mast
 
 ## Exhaustion and persistence
 
-At 75% budget, stop optional uploads/new spectators and reserve control capacity. Prefer direct P2P. A future enabled DO relay must stop admissions and agree a switch before its reservation ends. Reuse packet bytes/epochs; transport replacement must not restart authoritative simulation. Bound reconnection attempts.
+At 75% of each relevant planning budget, stop optional uploads/new spectators and reserve control capacity. Prefer direct P2P, then healthy TURN-backed RTC. Review actual TURN egress well before the shared free allowance is exhausted; an alert does not stop traffic or revoke issued credentials. A future enabled DO relay would need separate admission controls and is not part of this rollout. Reuse packet bytes/epochs; transport replacement must not restart authoritative simulation. Bound reconnection attempts.
 
-Supabase fallback is allowed **only if its separate monthly and per-second budgets can absorb it**. Five DO pair-hours/day cannot be dumped into 2M Supabase messages/month. If both relays and P2P are unavailable, show capacity/retry status and retain local play/progress. Current Free-plan restrictions provide financial protection; graceful global quota-aware admission is a separate availability requirement, **not claimed implemented in the current Supabase-only path**.
+Supabase fallback is sustainable **only if its separate monthly and per-second budgets can absorb it**. Large TURN usage cannot simply be redirected into 2M Supabase messages/month. If RTC and the emergency path are unavailable, retain local progress and show retry status. Supabase Free restrictions protect its billing boundary; the new PathManager's health checks do not implement global quota-aware admission, and the TURN broker's per-isolate throttle does not enforce a financial cap.
 
 Budget all Supabase egress: API/auth, Realtime and verifier replay downloads. A 3.75 GB/month planning threshold reserves 1.25 GB of the published 5 GB. Remaining gameplay budget is `3.75e9 - observed_non_gameplay_egress`, not that amount divided by raw 65-byte inputs. A maximum 1 MiB replay downloaded on three verifier attempts consumes 3 MiB. One thousand such jobs require **3,145,728,000 bytes**, before other API responses.
 
@@ -172,6 +212,6 @@ The earlier storage snapshot was 2 caches totaling 86,199,572 bytes and zero art
 
 Oracle is **optional only**. Current Always Free: 1,500 A1 OCPU-hours and 9,000 GB-hours/month (2 OCPUs/12 GB), 200 GB block storage, 10 TB outbound/month, home region only. Fixed 2-OCPU/12-GB operation for 31 days uses **1,488 OCPU-hours, 8,928 GB-hours**. Only eligible resources on a non-upgraded Always Free tenancy qualify; no trial credits. Capacity can be unavailable; idle instances can be reclaimed. Optional coturn/relay/verifier loss must not block core play. No Oracle resource was created or made required. [Oracle limits](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
 
-Cloudflare TURN, rented TURN, Cloud Run with billing, paid Render workers, paid-capable object storage, paid SMTP and purchased domains are excluded from the required architecture. Their initial allowances are not this policy.
+Cloudflare TURN's published free allowance is the explicitly authorized September 12 exception to the earlier blanket metered-TURN exclusion. Rented TURN, Cloud Run with billing, paid Render workers, paid-capable object storage, paid SMTP and purchased domains remain outside this rollout.
 
-Before certifying a release, retain final asset inventory, actual benchmark artifacts, Supabase Free evidence, Cloudflare Free/no-paid-service evidence, SMTP verification or use of existing OAuth, and GitHub zero-dollar controls if private hosted CI is used. Exercise quota rejection/failover on actual deployed origins. No source-only document can truthfully substitute for these account and deployment checks.
+Before certifying a release, retain final asset inventory, actual benchmark artifacts, Supabase Free evidence, Cloudflare static-host Free evidence, TURN allowance/account configuration and usage-alert evidence, SMTP verification or use of existing OAuth, and GitHub zero-dollar controls if private hosted CI is used. Exercise forced TURN, emergency relay and failover on actual deployed origins. No source-only document can substitute for these account and deployment checks, and no blanket $0 guarantee is claimed for excess TURN usage.
