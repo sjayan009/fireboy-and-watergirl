@@ -54,6 +54,10 @@ export interface GameViewOptions {
   assets?: string;
   /** Exact simulation-frame rendering for comparisons; smooth display rendering is the default. */
   smoothing?: boolean;
+  /** Opt in to 80 ms display-only rollback residuals; false is the rollout fallback. */
+  rollbackSmoothing?: boolean;
+  /** Opt in to continuous local limb transforms; root input prediction stays immediate. */
+  localDescendantInterpolation?: boolean;
   /**
    * Where this view's progress is kept.
    *
@@ -74,6 +78,9 @@ export interface GameViewOptions {
   save?: SaveStore;
   /** Called after every rendered frame, for whatever the page shows around it. */
   onFrame?: (view: GameView) => void;
+  /** Passive timing only. Input latency is event to next simulation-bearing
+   * render, a scheduling proxy; benchmarks measure actual visual response. */
+  onRenderTiming?: (sample: RenderTiming) => void;
   /** Emitted only when observable shell/session state changes. */
   onState?: (view: GameView) => void;
   onConfirmed?: (view: GameView, frame: number) => void;
@@ -85,6 +92,12 @@ export interface GameViewOptions {
    * levels, which the page turns into "waiting for them to pick".
    */
   onRefused?: (reason: RefusedReason) => void;
+}
+
+export interface RenderTiming {
+  timestamp: number;
+  renderMs: number;
+  inputToRenderMs: number | null;
 }
 
 export type RefusedReason = "not-your-pick" | "preparation-failed";
@@ -113,6 +126,8 @@ export class GameView {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly onFrame?: (v: GameView) => void;
+  private readonly onRenderTiming?: (sample: RenderTiming) => void;
+  private pendingInputTiming: { at: number; frame: number } | null = null;
   private readonly onState?: (v: GameView) => void;
   private readonly onConfirmed?: (v: GameView, frame: number) => void;
   private lastState = "";
@@ -125,7 +140,7 @@ export class GameView {
   private prepared = false;
   private lastAssetRevision = -1;
   private readonly smoothing: boolean;
-  private readonly visuals = new VisualSnapshots();
+  private readonly visuals: VisualSnapshots;
   private visualAlpha = 1;
   private needsVisualReconcile = false;
   private readonly onRefused?: (reason: RefusedReason) => void;
@@ -160,11 +175,14 @@ export class GameView {
     this.canvas.height = STAGE_H;
     this.ctx = this.canvas.getContext("2d")!;
     this.onFrame = o.onFrame;
+    this.onRenderTiming = o.onRenderTiming;
     this.onState = o.onState;
     this.onConfirmed = o.onConfirmed;
     this.onRefused = o.onRefused;
     this.onPrepareRun = o.onPrepareRun;
     this.smoothing = o.smoothing !== false;
+    this.visuals = new VisualSnapshots({ rollbackSmoothing: o.rollbackSmoothing,
+      localDescendantInterpolation: o.localDescendantInterpolation });
 
     resetClock();
     // Scoped, not installed: `Game`'s constructor calls `openSave` once and
@@ -375,7 +393,10 @@ export class GameView {
       e.preventDefault();
     }
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    if (MOVEMENT.includes(key) && !e.repeat) this.visuals.inputChanged();
+    if (MOVEMENT.includes(key) && !e.repeat) {
+      this.visuals.inputChanged();
+      if (this.onRenderTiming) this.pendingInputTiming = { at: performance.now(), frame: this.frame };
+    }
 
     // Only while a LEVEL is running. Between levels the same keys are the map's
     // -- the arrows walk its nodes -- and a session that is not running a level
@@ -403,7 +424,12 @@ export class GameView {
 
   private keyUp(e: KeyboardEvent): void {
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    if (MOVEMENT.includes(key)) this.visuals.inputChanged();
+    if (MOVEMENT.includes(key)) {
+      this.visuals.inputChanged();
+      if (this.onRenderTiming && this.inputEnabled && !GameView.aimedElsewhere(e)) {
+        this.pendingInputTiming = { at: performance.now(), frame: this.frame };
+      }
+    }
     // The release clears the held set wherever it happened. A key pressed over
     // the game and released after focus has moved into a picker is the one way
     // a direction could otherwise stay down forever, and window `blur` does not
@@ -776,6 +802,7 @@ export class GameView {
   }
 
   render(): void {
+    const start = this.onRenderTiming ? performance.now() : 0;
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = "#000";
@@ -783,6 +810,14 @@ export class GameView {
     if (this.sprites) {
       this.sprites.draw(ctx, this.game, this.smoothing ? this.visuals : null, this.visualAlpha);
       this.visuals.presented();
+    }
+    if (this.onRenderTiming) {
+      const timestamp = performance.now();
+      const pending = this.pendingInputTiming;
+      const responded = pending && this.frame > pending.frame;
+      this.onRenderTiming({ timestamp, renderMs: timestamp - start,
+        inputToRenderMs: responded ? timestamp - pending.at : null });
+      if (responded) this.pendingInputTiming = null;
     }
   }
 
