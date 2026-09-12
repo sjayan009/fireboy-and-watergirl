@@ -1,23 +1,26 @@
 import type { Transport } from "@engine/net/transport.js";
 import type { ByteChannel } from "./realtime.js";
-import { encode, decode } from "./pairchannel.js";
+import { encode, decode } from "./base64.js";
 
 /** Reject bytes from any previous connection attempt, including delayed SDP. */
-export function scopedChannel(channel: ByteChannel, identity: string): ByteChannel {
-  const prefix = new TextEncoder().encode(identity + ":");
+export function scopedChannel(channel: ByteChannel, identity: string,
+                              lane?: "gameplay" | "signaling" | "control"): ByteChannel {
+  // Keeping the original prefix when no lane is supplied preserves the legacy
+  // connect() wire format. Managed peers explicitly negotiate lane support.
+  const prefix = new TextEncoder().encode(identity + ":" + (lane ? lane + ":" : ""));
   return {
     onStatus: fn => channel.onStatus(fn),
     onBytes: fn => channel.onBytes(data => {
       if (data.length <= prefix.length || !prefix.every((b,i) => b === data[i])) return;
       fn(data.slice(prefix.length));
     }),
-    sendBytes(packets) {
+    sendBytes(packets, inheritedLane) {
       channel.sendBytes(packets.map(packet => {
         const bytes = decode(packet);
         const result = new Uint8Array(prefix.length + bytes.length);
         result.set(prefix); result.set(bytes,prefix.length);
         return encode(result);
-      }));
+      }), lane ?? inheritedLane);
     },
   };
 }
@@ -45,6 +48,9 @@ export function boundedTransport(inner: Transport): Transport & { inner: Transpo
     get rttMs() { return inner.rttMs; },
     get sent() { return inner.sent; },
     get stats() { return inner.stats; },
+    get rtc() { return inner.rtc; },
+    get kind() { return inner.kind; },
+    get activePath() { return inner.activePath; },
     get pacingMs() { return inner.pacingMs; },
     hurry: on => inner.hurry?.(on),
     send: data => { if (!ended) inner.send(data); },

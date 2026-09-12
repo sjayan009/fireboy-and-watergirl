@@ -47,8 +47,12 @@ function publicEnv(): Record<string, string> {
   return {
     __SUPABASE_URL__: JSON.stringify(url),
     __SUPABASE_KEY__: JSON.stringify(key),
-    // A configuration change must never silently add a metered TURN service.
+    // Static ICE is public STUN only. Short-lived TURN is fetched at runtime.
     __ICE_SERVERS__: JSON.stringify(freeIceServers(pick("ICE_SERVERS"))),
+    __PATH_MANAGER__: JSON.stringify(pick("FBWG_PATH_MANAGER") === "1"),
+    __LEGACY_RELAY_BATCHING__: JSON.stringify(pick("FBWG_LEGACY_RELAY_BATCHING") === "1"),
+    __ROLLBACK_SMOOTHING__: JSON.stringify(pick("FBWG_ROLLBACK_SMOOTHING") === "1"),
+    __DESCENDANT_INTERPOLATION__: JSON.stringify(pick("FBWG_DESCENDANT_INTERPOLATION") === "1"),
   };
 }
 
