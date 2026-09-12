@@ -33,6 +33,17 @@ export interface TransportStats {
   queueTotalMs: number;
   queueMaxMs: number;
   bufferedBytes: number;
+  /** Bounded recent application queue samples, for local percentiles. */
+  queueRecentMs?: readonly number[];
+}
+
+/** Selected ICE path only. Never include candidate addresses or credentials. */
+export interface RtcDiagnostics {
+  candidateType?: "host" | "srflx" | "prflx" | "relay";
+  protocol?: "udp" | "tcp";
+  relayProtocol?: "udp" | "tcp" | "tls";
+  /** Seconds, matching the WebRTC stats field (rttMs remains milliseconds). */
+  currentRoundTripTime?: number;
 }
 
 export function transportStats(): TransportStats {
@@ -41,6 +52,9 @@ export function transportStats(): TransportStats {
 }
 
 export interface Transport {
+  /** Application path; TURN remains ICE inside the WebRTC path. */
+  readonly kind?: "webrtc" | "relay";
+  readonly activePath?: "rtc" | "relay" | "offline";
   /** Fire and forget. May silently drop. */
   send(data: Uint8Array): void;
   /** Register the receiver. Called once, before the session starts. */
@@ -60,6 +74,7 @@ export interface Transport {
   readonly sent?: number;
   /** Passive measurements; never drive simulation or quota authorization. */
   readonly stats?: TransportStats;
+  readonly rtc?: RtcDiagnostics;
   /**
    * How long this transport may sit on a packet before sending it, in ms.
    *
