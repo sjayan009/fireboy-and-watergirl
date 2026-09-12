@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {chromium,firefox,webkit} from 'playwright';
+import {encodeInput,encodeCommand} from '../../engine/dist/net/protocol.js';
 const target=process.env.FBWG_TEST_URL || 'http://127.0.0.1:5174/test/play-fixture.html';
 if (!['localhost','127.0.0.1'].includes(new URL(target).hostname)) throw new Error('Social fixtures must stay local');
 for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
@@ -153,8 +154,8 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
   await page.getByRole('table').waitFor();
   await page.screenshot({path:`.cache/play-evidence/${name}-elemental-leaderboard.png`,animations:'disabled'});
   /*
-   * The batch interval, which is the difference between two people playing and
-   * two people watching each other freeze.
+   * The legacy batching rollback switch keeps its original interval. The
+   * rollout mode below publishes input edges immediately and coalesces holds.
    *
    * A relayed pair waits 230 ms before a packet leaves the browser, out of a
    * 1154 ms rollback window -- so far enough apart, the batching alone is what
@@ -174,13 +175,22 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
     await clockPage.clock.install({time:new Date('2026-01-01T00:00:00Z')});
     await clockPage.goto(clockUrl);
     await clockPage.clock.pauseAt(new Date('2026-01-01T01:00:00Z'));
-    await clockPage.evaluate(async()=>{
+    const input=(frame,bits,epoch=0)=>Array.from(encodeInput({kind:1,slot:0,epoch,frame,bits,hashFrame:0,hash:0}));
+    const packets={
+      idle:input(0,[0]), idleHeld:input(1,[0,0]), down:input(2,[2,0,0]),
+      held:input(3,[2,2,0,0]), heldNext:input(4,[2,2,2,0,0]),
+      heldPending:input(5,[2,2,2,2,0,0]), up:input(6,[0,2,2,2,2,0,0]),
+      boundary:input(0,[0],1),
+      command:Array.from(encodeCommand({kind:2,slot:0,epoch:1,frame:4,command:2,a:1,b:0})),
+    };
+    await clockPage.evaluate(async packets=>{
       const {RealtimeTransport}=await import('/src/net/realtime.ts');
       window.sent=[];
       window.link=new RealtimeTransport({onBytes:()=>()=>{},onStatus:()=>()=>{},
-        sendBytes:()=>{window.sent.push(Date.now());}});
-      window.packet=()=>{const d=new Uint8Array(20);d[0]=1;return d;};
-    });
+        sendBytes:()=>{window.sent.push(Date.now());}},{legacyBatching:true});
+      window.packets=packets;
+      window.packet=(name='idle')=>new Uint8Array(window.packets[name]);
+    },packets);
     for(const [hurried,interval] of [[false,230],[true,115],[false,230]]) {
       await clockPage.clock.runFor(230);
       await clockPage.evaluate(on=>{
@@ -196,6 +206,39 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
       assert.equal(await clockPage.evaluate(()=>window.sent.length),2,'queued packet leaves at its deadline');
       assert.equal(await clockPage.evaluate(()=>window.sent[1]-window.sent[0]),interval);
     }
+    await clockPage.evaluate(()=>window.link.close());
+    await clockPage.evaluate(async()=>{
+      const {RealtimeTransport}=await import('/src/net/realtime.ts');
+      window.sent.length=0;
+      window.link=new RealtimeTransport({onBytes:()=>()=>{},onStatus:()=>()=>{},
+        sendBytes:()=>{window.sent.push(Date.now());}},{legacyBatching:false});
+      window.link.send(window.packet('idle'));
+      window.link.send(window.packet('idleHeld'));
+    });
+    assert.equal(await clockPage.evaluate(()=>window.sent.length),1,'unchanged idle input waits for its heartbeat');
+    await clockPage.evaluate(()=>window.link.send(window.packet('down')));
+    assert.equal(await clockPage.evaluate(()=>window.sent.length),2,'key down replaces pending idle and publishes immediately');
+    assert.equal(await clockPage.evaluate(()=>window.sent[1]-window.sent[0]),0);
+    await clockPage.evaluate(()=>window.link.send(window.packet('held')));
+    await clockPage.clock.runFor(50);
+    await clockPage.evaluate(()=>window.link.send(window.packet('heldNext')));
+    await clockPage.clock.runFor(64);
+    assert.equal(await clockPage.evaluate(()=>window.sent.length),2,'coalesced held input waits until the original 115ms deadline');
+    await clockPage.clock.runFor(1);
+    assert.equal(await clockPage.evaluate(()=>window.sent.length),3,'held input publishes one newest-history heartbeat');
+    assert.equal(await clockPage.evaluate(()=>window.sent[2]-window.sent[1]),115);
+    await clockPage.evaluate(()=>{
+      window.link.send(window.packet('heldPending'));
+      window.link.send(window.packet('up'));
+    });
+    assert.equal(await clockPage.evaluate(()=>window.sent.length),4,'key up cancels a waiting held packet and publishes immediately');
+    assert.equal(await clockPage.evaluate(()=>window.sent[3]-window.sent[2]),0);
+    await clockPage.evaluate(()=>window.link.send(window.packet('boundary')));
+    assert.equal(await clockPage.evaluate(()=>window.sent.length),5,'epoch boundary publishes immediately');
+    await clockPage.evaluate(()=>window.link.send(window.packet('command')));
+    assert.equal(await clockPage.evaluate(()=>window.sent.length),6,'command publishes immediately');
+    await clockPage.clock.runFor(115);
+    assert.equal(await clockPage.evaluate(()=>window.sent.length),6,'cancelled input timers produce no extra publish');
     await clockPage.evaluate(()=>window.link.close());
   } finally {await clockPage.close();}
 
