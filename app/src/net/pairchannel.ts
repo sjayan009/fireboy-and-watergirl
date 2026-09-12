@@ -24,6 +24,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "../supabase.js";
 import { ENGINE_VERSION } from "@engine/version.js";
 import { decode } from "./base64.js";
+import type { ByteLane } from "./realtime.js";
 export { encode, decode } from "./base64.js";
 
 /** What a friend is doing, as far as their client last said. */
@@ -62,6 +63,8 @@ export interface Invite {
    */
   relay?: boolean;
   between?: boolean;
+  /** Opt-in capability, enabled only when the accepting reply also echoes it. */
+  pathManager?: true;
 }
 
 /** Events on the wire. Kept short: they are typed on every message. */
@@ -125,6 +128,8 @@ export interface InviteReply {
   accepted: boolean;
   /** Set once the replying peer is ready for the level to start. */
   ready?: boolean;
+  /** Both clients must advertise this before using the managed path lanes. */
+  pathManager?: true;
 }
 
 /**
@@ -300,6 +305,7 @@ function asInvite(payload: unknown): Invite | null {
     fireboy: p.fireboy, from: p.from,
     ...(p.relay === true ? { relay: true } : {}),
     ...(p.between === true ? { between: true } : {}),
+    ...(p.pathManager === true ? { pathManager: true } : {}),
   };
 }
 
@@ -307,7 +313,9 @@ function asReply(payload: unknown): InviteReply | null {
   const p = payload as Record<string, unknown> | null;
   if (!p || typeof p !== "object") return null;
   if (!isSession(p.session) || typeof p.accepted !== "boolean") return null;
-  return { session: p.session, accepted: p.accepted, ready: p.ready === true, ...(isUuid(p.attempt) ? { attempt: p.attempt } : {}) };
+  return { session: p.session, accepted: p.accepted, ready: p.ready === true,
+    ...(isUuid(p.attempt) ? { attempt: p.attempt } : {}),
+    ...(p.pathManager === true ? { pathManager: true } : {}) };
 }
 
 function asCancel(payload: unknown): InviteCancel | null {
@@ -954,8 +962,12 @@ export class PairChannel {
     this.held = [];
     for (const m of waiting) this.send(m.event, m.payload);
     const bytes = this.heldBytes;
-    this.heldBytes = null;
-    if (bytes) this.sendBytes(bytes);
+    this.heldBytes = new Map();
+    // Gameplay heals the stalled input history before any new negotiation.
+    for (const lane of ["gameplay", "legacy", "control", "signaling"] as const) {
+      const packets = bytes.get(lane);
+      if (packets) this.sendBytes(packets, lane === "legacy" ? undefined : lane);
+    }
   }
 
   invite(i: Invite): void { this.send(INVITE, i); }
@@ -985,10 +997,28 @@ export class PairChannel {
    * one has nothing in it the newer one lacks, and keeping one means the Quit
    * that `RealtimeTransport.close` flushes still has somewhere to wait.
    */
-  private heldBytes: string[] | null = null;
+  // Lane metadata is local only; the scoped byte prefix remains the wire
+  // contract. A pending PROBE or ICE candidate must never evict the final
+  // history packet of a stalled relay session. Legacy callers retain their
+  // original newest-batch semantics. Signaling keeps a bounded offer/ICE burst.
+  private heldBytes = new Map<ByteLane | "legacy", string[]>();
 
-  sendBytes(packets: string[]): void {
-    if (this.live.state !== "joined") { this.heldBytes = packets; return; }
+  sendBytes(packets: string[], lane?: ByteLane): void {
+    if (this.closing) return;
+    if (this.live.state !== "joined") {
+      const key = lane ?? "legacy";
+      const candidates = lane === "signaling"
+        ? [...(this.heldBytes.get(key) ?? []), ...packets] : packets;
+      let chars = 0;
+      const held: string[] = [];
+      for (let i = candidates.length - 1; i >= 0 && held.length < MAX_BATCH; i--) {
+        const packet = candidates[i];
+        if (packet.length > MAX_PACKET_CHARS || chars + packet.length > MAX_MESSAGE_CHARS) continue;
+        chars += packet.length; held.push(packet);
+      }
+      this.heldBytes.set(key, held.reverse());
+      return;
+    }
     this.send(BYTES, { p: packets });
   }
 
@@ -1002,7 +1032,7 @@ export class PairChannel {
     if (this.closing) return;
     this.closing = true;
     for (const timer of this.delivery.values()) clearInterval(timer);
-    this.delivery.clear(); this.receipts.clear(); this.held = []; this.heldBytes = null;
+    this.delivery.clear(); this.receipts.clear(); this.held = []; this.heldBytes.clear();
     if (this.rejoinTimer !== null) clearTimeout(this.rejoinTimer);
     this.rejoinTimer = null;
     if (this.presenceTimer !== null) clearTimeout(this.presenceTimer);
