@@ -13,6 +13,7 @@
  * leaves the pair on the relay path rather than dead.
  */
 import { loadPlaywright, startServer } from "./harness.mjs";
+import { LevelHost } from "../dist/net/levelhost.js";
 
 // Only the live test launcher supplies these short-lived runtime credentials.
 // They never enter source files, Vite configuration, public assets or logs.
@@ -58,9 +59,12 @@ try {
     await p.addInitScript((runtime) => {
       const Original = window.RTCPeerConnection;
       window.__testPeerConnections = [];
+      window.__testPeerConfigs = [];
       window.RTCPeerConnection = class extends Original {
         constructor(config) {
-          super(runtime ? { ...config, iceServers: runtime.iceServers, iceTransportPolicy: "relay" } : config);
+          const selected = runtime ? { ...config, iceServers: runtime.iceServers, iceTransportPolicy: "relay" } : config;
+          super(selected);
+          window.__testPeerConfigs.push({ iceTransportPolicy: selected?.iceTransportPolicy ?? null });
           window.__testPeerConnections.push(this);
         }
       };
@@ -102,7 +106,9 @@ try {
   const align = async (limit = 300) => {
     for (let i = 0; i < limit; i++) {
       const [fa, fb] = await frames();
-      if (fa === fb) return true;
+      // TURN RTT can leave the live clocks a few frames apart even while their
+      // confirmed input prefix is identical. Exact equality is a sampling race.
+      if (Math.abs(fa - fb) <= 6) return true;
       await (fa < fb ? a : b).evaluate(() => window.__debug.netTick(1));
     }
     return false;
@@ -142,15 +148,29 @@ try {
   const aligned = await align();
   const [fa, fb] = await frames();
   const hashes = await digests();
+  const confirmed = await Promise.all([a, b].map(p => p.evaluate(() => window.__debug.session.confirmed)));
+  const common = Math.min(...confirmed) - 5;
+  const replays = await Promise.all([a, b].map(p => p.evaluate(frame =>
+    window.__debug.session.replay(frame), common)));
+  const confirmedHashes = replays.map(replay => {
+    if (!replay || replay.commands.length) return null;
+    const host = new LevelHost();
+    host.start(replay.mode, replay.num);
+    const bits = Buffer.from(replay.inputs, "base64");
+    for (let frame = 0; frame < bits.length; frame++) host.step(bits[frame], frame);
+    return host.hash();
+  });
   const pos = await a.evaluate(() => ({
     fire: +window.game.m_level.pers1.GetPosition().x.toFixed(3),
     water: +window.game.m_level.pers2.GetPosition().x.toFixed(3),
   }));
-  console.log(`  frame ${fa}/${fb}  hash ${hashes[0]}  ` +
+  console.log(`  frame ${fa}/${fb}  predicted hash ${hashes[0]}/${hashes[1]}  ` +
               `fire ${pos.fire} water ${pos.water}`);
 
   check("the peers converge", aligned, true);
-  check("their simulations are identical", hashes[0] === hashes[1], true);
+  check("their confirmed inputs are identical", JSON.stringify(replays[0]) === JSON.stringify(replays[1]), true);
+  check("their deterministic confirmed hashes match", confirmedHashes[0] !== null &&
+    confirmedHashes[0] === confirmedHashes[1], true);
   check("both characters moved", pos.fire > 2.5 && pos.water > 4.5, true);
   const desyncs = await Promise.all([a, b].map((p) =>
     p.evaluate(() => window.__debug.session.desyncs)));
@@ -169,6 +189,9 @@ try {
     return pc ? selectedIceDiagnostics(await pc.getStats()) : {};
   })));
   console.log("  selected ICE diagnostics: " + JSON.stringify(ice));
+  if (forcedTurn) check("both Chromium peers force relay-only ICE",
+    await Promise.all([a, b].map(p => p.evaluate(() =>
+      window.__testPeerConfigs.every(c => c.iceTransportPolicy === "relay")))), [true, true]);
   check("both selected candidate types are visible", ice.every((r) => !!r.candidateType), true);
   if (forcedTurn) check("both peers completed gameplay through TURN", ice.map((r) => r.candidateType), ["relay", "relay"]);
   // ---- the fallback path ------------------------------------------------
