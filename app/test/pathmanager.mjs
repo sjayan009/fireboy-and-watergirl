@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { NetSession } from "../../engine/dist/net/session.js";
 import { LevelHost } from "../../engine/dist/net/levelhost.js";
+import { decode as decodePacket } from "../../engine/dist/net/protocol.js";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const bundle = await build({ stdin: { resolveDir: root, sourcefile: "pathmanager-test-entry.ts", contents:
@@ -360,6 +361,184 @@ const baseline = await game(false), migrated = await game(true), silentGame = aw
 assert.deepEqual(migrated.result, baseline.result, "path migration changed the final deterministic session state");
 assert.deepEqual(silentGame.result, baseline.result, "silent failure changed the final deterministic session state");
 
+// Several failures in one logical game. Keep the real sessions and hosts alive
+// while the physical RTC generations change, and measure every relay interval.
+async function repeatedGame(sequence) {
+  const f = fixture({ managerOptions: { retryDelaysMs: [1000, 2000, 5000] } });
+  await f.time.until(f.bothRTC); await f.time.advance(700);
+  const peers = f.managers.map((transport, slot) => {
+    const host = new LevelHost();
+    const session = new NetSession({ host, slot, transport, rollback: true, delay: 0,
+      onLinkDown: () => f.closed[slot]++ });
+    return { host, session };
+  });
+  peers[0].session.requestStart("adventure", 1);
+  const identity = peers.map(p => ({ session: p.session, host: p.host }));
+  let steps = 0, maxNoProgressMs = 0;
+  const lastProgressAt = [f.time.now(), f.time.now()];
+  const lastRelayAt = [-Infinity, -Infinity];
+  const relayWindowStart = [null, null];
+  const relaySeen = f.relay.map(t => t.stats.receivedPackets);
+  const lastFrame = peers.map(p => p.session.frame);
+  const lastConfirmed = peers.map(p => p.session.confirmed);
+  async function step() {
+    const dt = 1000 / 26;
+    for (const [slot, p] of peers.entries()) {
+      p.session.setLocalInput(steps % 150 < 18 ? (slot ? 1 : 2) : 0);
+      p.session.tick(1 / 26);
+    }
+    await f.time.advance(dt);
+    steps++;
+    for (let side = 0; side < 2; side++) {
+      const p = peers[side].session;
+      const received = f.relay[side].stats.receivedPackets > relaySeen[side];
+      if (f.managers[side].kind !== "relay") relayWindowStart[side] = null;
+      if (received) {
+        lastRelayAt[side] = f.time.now();
+        relayWindowStart[side] ??= f.time.now();
+      }
+      if (p.frame > lastFrame[side] && p.confirmed > lastConfirmed[side])
+        lastProgressAt[side] = f.time.now();
+      const gap = f.time.now() - Math.max(lastProgressAt[side], relayWindowStart[side] ?? f.time.now());
+      if (f.time.now() - lastRelayAt[side] <= 1000 && f.managers[side].kind === "relay")
+        maxNoProgressMs = Math.max(maxNoProgressMs, gap);
+      assert.ok(f.time.now() - lastRelayAt[side] > 1000 ||
+        f.managers[side].kind !== "relay" || gap < 2000,
+        `${sequence.join(" -> ")}: relay arrives but peer ${side} cannot advance: ${JSON.stringify({
+          frame: p.frame, confirmed: p.confirmed, lastRemoteFrame: p.lastRemoteFrame,
+          nextLocal: p.nextLocal, attempts: f.managers[side].attempts,
+          state: f.managers[side].state,
+          relayReceived: f.relay[side].stats.receivedPackets,
+          lastInputFrame: f.managers[side].lastInput && new DataView(
+            f.managers[side].lastInput.buffer).getUint32(2),
+        })}`);
+      relaySeen[side] = f.relay[side].stats.receivedPackets;
+      lastFrame[side] = p.frame; lastConfirmed[side] = p.confirmed;
+    }
+  }
+  async function until(check, limitMs = 20000) {
+    const deadline = f.time.now() + limitMs;
+    while (!check() && f.time.now() < deadline) await step();
+    assert.ok(check(), `${sequence.join(" -> ")}: timed out at ${JSON.stringify(
+      f.managers.map(m => ({ state: m.state, kind: m.kind, attempts: m.attempts,
+        spent: m.spent, nextAttempt: m.nextAttempt, frame: peers[f.managers.indexOf(m)].session.frame,
+        confirmed: peers[f.managers.indexOf(m)].session.confirmed })))}`);
+  }
+  await until(() => peers.every(p => p.session.frame > 60));
+  const migrations = [];
+  const retired = [];
+  for (const mode of sequence) {
+    await until(() => f.bothRTC() && f.managers.every(m => m.kind === "webrtc"));
+    const before = peers.map(p => ({ frame: p.session.frame, confirmed: p.session.confirmed }));
+    const attempts = f.managers.map(m => m.attempts);
+    const old = f.rtc.at(-1);
+    const stale = old.map(t => ({ deliver: t.message,
+      bytes: t.data.find(data => data[0] === 1)?.slice() }));
+    retired.push(...stale);
+    const relayBefore = f.relay.map(t => ({ sent: t.stats.sentPackets, received: t.stats.receivedPackets }));
+    const started = f.time.now();
+    if (mode === "close") old[1].fail();
+    else old.drop = side => mode === "one-way" ? side === 0 : true;
+    await until(() => f.managers.every(m => m.kind === "relay"), 3500);
+    const protectionMs = f.time.now() - started;
+    const expectedDelay = [1000, 2000, 5000][Math.min(attempts[0] - 1, 2)];
+    if (mode === "close") assert.ok(Math.abs(f.managers[0].nextAttempt - started - expectedDelay) < 100,
+      `${mode}: retry backoff did not advance with the spent budget`);
+    await until(() => f.bothRTC() && f.managers.every((m, side) => m.attempts > attempts[side]), 20000);
+    const freshMs = f.time.now() - started;
+    if (mode !== "close") assert.ok(freshMs >= 6000 + expectedDelay - 500,
+      `${mode}: hard retirement skipped the expected retry backoff`);
+    assert.ok(f.managers.every(m => m.spent === m.attempts),
+      `${mode}: retry budget reset before a long healthy RTC period`);
+    assert.ok(peers.every((p, side) => p.session.frame > before[side].frame &&
+      p.session.confirmed > before[side].confirmed), `${mode}: no relay frame/confirmed progress ${JSON.stringify({
+        before, after: peers.map(p => ({ frame: p.session.frame, confirmed: p.session.confirmed,
+          lastRemoteFrame: p.session.lastRemoteFrame, nextLocal: p.session.nextLocal })),
+        paths: f.managers.map(m => ({ state: m.state, attempts: m.attempts,
+          lastInputFrame: m.lastInput && new DataView(m.lastInput.buffer).getUint32(2) })) })}`);
+    assert.ok(f.relay.every((t, side) => t.stats.sentPackets > relayBefore[side].sent &&
+      t.stats.receivedPackets > relayBefore[side].received), `${mode}: gameplay did not cross relay`);
+    if (mode === "one-way") {
+      const missing = before[1].confirmed;
+      const covering = f.relay[0].data.slice(relayBefore[0].sent).map(decodePacket).some(packet =>
+        packet?.kind === 1 && packet.frame >= missing &&
+        packet.frame - packet.bits.length + 1 <= missing);
+      assert.ok(covering, `one-way relay did not carry missing frame ${missing}`);
+    }
+    assert.ok(peers.every((p, side) => p.session === identity[side].session &&
+      p.host === identity[side].host && p.session.generation === 1 &&
+      p.session.runSerial === 1 && p.session.desyncs === 0), `${mode}: logical game changed`);
+    for (const item of retired) {
+      if (!item.deliver || !item.bytes) continue;
+      const manager = f.managers[retired.indexOf(item) % 2];
+      const receiver = manager.receiver;
+      let delivered = 0;
+      manager.receiver = data => { delivered++; receiver(data); };
+      item.deliver(item.bytes);
+      manager.receiver = receiver;
+      assert.equal(delivered, 0, `${mode}: old RTC delivered gameplay`);
+    }
+    await step();
+    assert.deepEqual(f.closed, [0, 0], `${mode}: link-down callback`);
+    await until(() => f.managers.every(m => m.state === "RTC_ACTIVE"), 3000);
+    for (let i = 0; i < 40; i++) await step();
+    const sent = f.relay.map(t => t.stats.sentPackets);
+    for (let i = 0; i < 20; i++) await step();
+    assert.deepEqual(f.relay.map(t => t.stats.sentPackets), sent,
+      `${mode}: relay published after promotion`);
+    migrations.push({ mode, protectionMs, freshMs });
+    assert.ok(f.managers.every(m => m.recentInputs.length <= 8 &&
+      m.recentInputs.reduce((bytes, item) => bytes + item.data.length, 0) <= 8 * 256),
+    `${mode}: replay history exceeded its memory bound`);
+  }
+  for (let i = 0; i < 80; i++) await step();
+  peers.forEach(p => p.session.tick(0));
+  assert.equal(peers[0].host.hash(), peers[1].host.hash(), "repeated migration diverged");
+  const quality = peers.map(p => ({ frame: p.session.frame, confirmed: p.session.confirmed,
+    stalls: p.session.stalls, rollbacks: p.session.rollbacks,
+    deepestRollback: p.session.deepestRollback, desyncs: p.session.desyncs }));
+  await f.close();
+  return { sequence, migrations, maxNoProgressMs, quality };
+}
+const repeatedResults = [];
+const repetitions = Number(process.env.FBWG_PATH_REPETITIONS ?? "1");
+assert.ok(Number.isSafeInteger(repetitions) && repetitions >= 1 && repetitions <= 100);
+for (let repetition = 0; repetition < repetitions; repetition++) {
+  for (const sequence of [["close", "silent", "close"], ["silent", "close", "one-way"]])
+    repeatedResults.push(await repeatedGame(sequence));
+}
+const repeatedSummary = {
+  repetitions, sequences: repeatedResults.length,
+  maxNoProgressMs: Math.max(...repeatedResults.map(result => result.maxNoProgressMs)),
+  maxRelayProtectionMs: Math.max(...repeatedResults.flatMap(result =>
+    result.migrations.map(migration => migration.protectionMs))),
+  maxFreshRtcMs: Math.max(...repeatedResults.flatMap(result =>
+    result.migrations.map(migration => migration.freshMs))),
+  maxRollbackCount: Math.max(...repeatedResults.flatMap(result =>
+    result.quality.map(peer => peer.rollbacks))),
+  deepestRollback: Math.max(...repeatedResults.flatMap(result =>
+    result.quality.map(peer => peer.deepestRollback))),
+  desyncs: repeatedResults.reduce((total, result) => total +
+    result.quality.reduce((sum, peer) => sum + peer.desyncs, 0), 0),
+};
+
+// Replay storage has a fixed bound and old-epoch snapshots age out as new
+// input arrives. It is cleared with the transport, including after retries.
+{
+  const f = fixture(); await f.time.until(f.bothRTC);
+  for (let i = 0; i < 30; i++) {
+    const packet = new Uint8Array(18);
+    packet[0] = 1; packet[14] = i < 10 ? 1 : 2; packet[2] = i;
+    f.managers[0].send(packet);
+    await f.time.advance(500);
+  }
+  assert.equal(f.managers[0].recentInputs.length, 8);
+  assert.ok(f.managers[0].recentInputs.every(item => item.data[14] === 2),
+    "old-epoch replay snapshots remained after the bounded window moved");
+  await f.close();
+  assert.equal(f.managers[0].recentInputs.length, 0);
+}
+
 // Use the actual PairChannel.sendBytes/flushHeld buffering during a two-second
 // WebSocket outage. The final history packet must survive both path-control
 // retries and an SDP/ICE burst, even when both sessions have already stalled.
@@ -416,5 +595,7 @@ assert.deepEqual(silentGame.result, baseline.result, "silent failure changed the
   managers.forEach(m => m.close()); await Promise.all(pairs.map(pair => pair.close())); await time.advance(10000);
   assert.equal(time.jobs.size, 0);
 }
-console.log(JSON.stringify({ scope: "Deterministic physical-path simulator with real NetSession and LevelHost", baseline, migrated, silentGame, silentResults }));
+console.log(JSON.stringify({ scope: "Deterministic physical-path simulator with real NetSession and LevelHost",
+  baseline, migrated, silentGame, silentResults, repeatedSummary,
+  ...(repetitions === 1 ? { repeatedResults } : {}) }));
 console.log("PATHMANAGER LOSS / MIGRATION / CLEANUP PASSED");

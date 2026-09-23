@@ -16,6 +16,7 @@ declare const __PATH_MANAGER__: boolean;
 declare const __LEGACY_RELAY_BATCHING__: boolean;
 declare const __ROLLBACK_SMOOTHING__: boolean;
 declare const __DESCENDANT_INTERPOLATION__: boolean;
+declare const __NETWORK_TEST_HOOKS__: boolean;
 
 /**
  * Where the extracted art and audio are fetched from.

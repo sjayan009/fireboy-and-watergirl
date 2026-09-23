@@ -195,6 +195,64 @@ export function playScreen(host: HTMLElement): () => void {
    * estimate. Shown in development only; see `describe`.
    */
   let link: (Transport & { readonly sent?: number }) | null = null;
+  // Built only into an explicitly flagged preview. The console hook returns
+  // counters and path state, never the transport, tokens or ICE credentials.
+  type PreviewManager = Transport & { inner?: Transport; state?: string;
+    attempts?: number; migrations?: number; duplicates?: number;
+    attempt?: { transport?: Transport & { pc?: { close(): void } } } };
+  const previewManager = (): PreviewManager | null => {
+    let current: PreviewManager | null = link as PreviewManager | null;
+    for (let i = 0; current && i < 4; i++) {
+      if (typeof current.attempts === "number") return current;
+      current = current.inner as PreviewManager | null ?? null;
+    }
+    return null;
+  };
+  const previewWindow = window as Window & { fbwgNetworkTest?: {
+    snapshot(): unknown; closeRtc(): boolean; blackholeRtc(): boolean } };
+  if (__PATH_MANAGER__ && __NETWORK_TEST_HOOKS__) {
+    let initialSession: unknown = null;
+    let initialLevel: unknown = null;
+    previewWindow.fbwgNetworkTest = {
+      snapshot: () => {
+        const manager = previewManager();
+        const session = view.session;
+        if (initialSession === null && session?.running) initialSession = session;
+        if (initialLevel === null && view.level) initialLevel = view.level;
+        const internals = session as unknown as {
+          confirmed?: number; lastRemoteFrame?: number; nextLocal?: number } | null;
+        return { at: Date.now(), path: link?.activePath ?? null,
+          state: manager?.state ?? null, attempts: manager?.attempts ?? null,
+          migrations: manager?.migrations ?? null, duplicates: manager?.duplicates ?? null,
+          frame: session?.frame ?? null, confirmed: internals?.confirmed ?? null,
+          generation: session?.generation ?? null, runSerial: session?.runSerial ?? null,
+          sameSession: initialSession === null ? null : session === initialSession,
+          sameLevel: initialLevel === null ? null : view.level === initialLevel,
+          running: session?.running ?? null, desyncs: session?.desyncs ?? null,
+          stalls: session?.stalls ?? null, rollbacks: session?.rollbacks ?? null,
+          deepestRollback: session?.deepestRollback ?? null,
+          lastRemoteFrame: internals?.lastRemoteFrame ?? null,
+          nextLocal: internals?.nextLocal ?? null,
+          relaySent: manager?.attempts === undefined ? null :
+            (manager as PreviewManager & { relay?: { sent?: number } }).relay?.sent ?? null,
+          relayReceived: (manager as PreviewManager & {
+            relay?: { stats?: { receivedPackets?: number } } } | null)?.relay?.stats?.receivedPackets ?? null,
+          qoe: qoe.summary() };
+      },
+      closeRtc: () => {
+        const manager = previewManager();
+        const pc = manager?.state === "RTC_ACTIVE" ? manager.attempt?.transport?.pc : null;
+        if (!pc) return false;
+        pc.close(); return true;
+      },
+      blackholeRtc: () => {
+        const manager = previewManager();
+        const transport = manager?.state === "RTC_ACTIVE" ? manager.attempt?.transport : null;
+        if (!transport) return false;
+        transport.send = () => {}; return true;
+      },
+    };
+  }
   let lobby: Lobby | null = null;
   /** Who we are paired with, for as long as the session lasts. */
   let partner: FriendState | null = null;
@@ -1567,6 +1625,7 @@ export function playScreen(host: HTMLElement): () => void {
     gone = true;
     qoe.close();
     if (import.meta.env.DEV) delete (window as Window & { fbwgQoe?: () => unknown }).fbwgQoe;
+    if (__PATH_MANAGER__ && __NETWORK_TEST_HOOKS__) delete previewWindow.fbwgNetworkTest;
     flow.cancel();
     if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
     if (leaving !== null) { clearTimeout(leaving); leaving = null; }
