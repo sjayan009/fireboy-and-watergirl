@@ -154,11 +154,25 @@ async function pairPages(a, b, alice, bob) {
 async function states(pages) {
   return Promise.all(pages.map(page => page.evaluate(() => {
     const { session, manager } = window.__hostedNetworkRead();
+    const attempt = manager?.attempt;
     return { state: manager?.state, kind: manager?.kind, attempts: manager?.attempts,
       migrations: manager?.migrations, relaySent: manager?.relay?.sent,
-      relayReceived: manager?.relay?.stats.receivedPackets, frame: session?.frame,
+      relayReceived: manager?.relay?.stats.receivedPackets,
+      relayInputs: window.__hostedRelayInputs ?? 0,
+      rtcSent: attempt?.transport?.stats?.sentPackets,
+      rtcReceived: attempt?.transport?.stats?.receivedPackets,
+      attemptGeneration: attempt?.g, attemptNonce: attempt?.n,
+      spent: manager?.spent, nextAttempt: manager?.nextAttempt,
+      suspect: attempt?.suspect, remoteRelayUntil: attempt?.remoteRelayUntil,
+      lastHeard: attempt?.lastHeard, lastReplay: attempt?.lastReplay,
+      duplicates: manager?.duplicates, frame: session?.frame,
       generation: session?.generation, runSerial: session?.runSerial,
       desyncs: session?.desyncs, running: session?.running, confirmed: session?.confirmed,
+      stalls: session?.stalls, stalled: session?.stalled,
+      rollbacks: session?.rollbacks, deepestRollback: session?.deepestRollback,
+      nextLocal: session?.nextLocal, lastRemoteFrame: session?.lastRemoteFrame,
+      predictionDistance: session?.frame - session?.confirmed,
+      relayPackets: window.__hostedPacketTrace?.slice(-8) ?? [],
       reconnectSeen: window.__hostedReconnectSeen === true,
       sameSession: session === window.__hostedNetworkSession,
       sameLevel: window.__fbwg.view.level === window.__hostedNetworkLevel,
@@ -166,11 +180,12 @@ async function states(pages) {
   })));
 }
 
-async function waitFor(pages, predicate, label, timeoutMs = 20000) {
+async function waitFor(pages, predicate, label, timeoutMs = 20000, inspect) {
   const deadline = Date.now() + timeoutMs;
   let last;
   while (Date.now() < deadline) {
     last = await states(pages);
+    inspect?.(last);
     if (predicate(last)) return last;
     await pages[0].waitForTimeout(200);
   }
@@ -193,23 +208,39 @@ async function migration(pages, mode) {
   const started = Date.now();
   await Promise.all(pages.map(page => page.evaluate(mode => {
     const { manager } = window.__hostedNetworkRead();
+    window.__hostedOldAttempts ??= [];
+    window.__hostedOldAttempts.push(manager.attempt);
     if (mode === "silent") {
-      window.__hostedOldAttempt = manager.attempt;
       manager.attempt.transport.send = () => {};
     }
   }, mode)));
   if (mode === "close") await pages[1].evaluate(() => {
     const { manager } = window.__hostedNetworkRead();
-    window.__hostedOldAttempt = manager.attempt;
     manager.attempt.transport.pc.close();
   });
   const relay = await waitFor(pages, xs => xs.every(x => x.kind === "relay"), `${mode}: hosted relay`, 11000);
   const protectionMs = Date.now() - started;
+  const monitor = relay.map((x, side) => ({ side, frame: x.frame, confirmed: x.confirmed,
+    relayReceived: x.relayReceived, lastProgress: Date.now(), lastRelay: 0, maxNoProgressMs: 0 }));
+  const inspect = xs => xs.forEach((x, side) => {
+    const m = monitor[side], now = Date.now();
+    if (x.frame > m.frame && x.confirmed > m.confirmed) m.lastProgress = now;
+    if (x.relayReceived > m.relayReceived) m.lastRelay = now;
+    m.frame = x.frame; m.confirmed = x.confirmed; m.relayReceived = x.relayReceived;
+    if (now - m.lastRelay <= 1000 && x.kind === "relay") {
+      m.maxNoProgressMs = Math.max(m.maxNoProgressMs, now - m.lastProgress);
+      assert.ok(now - m.lastProgress < 3000,
+        `${mode}: relay packets arrive but peer ${side} does not progress: ${JSON.stringify(x)}`);
+    }
+  });
   await Promise.all(pages.map(page => page.evaluate(() => window.__fbwg.view.session.setLocalInput(2))));
   try {
     await waitFor(pages, xs => xs.every((x, i) =>
+      x.kind === "relay" &&
       x.relaySent > relay[i].relaySent && x.relayReceived > relay[i].relayReceived &&
-      x.frame > relay[i].frame), `${mode}: hosted relay carried gameplay both ways`, 8000);
+      x.relayInputs > relay[i].relayInputs &&
+      x.frame > relay[i].frame && x.confirmed > relay[i].confirmed),
+    `${mode}: hosted relay carried gameplay both ways`, 8000, inspect);
   } catch {
     const last = await states(pages);
     throw new Error(`${mode}: relay gameplay delta ${JSON.stringify(last.map((x, i) => ({
@@ -222,7 +253,7 @@ async function migration(pages, mode) {
   }
   await Promise.all(pages.map(page => page.evaluate(() => window.__fbwg.view.session.setLocalInput(0))));
   const fresh = await waitFor(pages, xs => xs.every((x, i) => x.state === "RTC_ACTIVE" &&
-    x.kind === "webrtc" && x.attempts > before[i].attempts), `${mode}: fresh RTC`, 18000);
+    x.kind === "webrtc" && x.attempts > before[i].attempts), `${mode}: fresh RTC`, 50000, inspect);
   const freshMs = Date.now() - started;
   assert(fresh.every((x, i) => x.frame > before[i].frame && x.sameSession && x.sameLevel &&
     x.generation === before[i].generation && x.runSerial === before[i].runSerial &&
@@ -233,21 +264,22 @@ async function migration(pages, mode) {
   await pages[0].waitForTimeout(650);
   const after = await states(pages);
   assert(after.every((x, i) => x.relaySent === quiet[i].relaySent), `${mode}: relay kept publishing after RTC recovery`);
-  if (mode === "silent") {
+  {
     const ignored = await Promise.all(pages.map(page => page.evaluate(() => {
       const { manager } = window.__hostedNetworkRead();
-      const old = window.__hostedOldAttempt;
+      const old = window.__hostedOldAttempts;
       let delivered = 0;
       const receiver = manager.receiver;
       manager.receiver = data => { delivered++; receiver(data); };
-      manager.onRTC(old, manager.lastInput ?? new Uint8Array([1]));
+      for (const attempt of old) manager.onRTC(attempt, manager.lastInput ?? new Uint8Array([1]));
       manager.receiver = receiver;
-      return delivered === 0 && manager.attempt !== old;
+      return delivered === 0 && old.every(attempt => manager.attempt !== attempt);
     })));
     assert.deepEqual(ignored, [true, true], "late old-RTC traffic was delivered");
   }
-  console.log(`${mode}: relay protection ${protectionMs} ms; fresh RTC ${freshMs} ms`);
-  return { protectionMs, freshMs };
+  const maxNoProgressMs = Math.max(...monitor.map(x => x.maxNoProgressMs));
+  console.log(`${mode}: relay protection ${protectionMs} ms; fresh RTC ${freshMs} ms; max relay no-progress ${maxNoProgressMs} ms`);
+  return { protectionMs, freshMs, maxNoProgressMs };
 }
 
 async function finalHash(pages) {
@@ -285,7 +317,7 @@ async function finalHash(pages) {
   return { live, common, hashes, digestFrame, digestA, digestB };
 }
 
-async function runHostedScenario(alice, bob, mode) {
+async function runHostedScenario(alice, bob, sequence, label) {
   pageErrors.length = 0;
   const pages = [];
   try {
@@ -309,13 +341,35 @@ async function runHostedScenario(alice, bob, mode) {
       window.__hostedNetworkSession = session;
       window.__hostedNetworkLevel = view.level;
       window.__hostedNetworkView = view;
+      window.__hostedPacketTrace = [];
+      window.__hostedRelayInputs = 0;
+      const deliver = manager.deliver.bind(manager);
+      manager.deliver = (bytes, source) => {
+        if (source === "relay") {
+          const type = bytes[0];
+          if (type === 1) window.__hostedRelayInputs++;
+          const frame = bytes.length >= 6 ? new DataView(bytes.buffer, bytes.byteOffset,
+            bytes.byteLength).getUint32(2) : null;
+          const n = type === 1 ? bytes[15] : 0;
+          const trailer = 18 + n;
+          const extra = type === 1 && bytes[trailer] === 0xa7 ? bytes[trailer + 12] : 0;
+          const count = n + (extra <= 16 ? extra : 0);
+          window.__hostedPacketTrace.push({ type, frame, slot: bytes[1],
+            epoch: type === 1 ? bytes[14] : type === 2 ? bytes[9] : null,
+            historyLength: count, earliest: type === 1 ? frame - count + 1 : null,
+            latest: type === 1 ? frame : null, missing: session.confirmed });
+          if (window.__hostedPacketTrace.length > 32) window.__hostedPacketTrace.shift();
+        }
+        deliver(bytes, source);
+      };
     })));
     await waitFor(pages, xs => xs.every(x => x.state === "RTC_ACTIVE" && x.kind === "webrtc"),
-      `${mode}: initial hosted RTC`, 20000);
-    const timing = await migration(pages, mode);
+      `${label}: initial hosted RTC`, 20000);
+    const timing = [];
+    for (const mode of sequence) timing.push(await migration(pages, mode));
     const final = await finalHash(pages);
     assert.deepEqual(pageErrors, [], "browser page errors occurred");
-    return { timing, final };
+    return { sequence, timing, final };
   } finally {
     for (const page of pages) {
       await page.evaluate(async () => {
@@ -333,11 +387,27 @@ async function runHosted(alice, bob) {
   browser = await chromium.launch();
   const results = {};
   const failed = [];
-  for (const mode of ["close", "silent"]) {
-    try { results[mode] = await runHostedScenario(alice, bob, mode); }
-    catch (error) { failed.push(`${mode}: ${error.message}`); console.error(`hosted ${mode} failed: ${error.message}`); }
+  const scenarios = [
+    ["close"], ["silent"],
+    ["close", "silent"], ["silent", "close"],
+    ["close", "silent"], ["silent", "close"],
+    ["close", "silent"], ["silent", "close"],
+  ];
+  for (const [index, sequence] of scenarios.entries()) {
+    const label = `${index + 1}/${scenarios.length} ${sequence.join(" -> ")}`;
+    console.log(`stage: ${label}`);
+    try { results[label] = await runHostedScenario(alice, bob, sequence, label); }
+    catch (error) { failed.push(`${label}: ${error.message}`); console.error(`hosted ${label} failed: ${error.message}`); }
   }
   if (failed.length) throw new Error(failed.join("; "));
+  console.log(`hosted results: ${JSON.stringify(Object.entries(results).map(([label, result]) => ({
+    label, timing: result.timing, digestFrame: result.final.digestFrame,
+    peers: result.final.live.map(peer => ({ frame: peer.frame, confirmed: peer.confirmed,
+      generation: peer.generation, runSerial: peer.runSerial, desyncs: peer.desyncs,
+      rollbacks: peer.rollbacks, deepestRollback: peer.deepestRollback,
+      stalls: peer.stalls, sameSession: peer.sameSession, sameView: peer.sameView,
+      sameLevel: peer.sameLevel, reconnectSeen: peer.reconnectSeen })),
+  })))}`);
   return results;
 }
 
@@ -377,6 +447,25 @@ try {
       if (!response.ok) cleanupPassed = false;
       else if ((await admin(`/auth/v1/admin/users/${user.id}`)).status !== 404) cleanupPassed = false;
     } catch { cleanupPassed = false; }
+  }
+  try {
+    const [auth, profiles] = await Promise.all([
+      admin("/auth/v1/admin/users?page=1&per_page=1000"),
+      admin("/rest/v1/profiles?select=id&username=like.fbwgna*"),
+    ]);
+    if (!auth.ok || !profiles.ok) {
+      console.error("cleanup verification query failed");
+      cleanupPassed = false;
+    } else {
+      const remainingUsers = ((await auth.json()).users ?? [])
+        .filter(user => user.email?.startsWith(PREFIX));
+      const remainingProfiles = await profiles.json();
+      console.log(`cleanup verification: ${remainingUsers.length} acceptance users; ${remainingProfiles.length} test profiles`);
+      if (remainingUsers.length || remainingProfiles.length) cleanupPassed = false;
+    }
+  } catch (error) {
+    console.error(`cleanup verification failed: ${error.message}`);
+    cleanupPassed = false;
   }
   console.log(`cleanup: ${cleanupPassed ? "confirmed" : "FAILED"} for ${users.length} disposable users`);
 }

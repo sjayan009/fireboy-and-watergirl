@@ -140,6 +140,20 @@ export class RealtimeTransport implements Transport {
       this.flush();
     }, this.flushMs - since);
   }
+
+  /** Publish a bounded recovery history in order, without held-input
+   * coalescing replacing the older packet that contains a missing frame. */
+  sendUncoalesced(packets: readonly Uint8Array[]): void {
+    if (this.closed || packets.length === 0) return;
+    this.flush();
+    this.pair.sendBytes(packets.map(encode));
+    this.sent++;
+    for (const packet of packets) {
+      this.stats.sentPackets++;
+      this.stats.sentBytes += packet.byteLength;
+    }
+    this.lastSent = Date.now();
+  }
   private lastInput: { frame: number; slot: number; epoch: number } | null = null;
 
   private observed: InputPacket | null = null;

@@ -53,6 +53,11 @@ const RELAY_LEASE_MS = 1500;
 const DEAD_MS = 6000;
 const DEDUP_MS = 2000;
 const DEDUP_BYTES = 128 * 1024;
+// One input packet covers 32 frames (1.23 s). Samples 500 ms apart keep
+// overlapping coverage across the 1.5 s suspect detection interval, including
+// the sender that can still advance on a one-way RTC failure.
+const REPLAY_SAMPLE_MS = 500;
+const MAX_REPLAY_INPUTS = 8;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const summedStats = ["sentPackets", "receivedPackets", "sentBytes", "receivedBytes", "droppedPackets",
@@ -147,6 +152,7 @@ export class PathManager implements Transport {
   private readonly seen = new Map<string, { data: Uint8Array; source: string; at: number }>();
   private seenBytes = 0;
   private lastInput: Uint8Array | null = null;
+  private readonly recentInputs: { data: Uint8Array; at: number }[] = [];
 
   constructor(private readonly channel: ByteChannel, private readonly caller: boolean,
               options: PathManagerOptions = {}) {
@@ -221,7 +227,14 @@ export class PathManager implements Transport {
   }
   send(data: Uint8Array): void {
     if (this.closed) return;
-    if (data[0] === 1 && data.length <= 256) this.lastInput = data.slice();
+    if (data[0] === 1 && data.length <= 256) {
+      this.lastInput = data.slice();
+      const last = this.recentInputs.at(-1);
+      if (!last || this.time.now() - last.at >= REPLAY_SAMPLE_MS) {
+        this.recentInputs.push({ data: this.lastInput, at: this.time.now() });
+        if (this.recentInputs.length > MAX_REPLAY_INPUTS) this.recentInputs.shift();
+      }
+    }
     const attempt = this.attempt;
     if (attempt?.transport && this.verified(attempt)) attempt.transport.send(data);
     if (this.relayUp && (!attempt?.active || !attempt.peerActive ||
@@ -389,13 +402,19 @@ export class PathManager implements Transport {
     if (!this.needsRelay(a, now)) this.state = "RTC_ACTIVE";
   }
 
-  private replayInput(a: Attempt): void {
+  private replayInput(a: Attempt, force = false): void {
     const now = this.time.now();
-    if (!this.relayUp || !this.lastInput || now - a.lastReplay < PROBE_MS) return;
+    if (!this.relayUp || !this.lastInput || (!force && now - a.lastReplay < PROBE_MS)) return;
     a.lastReplay = now;
-    // A stalled NetSession may have stopped creating new packets. Reoffer its
-    // last bounded input history so relay can unstick the peer's simulation.
-    this.relay.send(this.lastInput);
+    // The sender can run 30 frames ahead while the other peer waits 1.5 s to
+    // suspect a one-way failure. By then its newest 32-frame history may no
+    // longer include the missing frame. Replay overlapping older snapshots in
+    // order; a stalled session also keeps its last snapshot available.
+    const packets = this.recentInputs.map(item => item.data);
+    if (packets.at(-1) !== this.lastInput) packets.push(this.lastInput);
+    const relay = this.relay as Transport & { sendUncoalesced?(packets: readonly Uint8Array[]): void };
+    if (relay.sendUncoalesced) relay.sendUncoalesced(packets);
+    else for (const data of packets) relay.send(data);
   }
 
   private failAttempt(a: Attempt): void {
@@ -408,7 +427,7 @@ export class PathManager implements Transport {
     }
     this.disposeAttempt(a);
     this.state = "RELAY_ACTIVE";
-    if (this.relayUp && this.lastInput) this.relay.send(this.lastInput);
+    if (this.relayUp) this.replayInput(a, true);
     this.nextAttempt = this.time.now() + this.retries[Math.min(Math.max(0, this.spent - 1), this.retries.length - 1)];
     if (!this.relayUp) this.offline("all gameplay paths are unavailable");
   }
@@ -462,7 +481,8 @@ export class PathManager implements Transport {
     this.timer = null; this.offControl(); this.offStatus();
     if (this.attempt) this.disposeAttempt(this.attempt);
     this.relay.close(); this.retryRequest = null;
-    this.seen.clear(); this.seenBytes = 0; this.lastInput = null; this.receiver = null; this.lost = null;
+    this.seen.clear(); this.seenBytes = 0; this.lastInput = null; this.recentInputs.length = 0;
+    this.receiver = null; this.lost = null;
   }
 }
 
