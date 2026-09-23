@@ -218,6 +218,73 @@ function fixture(options = {}) {
   assert.deepEqual(f.closed, [0, 0]); await f.close();
 }
 
+// Suspect mode protects gameplay before the hard timeout, including asymmetric
+// failures where only the receiving peer can detect the missing RTC traffic.
+const silentResults = [];
+for (const direction of ["outbound", "inbound", "two-way"]) {
+  const f = fixture(); await f.time.until(f.bothRTC); await f.time.advance(700);
+  const received = [[], []];
+  f.managers.forEach((m, side) => m.onMessage(bytes => received[side].push(bytes[1])));
+  f.managers.forEach((m, side) => m.send(new Uint8Array([2, 10 + side])));
+  await f.time.advance(100); received.forEach(list => { list.length = 0; });
+  const old = f.rtc[0], stale = old[1].message, started = f.time.now();
+  old.drop = side => direction === "two-way" || side === (direction === "outbound" ? 0 : 1);
+  await f.time.until(() => f.managers.every(m => m.state === "RTC_SUSPECT"), 2500);
+  const protectionMs = f.time.now() - started;
+  assert.ok(protectionMs <= 1800, `${direction}: protection took ${protectionMs}ms`);
+  const before = f.relay.map(t => t.data.length);
+  f.managers.forEach((m, side) => m.send(new Uint8Array([2, 100 + side])));
+  await f.time.advance(100);
+  assert.deepEqual(received, [[101], [100]], `${direction}: relay did not protect both peers`);
+  assert.ok(f.relay.every((t, side) => t.data.length > before[side]));
+  await f.time.until(() => f.bothRTC() && f.rtc.length === 2, 9000);
+  const freshMs = f.time.now() - started;
+  assert.ok(freshMs <= 8000, `${direction}: fresh RTC took ${freshMs}ms`);
+  assert.ok(old.every(t => t.closed === 1), "old RTC was not retired");
+  stale(new Uint8Array([2, 222]));
+  assert.deepEqual(received, [[101], [100]], "retired RTC delivered stale gameplay");
+  await f.time.advance(1000);
+  const relayCount = f.relay.map(t => t.data.length);
+  f.managers.forEach((m, side) => m.send(new Uint8Array([2, 110 + side])));
+  await f.time.advance(100);
+  assert.deepEqual(f.relay.map(t => t.data.length), relayCount, "fresh RTC kept publishing relay gameplay");
+  assert.deepEqual(received, [[101, 111], [100, 110]]);
+  assert.deepEqual(f.closed, [0, 0]);
+  silentResults.push({ direction, protectionMs, freshMs });
+  await f.close();
+}
+
+// A short gap never starts relay. Recovery before the hard timeout stops relay
+// after two separated RTC observations, and a second gap does not flap instantly.
+{
+  const f = fixture(); await f.time.until(f.bothRTC); await f.time.advance(700);
+  const received = []; f.managers[1].onMessage(bytes => received.push(bytes[1]));
+  f.managers.forEach((m, side) => m.send(new Uint8Array([2, 10 + side])));
+  await f.time.advance(100); received.length = 0;
+  f.rtc[0].drop = () => true;
+  await f.time.advance(1000);
+  assert.ok(f.bothRTC(), "transient loss entered suspect mode");
+  f.rtc[0].drop = null; await f.time.advance(500);
+  assert.ok(f.bothRTC(), "transient recovery changed the path");
+  f.rtc[0].drop = () => true;
+  await f.time.until(() => f.managers.every(m => m.state === "RTC_SUSPECT"), 2500);
+  f.managers[0].send(new Uint8Array([2, 150])); await f.time.advance(100);
+  assert.deepEqual(received, [150]);
+  const attempts = f.managers.map(m => m.attempts);
+  let offDrops = 0;
+  f.channel.drop = (_, data) => json(data)?.t === "RELAY_OFF" && offDrops++ < 2;
+  f.rtc[0].drop = null;
+  await f.time.until(f.bothRTC, 4000);
+  assert.equal(offDrops, 2, "recovery lease fixture did not lose both OFF controls");
+  assert.deepEqual(f.managers.map(m => m.attempts), attempts, "recovery made an unnecessary RTC");
+  await f.time.advance(1600);
+  const relayCount = f.relay.map(t => t.data.length);
+  f.managers[0].send(new Uint8Array([2, 151])); await f.time.advance(100);
+  assert.deepEqual(received, [150, 151], "overlap delivered duplicate gameplay");
+  assert.deepEqual(f.relay.map(t => t.data.length), relayCount, "relay continued after recovery");
+  assert.deepEqual(f.closed, [0, 0]); await f.close();
+}
+
 // All attempts fail: the same emergency session remains usable, and retries stop.
 {
   const f = fixture({ rejectRTC: true, managerOptions: { maxAttempts: 3 } });
@@ -268,10 +335,12 @@ async function game(migrate) {
     return { host, session };
   });
   peers[0].session.requestStart("adventure", 1); await f.time.advance(40);
-  for (let frame = 0; frame < 220; frame++) {
+  for (let frame = 0; frame < 340; frame++) {
     if (migrate && frame === 55) f.rtc[0][1].fail();
+    if (migrate === "silent" && frame === 55) f.rtc[0].drop = () => true;
     for (const [slot, p] of peers.entries()) {
-      p.session.setLocalInput(frame > 10 && frame < 24 ? (slot ? 1 : 2) : 0);
+      p.session.setLocalInput((frame > 10 && frame < 24) ||
+        (frame > 65 && frame < 90) ? (slot ? 1 : 2) : 0);
       p.session.tick(1 / 26);
     }
     await f.time.advance(1000 / 26);
@@ -281,12 +350,15 @@ async function game(migrate) {
     generation: p.session.generation, runSerial: p.session.runSerial, desyncs: p.session.desyncs }));
   assert.equal(result[0].hash, result[1].hash, "managed peers desynced");
   assert.equal(result[0].generation, result[1].generation);
-  assert.ok(result.every(p => p.frame >= 215 && p.desyncs === 0 && p.runSerial === 1));
+  assert.ok(result.every(p => p.frame >= 335 && p.desyncs === 0 && p.runSerial === 1));
   assert.deepEqual(f.closed, [0, 0]); if (migrate) assert.ok(f.rtc.length >= 2);
-  await f.close(); return result;
+  const quality = peers.map(p => ({ stalls: p.session.stalls, rollbacks: p.session.rollbacks,
+    deepestRollback: p.session.deepestRollback }));
+  await f.close(); return { result, quality };
 }
-const baseline = await game(false), migrated = await game(true);
-assert.deepEqual(migrated, baseline, "path migration changed the final deterministic session state");
+const baseline = await game(false), migrated = await game(true), silentGame = await game("silent");
+assert.deepEqual(migrated.result, baseline.result, "path migration changed the final deterministic session state");
+assert.deepEqual(silentGame.result, baseline.result, "silent failure changed the final deterministic session state");
 
 // Use the actual PairChannel.sendBytes/flushHeld buffering during a two-second
 // WebSocket outage. The final history packet must survive both path-control
@@ -344,5 +416,5 @@ assert.deepEqual(migrated, baseline, "path migration changed the final determini
   managers.forEach(m => m.close()); await Promise.all(pairs.map(pair => pair.close())); await time.advance(10000);
   assert.equal(time.jobs.size, 0);
 }
-console.log(JSON.stringify({ scope: "Deterministic physical-path simulator with real NetSession and LevelHost", baseline, migrated }));
+console.log(JSON.stringify({ scope: "Deterministic physical-path simulator with real NetSession and LevelHost", baseline, migrated, silentGame, silentResults }));
 console.log("PATHMANAGER LOSS / MIGRATION / CLEANUP PASSED");
