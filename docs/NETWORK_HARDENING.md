@@ -44,6 +44,15 @@ The input proxy varied, but the short solo runs do not clearly establish a produ
 
 ## Hosted acceptance and security boundary
 
-The deployed `turn-credentials` function was listed ACTIVE. Direct live requests without a token and with a forged token each returned 401 with `Cache-Control: no-store`. Authenticated issuance, short-lived servers, forced Cloudflare TURN candidate selection and gameplay were **not run** because no disposable test account was available. The separate hosted two-person migration was **not run** for the same reason. Local Chromium used host ICE and a local relay fixture. PathManager remains **OFF** for production. Do not call this production ready or stage a production two-person test until both live TURN and hosted migration pass.
+On 2026-09-23, `npm run test:network-hosted` created two fresh, confirmed `fbwg_network_acceptance_` users with random passwords, signed them in through normal Auth, and verified both Admin deletions after browser and programmatic sign-out. The credentials stayed in process memory. Its live TURN stage verified missing and forged bearer tokens both return 401 with `Cache-Control: no-store`; the disposable user's token issued short-lived credentials with `no-store`; both Chromium peers forced relay-only ICE, selected `candidateType=relay` over Cloudflare TURN, played an active level, matched confirmed input and replay hashes, and reported zero desyncs. TURN was tested separately from hosted migration.
+
+The two hosted variants used the same two accounts in separate pairs of Chromium contexts and fresh game sessions. Both signed in through hosted Auth, became friends, used the real private PairChannel and Realtime signaling, played an active level, sent and received gameplay through the hosted emergency relay, then promoted a fresh RTC without replacing NetSession, the view or the level, or changing generation 1 or runSerial 1. Relay gameplay publishing stopped after promotion, an injected late callback from the retired RTC was ignored in the silent case, and the peers converged with zero desyncs. Live session hashes matched at a shared confirmed frame.
+
+| Hosted disruption | Relay protection | Fresh RTC | Shared confirmed live digest |
+| --- | ---: | ---: | --- |
+| Explicit RTC close | 14 ms | 1,600 ms | frame 88, `9f4057d9` |
+| Silent two-way RTC blackhole | 1,419 ms | 7,349 ms | frame 224, `f6ce2a58` |
+
+Several diagnostic runs exposed timing variability. A silent recovery took 9.7–14.4 seconds in earlier runs, above the eight-second target, and one back-to-back close-then-blackhole run in the same game received hosted relay packets while a peer made no frame progress before RTC recovery. The final isolated variants passed, but those observations warrant further investigation before enabling PathManager for a staged production test. PathManager remains **OFF** for production. No client deployment or merge was performed.
 
 No Cloudflare master secret was read, changed or put in the client. The build secret scan passed. The broker's per-isolate issuance throttle remains a best-effort abuse control, not a global billing cap. The suspect control messages are scoped to the current RTC nonce and generation. The cached input packet is bounded to 256 bytes and cleared on close. No client deployment or merge is part of this branch.
