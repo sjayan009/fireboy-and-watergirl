@@ -186,8 +186,10 @@ export class SpriteRenderer {
   private transforms = new WeakMap<object, Xform>();
   private visualSnapshots: VisualSnapshots | null = null;
   private visualAlpha = 1;
+  private visualNow = 0;
   private presentedSnapshots: VisualSnapshots | null = null;
   private presentedAlpha = 1;
+  private presentedNow = 0;
   private images = new Map<string, HTMLImageElement>();
   private pending = new Set<string>();
   private failed = new Set<string>();
@@ -333,32 +335,56 @@ export class SpriteRenderer {
   }
 
   draw(ctx: CanvasRenderingContext2D, root: DisplayObject,
-       snapshots: VisualSnapshots | null = null, alpha = 1): void {
+       snapshots: VisualSnapshots | null = null, alpha = 1, now = performance.now()): void {
+    snapshots?.beginPresentation(now);
     this.visualSnapshots = snapshots;
     this.visualAlpha = alpha;
+    this.visualNow = now;
     this.presentedSnapshots = snapshots;
     this.presentedAlpha = alpha;
+    this.presentedNow = now;
     try { this.drawNode(ctx, root); }
     finally { this.visualSnapshots = null; }
   }
 
   /** Resolve only transforms at simulation boundaries; retain no game references in the game itself. */
   captureTransforms(root: DisplayObject, snapshots: VisualSnapshots,
-                    local: number, reconcile = false): void {
+                    local: number, reconcile = false, now = performance.now()): void {
     if (!reconcile) snapshots.begin();
+    const scene = (root as any).m_level;
+    // Death replaces/hides clips; rollback may restore them in the same capture
+    // sequence. Include life state and forget hidden art immediately.
+    const life = (scene?.myContactListener?.deadFire ? 1 : 0) |
+      (scene?.myContactListener?.deadWater ? 2 : 0) | (scene?.ended ? 4 : 0);
+    const forget = (node: any): void => {
+      if (!node) return;
+      snapshots.forget(node);
+      for (const child of node.children ?? []) forget(child);
+    };
     const visit = (node: any, parent: object | null, place?: ChildPlacement,
-                   inherited: VisualMode = "interpolate"): void => {
-      if (!node || node.visible === false || node.alpha <= 0) return;
-      const controlled = (node.name === "pers1" && (local & 1)) ||
-        (node.name === "pers2" && (local & 2));
-      const mode: VisualMode = controlled ? "predict" : inherited;
-      snapshots.capture(node, this.resolvedTransform(node, place), parent, mode, reconcile);
+                   localTree = false, worldScale = 1, parentSnap = false,
+                   discreteTree = false): void => {
+      if (!node || node.visible === false || node.alpha <= 0) { forget(node); return; }
+      const controlled = !!((node.name === "pers1" && (local & 1)) ||
+        (node.name === "pers2" && (local & 2)));
       const sprite = this.spriteFor(node);
+      const discrete = discreteTree || !!(node.isMask || node.mask || node.__clipMask || node.bitmapData ||
+        node instanceof TextField || this.buttons?.buttons[String(node.spriteId)]);
+      const mode: VisualMode = controlled ? "predict" :
+        localTree && (!snapshots.localDescendantInterpolation || discrete) ? "latest" : "interpolate";
+      const transform = this.resolvedTransform(node, place);
+      const snapped = snapshots.capture(node, transform, parent, mode, reconcile, {
+        now, worldScale, snap: parentSnap, identity: sprite ?? node.symbol,
+        revision: node.__visualRevision, state: life,
+      });
+      // Product of maximum axis scales is a conservative bound even for nested
+      // rotations/nonuniform scales. The threshold stays in stage pixels.
+      const childScale = worldScale * Math.max(Math.abs(transform.sx), Math.abs(transform.sy));
       const geom = sprite?.geom[Math.min(Math.max(node.currentFrame ?? 1, 1), sprite.frames) - 1];
       for (const child of node.children ?? []) {
         const childPlace = placementFor(geom, child);
-        if (geom && !childPlace && (child.__place != null || !child.__seed)) continue;
-        visit(child, node, childPlace, controlled ? "latest" : inherited);
+        if (geom && !childPlace && (child.__place != null || !child.__seed)) { forget(child); continue; }
+        visit(child, node, childPlace, controlled || localTree, childScale, snapped, discrete);
       }
       // BitmapData is baked terrain, not an independently animated camera.
       // Its source transforms stay exact and its filter cache remains reusable.
@@ -458,7 +484,8 @@ export class SpriteRenderer {
     ctx.save();
     const base = xform ?? this.resolvedTransform(node);
     if (xform) this.applyHeight(node, base);
-    const t = this.visualSnapshots?.sample(node, base, this.visualAlpha) ?? base;
+    const t = this.visualSnapshots?.sample(node, base, this.visualAlpha, this.visualNow) ?? base;
+    this.visualSnapshots?.recordPresented(node, t);
     ctx.translate(t.x, t.y);
     if (t.rot) ctx.rotate(t.rot * DEG);
     if (t.sx !== 1 || t.sy !== 1) ctx.scale(t.sx, t.sy);
@@ -607,7 +634,7 @@ export class SpriteRenderer {
 
       ctx.save();
       const base = xform ?? this.resolvedTransform(node);
-      const t = this.presentedSnapshots?.sample(node, base, this.presentedAlpha) ?? base;
+      const t = this.presentedSnapshots?.sample(node, base, this.presentedAlpha, this.presentedNow) ?? base;
       ctx.translate(t.x, t.y);
       if (t.rot) ctx.rotate(t.rot * DEG);
       if (t.sx !== 1 || t.sy !== 1) ctx.scale(t.sx, t.sy);
@@ -812,7 +839,11 @@ export class SpriteRenderer {
     const geom = sprite?.geom[Math.min(Math.max(node.currentFrame ?? 1, 1), sprite.frames) - 1];
     for (const child of node.children ?? []) {
       const place = placementFor(geom, child);
-      const t = this.resolvedTransform(child, place);
+      const base = this.resolvedTransform(child, place);
+      // The cached glow must follow interpolated local animation too; otherwise
+      // the new child samples are computed but the old 26 Hz tile is displayed.
+      const smoothPose = this.visualSnapshots?.localDescendantInterpolation || this.visualSnapshots?.rollbackSmoothing;
+      const t = smoothPose ? this.visualSnapshots!.sample(child, base, this.visualAlpha, this.visualNow) : base;
       key += `|${t.x},${t.y},${t.sx},${t.sy},${t.rot},${this.poseKey(child)}`;
     }
     return key;
