@@ -1,47 +1,10 @@
-/**
- * The netcode's `Transport`, over a pair's Realtime channel.
- *
- * This is the seam that lets two PEOPLE find each other rather than two tabs.
- * It implements the same one-method interface as `BroadcastTransport` and the
- * WebRTC data channel, so `connect()` takes it as the rendezvous without
- * knowing what it is, and **the engine never learns that Supabase exists**.
- *
- * It is used for two different jobs, and it is worth being clear which:
- *
- *  * **Always**, to carry the SDP and ICE of the peer-connection handshake.
- *    A handful of messages, then silence.
- *  * **Sometimes**, as the game transport itself when direct connection fails.
- *    This removes the TURN dependency. A full input packet is 65 bytes; two
- *    players normally send 52 packets/s before batching and JSON/base64.
- *
- * ## Why sends are batched
- *
- * The free tier allows about two million Realtime messages a month. A relayed
- * session sending one packet per frame per peer is roughly 52 publishes/s.
- * Supabase meters BOTH publishes and deliveries: at one recipient this spends
- * two million messages in about 5.34 pair-hours, before other Realtime uses.
- *
- * The default 230ms batch has a theoretical pair rate of 8.70 publishes/s
- * (17.39 metered messages/s with one recipient), or about 31.94 pair-hours per
- * 2M-message allowance. The 115ms hurried mode halves that capacity. Commands,
- * signalling, spectators, social traffic and framing need additional budget.
- *
- * ## Except when it costs a great deal
- *
- * A peer stalls once the other's input is delayed by more than the rollback
- * window, and for a relayed
- * pair that delay is this wait PLUS a server hop each way -- so 230 ms of a
- * 1154 ms window is spent before a packet has left the browser, and two people
- * far enough apart spend the evening watching each other freeze.
- *
- * `hurry` is the dial, and it is turned by the page rather than set here,
- * because the page is what can see a pair stalling and what pays for the
- * messages. A hurried session consumes about twice as much message quota;
- * it is not a different billing plan. On Free, exceeding limits stops service.
- *
- * Verify the quota against current pricing before relying on those numbers.
+/** Emergency gameplay and signaling over the existing private pair channel.
+ * NetSession still generates 26 Hz inputs. Changed bits and boundaries publish
+ * immediately; unchanged inputs publish the newest redundant history at 115 ms.
+ * legacyBatching retains the original 230/115 ms queue for rollout rollback.
  */
 import { Transport, transportStats } from "@engine/net/transport.js";
+import { decode, type InputPacket } from "@engine/net/protocol.js";
 import { encode } from "./base64.js";
 
 /**
@@ -52,42 +15,21 @@ import { encode } from "./base64.js";
  * would have meant handing a spectator an object that also carries the two
  * players' presence and invitations.
  */
+export type ByteLane = "gameplay" | "signaling" | "control";
 export interface ByteChannel {
   onBytes(fn: (d: Uint8Array) => void): () => void;
-  sendBytes(packets: string[]): void;
+  /** Local buffering metadata; scoping carries the corresponding on-wire lane. */
+  sendBytes(packets: string[], lane?: ByteLane): void;
   onStatus(fn: (status: string) => void): () => void;
 }
 
-/**
- * How long packets may wait before going out, in milliseconds.
- *
- * Six frames at 26 Hz, and the single biggest lever on what a relayed pair
- * costs: doubling it halves the message rate, which is what decides how many
- * games this project can host at once. Fifty games with one in seven relaying
- * is about 260 messages a second at 115 ms and about 130 at 230.
- *
- * A peer stalls once delayed input exceeds the rollback window. The current
- * default is 30 frames, about 1154ms; queue time, network latency, jitter and
- * a burst of loss all consume that window. The network benchmark measures
- * these together rather than treating a regional RTT as a queue-inclusive RTT.
- *
- * Do NOT make sends change-triggered instead. Lockstep needs the peer's input
- * for every frame or `ready` stalls, so packets have to flow whether or not
- * anybody moved. This is the only lever here, and it moves with the window.
- */
 const SLOW_MS = 230;
-/**
- * The same lever, for a pair the slow one is failing.
- *
- * Three frames rather than six. It returns 115ms of queue budget at roughly
- * twice the message consumption. The 600ms RTT + jitter/loss benchmark shows
- * why the existing explicit choice is useful; making it universal would halve
- * the finite Free relay capacity.
- */
 const FAST_MS = 115;
 
 export class RealtimeTransport implements Transport {
-  readonly stats = transportStats();
+  readonly kind = "relay" as const;
+  readonly activePath = "relay" as const;
+  readonly stats = { ...transportStats(), queueRecentMs: [] as number[] };
   private queue: string[] = [];
   private queuedAt: number[] = [];
   private queuedBytes: number[] = [];
@@ -103,7 +45,14 @@ export class RealtimeTransport implements Transport {
   /** How long a queued packet may wait. See `hurry`. */
   private flushMs = SLOW_MS;
 
-  constructor(private readonly pair: ByteChannel) {}
+  constructor(private readonly pair: ByteChannel, private readonly options: {
+    /** Temporary rollout rollback switch: original 230/115 ms batching. */
+    legacyBatching?: boolean;
+    /** Monotonic sample clock; tests supply a virtual timestamp. */
+    now?: () => number;
+  } = {}) {}
+
+  private now(): number { return this.options.now?.() ?? performance.now(); }
 
   /**
    * Spend more messages to stop stalling, or stop spending them.
@@ -113,11 +62,11 @@ export class RealtimeTransport implements Transport {
    * to hurry. Everything queued after this call uses the new one.
    */
   hurry(on: boolean): void {
-    this.flushMs = on ? FAST_MS : SLOW_MS;
+    this.flushMs = this.options.legacyBatching && !on ? SLOW_MS : FAST_MS;
   }
 
   /** What a queued packet is currently waiting, in ms. Read by the readout. */
-  get waitMs(): number { return this.flushMs; }
+  get waitMs(): number { return this.options.legacyBatching ? this.flushMs : FAST_MS; }
 
   /**
    * The same number, under the name the session asks for it by.
@@ -127,7 +76,7 @@ export class RealtimeTransport implements Transport {
    * and the page reasoned about stalls, while 230 ms of a 538 ms window was
    * being spent in a queue neither could see.
    */
-  get pacingMs(): number { return this.flushMs; }
+  get pacingMs(): number { return this.waitMs; }
 
   /**
    * The transport itself adds no paid-quota ping messages. NetSession estimates
@@ -148,8 +97,9 @@ export class RealtimeTransport implements Transport {
    */
   send(data: Uint8Array): void {
     if (this.closed) return;
+    const input = decode(data);
     // Commands and negotiation unblock the next action. They must not wait for input batching.
-    if (data[0] !== 1 || data.length < 18) {
+    if (!input || input.kind !== 1 || input.bits.length === 0) {
       this.flush();
       this.pair.sendBytes([encode(data)]);
       this.sent++;
@@ -157,6 +107,7 @@ export class RealtimeTransport implements Transport {
       this.stats.sentBytes += data.byteLength;
       return;
     }
+    if (!this.options.legacyBatching) { this.sendEdge(data, input); return; }
     // An input packet carries a window of history ending at `frame`, so two
     // packets queued for the SAME frame, slot and epoch say the same thing
     // twice and only the newer one is worth sending. That is the whole rule:
@@ -166,17 +117,17 @@ export class RealtimeTransport implements Transport {
     // and is deliberately not done here -- it is a change to what goes on the
     // wire, and the netcode matrix is what would have to say it is safe.
     const previous = this.lastInput;
-    const frame = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(2);
-    if (previous && data[1] === previous.slot && data[14] === previous.epoch && frame === previous.frame) {
+    const frame = input.frame;
+    if (previous && input.slot === previous.slot && input.epoch === previous.epoch && frame === previous.frame) {
       this.queue.pop();
       this.queuedAt.pop();
       this.stats.bufferedBytes -= this.queuedBytes.pop()!;
     }
     this.queue.push(encode(data));
-    this.queuedAt.push(performance.now());
+    this.queuedAt.push(this.now());
     this.queuedBytes.push(data.byteLength);
     this.stats.bufferedBytes += data.byteLength;
-    this.lastInput = { frame, slot: data[1], epoch: data[14] };
+    this.lastInput = { frame, slot: input.slot, epoch: input.epoch };
     if (this.queue.length >= 32) { this.flush(); return; }
 
     const since = Date.now() - this.lastSent;
@@ -189,15 +140,56 @@ export class RealtimeTransport implements Transport {
   }
   private lastInput: { frame: number; slot: number; epoch: number } | null = null;
 
+  private observed: InputPacket | null = null;
+
+  /** Per-frame logical inputs still come from NetSession. Only publication is
+   * coalesced: the newest packet carries the skipped frames in its history. */
+  private sendEdge(data: Uint8Array, input: InputPacket): void {
+    const previous = this.observed;
+    const boundary = !previous || input.slot !== previous.slot || input.epoch !== previous.epoch ||
+      input.frame < previous.frame;
+    const edge = boundary || input.bits[0] !== previous.bits[0];
+    // Never discard a packet outside the replacement's redundant history.
+    const covers = previous && !boundary && input.frame >= previous.frame &&
+      input.frame - previous.frame < input.bits.length;
+    if (covers) this.discardPending();
+    else this.flush();
+    this.observed = input;
+    this.queue.push(encode(data));
+    this.queuedAt.push(this.now());
+    this.queuedBytes.push(data.byteLength);
+    this.stats.bufferedBytes += data.byteLength;
+    const since = Date.now() - this.lastSent;
+    if (edge || since >= FAST_MS) { this.flush(); return; }
+    this.timer = setTimeout(() => { this.timer = null; this.flush(); }, FAST_MS - since);
+  }
+
+  /** Promotion stops pending emergency gameplay while retaining its receiver. */
+  discardPending(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    this.queue = []; this.queuedAt = []; this.queuedBytes = [];
+    this.stats.bufferedBytes = 0;
+    this.lastInput = null;
+  }
+
   private flush(): void {
+    // Keep the original timer semantics verbatim behind the rollback switch.
+    if (!this.options.legacyBatching) {
+      if (this.timer !== null) clearTimeout(this.timer);
+      this.timer = null;
+    }
     if (this.closed || this.queue.length === 0) return;
     const packets = this.queue;
-    const now = performance.now();
+    const now = this.now();
     for (let i = 0; i < this.queuedAt.length; i++) {
       const wait = Math.max(0, now - this.queuedAt[i]);
       this.stats.queueSamples++;
       this.stats.queueTotalMs += wait;
       this.stats.queueMaxMs = Math.max(this.stats.queueMaxMs, wait);
+      const samples = this.stats.queueRecentMs ??= [];
+      samples.push(wait);
+      if (samples.length > 512) samples.shift();
       this.stats.sentPackets++;
       this.stats.sentBytes += this.queuedBytes[i];
     }
