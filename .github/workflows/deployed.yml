@@ -2,13 +2,13 @@
 #
 # `fast` proves the code and `full` proves it in browsers, both against a
 # checkout. Neither says anything about the deployment -- the CDN, the headers
-# vercel.json asks for, TLS, a Content-Security-Policy that is only enforced on
+# the Cloudflare Workers static-asset config applies, TLS, a Content-Security-Policy that is only enforced on
 # a real origin. Three releases in a row shipped with none of the headers
 # applied and nothing noticed, which is what app/test/deployed.mjs was written
 # for; until now it was only ever run by hand, which is another way of saying
 # it was run when somebody remembered.
 #
-# The waiting is the interesting part. Vercel builds on its own schedule, so
+# The waiting is the interesting part. Workers Git integration builds on its own schedule, so
 # this polls /version.txt -- stamped with the commit at build time -- until the
 # deployment being asked about is the one that is live. Comparing anything
 # softer than a commit means passing against the PREVIOUS release when a build
@@ -38,7 +38,7 @@ permissions:
 
 jobs:
   live:
-    if: github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1'
+    if: github.ref == 'refs/heads/main' && (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -76,10 +76,10 @@ jobs:
       # used to run first and unconditionally, so a commit whose application
       # could not even be BUILT still changed the database -- leaving forward
       # schema in front of the previous release for as long as it took somebody
-      # to notice. Vercel builds the same commit from the same lockfile, so a
+      # to notice. Workers builds the same commit from the same lockfile, so a
       # build that fails here is a build that is going to fail there.
       #
-      # It does not make the two atomic. Nothing available here can: Vercel
+      # It does not make the two atomic. Nothing available here can: Workers
       # deploys on its own schedule and this job cannot hold it. What it removes
       # is the case where the migration is applied for a release that was never
       # going to exist. The expand-contract rule in supabase/README.md is what
@@ -90,7 +90,7 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
         run: npm run build && npm run check
 
-      # Then the schema. Vercel builds on push and this workflow starts on the
+      # Then the schema. Workers builds on push and this workflow starts on the
       # same push, so the two race: the new code can be answering on the live
       # origin before this job has applied the migration it wants. Going before
       # the wait shortens that window to nothing it can control -- and is why a

@@ -112,7 +112,7 @@ under the selected free plan and activation remain an operations check.
 
 ## Release compatibility
 
-`deployed` applies migrations before it waits for Vercel, so the release before
+`deployed` applies migrations before it waits for Cloudflare Workers, so the release before
 this one is briefly talking to this schema. The migration therefore **widens**
 `can_watch_pair_topic` and `can_feed_watch_topic` to accept both the new
 `watch:<match>:<feed>` and the previous release's derived `watch:<lo>:<hi>`,
@@ -151,8 +151,8 @@ the only source of them. Gate 2 below is unaffected.
 database, and it is what decides whether a score is real. `test:play` runs in
 `full`'s app job, which already has three browsers installed. `test:play-db`
 needs a Supabase-shaped local Postgres on port 55439 that nothing in this
-repository provisions, so it stays a manual check; `play-release.yml` remains
-the on-demand gate that also builds the worker image.
+repository provisions, so it stays a manual check; `play-release.yml` is the
+on-demand worker-image build gate. Run it alongside `fast` and `full` before a release.
 
 Keep the client unpromoted until these gates pass. The controller currently
 owns asynchronous attempt state; more screen lifecycle code can be extracted

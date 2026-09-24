@@ -1,4 +1,6 @@
-name: play-release-local-gates
+# Manual container build gate. Browser play and replay verification already run
+# in full and fast respectively; this keeps the unique worker-image check.
+name: worker-image
 on:
   workflow_dispatch:
 permissions:
@@ -8,25 +10,7 @@ jobs:
     if: github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      FBWG_PLACEHOLDER_ENV: "1"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm --prefix engine run build
-      - run: npx playwright install --with-deps chromium firefox webkit
-      - run: npm run test:play
-      - run: npm run test:verifier
-      - run: docker build -f worker/Dockerfile -t fbwg-verifier:ci .
-      # test:play and test:verifier also run automatically -- in `full` and
-      # `fast` respectively. They are repeated here because this workflow is the
-      # one-command promotion gate, and the worker image below is the part that
-      # runs nowhere else.
-      #
-      # These isolated gates deliberately have no deployment credentials.
-      # Live database, successful replay publication and the 1h capacity run
-      # are additional promotion gates described in docs/production-play-release.md.
+      - name: build the verifier container
+        run: docker build -f worker/Dockerfile -t fbwg-verifier:ci .

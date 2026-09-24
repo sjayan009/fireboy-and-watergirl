@@ -1,0 +1,98 @@
+name: network-remote
+
+on:
+  workflow_dispatch:
+    inputs:
+      preview_url:
+        description: Exact successful Vercel Preview URL for this commit
+        required: true
+        type: string
+      expected_sha:
+        description: Full commit SHA served by /version.txt
+        required: true
+        type: string
+      repetitions:
+        description: One or two fresh games; each repeats close, silent, close
+        required: true
+        default: "1"
+        type: choice
+        options: ["1", "2"]
+
+permissions:
+  contents: read
+  deployments: read
+
+concurrency:
+  group: fbwg-network-remote
+  cancel-in-progress: false
+
+jobs:
+  distributed:
+    if: vars.FBWG_ZERO_DOLLAR_ACTIONS == '1' && (github.ref == 'refs/heads/net/realtime-hardening' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: prove this commit has a successful Preview deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_URL: ${{ inputs.preview_url }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          ids=$(gh api "repos/$GITHUB_REPOSITORY/deployments?sha=$EXPECTED_SHA&environment=Preview&per_page=30" --jq '.[].id')
+          test -n "$ids"
+          found=0
+          branch_alias='https://fireboy-and-watergirl-official-git-net-realti-34a877-local-lead.vercel.app'
+          for id in $ids; do
+            urls=$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=30" --jq '.[] | select(.state == "success") | .environment_url')
+            while IFS= read -r url; do
+              if [ -n "$url" ] && { [ "$url" = "$PREVIEW_URL" ] || [ "$PREVIEW_URL" = "$branch_alias" ]; }; then
+                found=1
+              fi
+            done <<< "$urls"
+          done
+          test "$found" = 1
+      - run: npm ci
+      - run: npm --prefix engine run build
+      - run: npx playwright install --with-deps chromium
+      - name: create private test environment
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            printf 'SUPABASE_URL=%s\n' "$SUPABASE_URL"
+            printf 'SUPABASE_PUBLISHABLE_KEY=%s\n' "$SUPABASE_PUBLISHABLE_KEY"
+            printf 'SUPABASE_SECRET_KEY=%s\n' "$SUPABASE_SECRET_KEY"
+            printf 'SUPABASE_PROJECT_REF=%s\n' "$SUPABASE_PROJECT_REF"
+          } > .env.local
+      - name: GitHub Chromium ↔ Browserbase Chromium real-network acceptance
+        env:
+          FBWG_PREVIEW_URL: ${{ inputs.preview_url }}
+          FBWG_EXPECTED_SHA: ${{ inputs.expected_sha }}
+          FBWG_REPETITIONS: ${{ inputs.repetitions }}
+          FBWG_VERCEL_SHARE_URL: ${{ secrets.FBWG_VERCEL_SHARE_URL }}
+          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+          BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
+        run: node app/test/remote-network.mjs
+      - name: remove test environment
+        if: always()
+        run: rm -f .env.local
+      - name: upload sanitized acceptance summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: remote-network-summary
+          path: artifacts/remote-network-summary.json
+          if-no-files-found: ignore
+          retention-days: 3

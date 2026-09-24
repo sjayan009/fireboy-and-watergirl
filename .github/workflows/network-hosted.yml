@@ -1,0 +1,46 @@
+name: network-hosted
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fbwg-network-hosted
+  cancel-in-progress: false
+
+jobs:
+  hosted:
+    if: vars.FBWG_ZERO_DOLLAR_ACTIONS == '1' && (github.ref == 'refs/heads/net/realtime-hardening' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm --prefix engine run build
+      - run: npx playwright install --with-deps chromium
+      - name: create private test environment
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            printf 'SUPABASE_URL=%s\n' "$SUPABASE_URL"
+            printf 'SUPABASE_PUBLISHABLE_KEY=%s\n' "$SUPABASE_PUBLISHABLE_KEY"
+            printf 'SUPABASE_SECRET_KEY=%s\n' "$SUPABASE_SECRET_KEY"
+            printf 'SUPABASE_PROJECT_REF=%s\n' "$SUPABASE_PROJECT_REF"
+          } > .env.local
+      - name: live TURN and eight same-account hosted migration games
+        run: npm run test:network-hosted
+      - name: remove test environment
+        if: always()
+        run: rm -f .env.local

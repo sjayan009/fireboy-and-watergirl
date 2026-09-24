@@ -1,11 +1,11 @@
 # One query a day, so the project does not go to sleep.
 #
-# A free Supabase project pauses after about a week with no activity, and a
+# Supabase currently pauses free projects after about a week of low activity, and a
 # paused project is a game that has quietly stopped working for everybody. This
 # is the cheapest possible insurance: one row read, once a day.
 #
-# It lives in Actions rather than as a Vercel cron so the deployment can stay
-# purely static -- no serverless function in the request path, which is the
+# It lives in Actions rather than as a Workers cron so the deployment can stay
+# static assets only -- no Worker function in the request path, which is the
 # whole reason page loads are one edge round trip.
 #
 # ## With the key a browser already has
