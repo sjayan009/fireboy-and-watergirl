@@ -209,16 +209,35 @@ export function playScreen(host: HTMLElement): () => void {
     return null;
   };
   const previewWindow = window as Window & { fbwgNetworkTest?: {
-    snapshot(): unknown; closeRtc(): boolean; blackholeRtc(): boolean } };
+    snapshot(): unknown; closeRtc(): boolean; blackholeRtc(): boolean;
+    ice(): Promise<unknown>; digestAt(frame: number): string | null;
+    rememberRtc(): boolean; retiredRtcIgnored(): boolean } };
   if (__PATH_MANAGER__ && __NETWORK_TEST_HOOKS__) {
     let initialSession: unknown = null;
     let initialLevel: unknown = null;
+    let initialView: unknown = null;
+    const retiredAttempts: unknown[] = [];
+    let observedManager: unknown = null;
+    let relayInputs = 0;
     previewWindow.fbwgNetworkTest = {
       snapshot: () => {
         const manager = previewManager();
+        if (manager && manager !== observedManager) {
+          const observed = manager as PreviewManager & {
+            deliver?: (bytes: Uint8Array, source: string) => void };
+          if (observed.deliver) {
+            const original = observed.deliver.bind(observed);
+            observed.deliver = (bytes, source) => {
+              if (source === "relay" && bytes[0] === 1) relayInputs++;
+              original(bytes, source);
+            };
+            observedManager = manager;
+          }
+        }
         const session = view.session;
         if (initialSession === null && session?.running) initialSession = session;
         if (initialLevel === null && view.level) initialLevel = view.level;
+        if (initialView === null && session?.running) initialView = view;
         const internals = session as unknown as {
           confirmed?: number; lastRemoteFrame?: number; nextLocal?: number } | null;
         return { at: Date.now(), path: link?.activePath ?? null,
@@ -228,6 +247,7 @@ export function playScreen(host: HTMLElement): () => void {
           generation: session?.generation ?? null, runSerial: session?.runSerial ?? null,
           sameSession: initialSession === null ? null : session === initialSession,
           sameLevel: initialLevel === null ? null : view.level === initialLevel,
+          sameView: initialView === null ? null : view === initialView,
           running: session?.running ?? null, desyncs: session?.desyncs ?? null,
           stalls: session?.stalls ?? null, rollbacks: session?.rollbacks ?? null,
           deepestRollback: session?.deepestRollback ?? null,
@@ -235,21 +255,70 @@ export function playScreen(host: HTMLElement): () => void {
           nextLocal: internals?.nextLocal ?? null,
           relaySent: manager?.attempts === undefined ? null :
             (manager as PreviewManager & { relay?: { sent?: number } }).relay?.sent ?? null,
+          relayInputs,
           relayReceived: (manager as PreviewManager & {
             relay?: { stats?: { receivedPackets?: number } } } | null)?.relay?.stats?.receivedPackets ?? null,
           qoe: qoe.summary() };
+      },
+      digestAt: (frame: number) => {
+        const session = view.session as unknown as {
+          confirmed?: number; hashes?: Map<number, string> } | null;
+        if (!Number.isSafeInteger(frame) || frame < 0 ||
+            frame > (session?.confirmed ?? -1)) return null;
+        return session?.hashes?.get(frame) ?? null;
+      },
+      ice: async () => {
+        const manager = previewManager();
+        const pc = manager?.attempt?.transport?.pc as RTCPeerConnection | undefined;
+        if (!pc) return null;
+        const stats = await pc.getStats();
+        const values = [...stats.values()] as unknown as Array<Record<string, unknown>>;
+        const transport = values.find(s => s.type === "transport" && s.selectedCandidatePairId);
+        const pair = values.find(s => s.id === transport?.selectedCandidatePairId) ??
+          values.find(s => s.type === "candidate-pair" && s.nominated === true && s.state === "succeeded");
+        const local = values.find(s => s.id === pair?.localCandidateId);
+        const remote = values.find(s => s.id === pair?.remoteCandidateId);
+        return pair ? { candidateType: local?.candidateType ?? null,
+          protocol: local?.protocol ?? null,
+          localCandidateType: local?.candidateType ?? null,
+          remoteCandidateType: remote?.candidateType ?? null,
+          currentRoundTripTime: pair.currentRoundTripTime ?? null } : null;
+      },
+      rememberRtc: () => {
+        const manager = previewManager();
+        if (manager?.state !== "RTC_ACTIVE" || !manager.attempt) return false;
+        retiredAttempts.push(manager.attempt);
+        return true;
       },
       closeRtc: () => {
         const manager = previewManager();
         const pc = manager?.state === "RTC_ACTIVE" ? manager.attempt?.transport?.pc : null;
         if (!pc) return false;
+        retiredAttempts.push(manager?.attempt);
         pc.close(); return true;
       },
       blackholeRtc: () => {
         const manager = previewManager();
         const transport = manager?.state === "RTC_ACTIVE" ? manager.attempt?.transport : null;
         if (!transport) return false;
+        retiredAttempts.push(manager?.attempt);
         transport.send = () => {}; return true;
+      },
+      retiredRtcIgnored: () => {
+        const manager = previewManager() as PreviewManager & {
+          attempt?: unknown; receiver?: (data: Uint8Array) => void;
+          onRTC?: (attempt: unknown, data: Uint8Array) => void;
+          lastInput?: Uint8Array } | null;
+        if (!manager?.receiver || !manager.onRTC || !retiredAttempts.length ||
+            retiredAttempts.some(attempt => attempt === manager.attempt)) return false;
+        const receiver = manager.receiver;
+        let delivered = 0;
+        manager.receiver = data => { delivered++; receiver(data); };
+        try {
+          for (const attempt of retiredAttempts)
+            manager.onRTC(attempt, manager.lastInput ?? new Uint8Array([1]));
+        } finally { manager.receiver = receiver; }
+        return delivered === 0;
       },
     };
   }

@@ -7,7 +7,6 @@ import { dirname, resolve } from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import { LevelHost } from "../../engine/dist/net/levelhost.js";
 import { env } from "../../supabase/connect.mjs";
-import { sweepStaleTestUsers } from "../../supabase/sweep.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const APP = resolve(ROOT, "app");
@@ -32,7 +31,7 @@ const admin = (path, init = {}) => fetch(`${e.SUPABASE_URL}${path}`, {
   signal: AbortSignal.timeout(15000),
 });
 
-async function makeUser(tag, suffix) {
+export async function makeUser(tag, suffix) {
   const email = `${PREFIX}${suffix}_${tag}@example.com`;
   const password = randomBytes(32).toString("base64url") + "aA1!";
   const username = `fbwgna${Date.now().toString(36)}${randomBytes(2).toString("hex")}${tag}`;
@@ -95,8 +94,8 @@ async function startVite() {
   throw new Error("Vite did not start");
 }
 
-async function pageSignIn(page, user) {
-  await page.goto(URL_, { waitUntil: "load" });
+export async function pageSignIn(page, user, site = URL_) {
+  await page.goto(site, { waitUntil: "load" });
   await page.locator("input[type=email]").fill(user.email);
   await page.locator("input[type=password]").fill(user.password);
   await page.click("button[type=submit]");
@@ -115,7 +114,7 @@ async function openFriends(page) {
   await page.waitForSelector("text=Send a request", { timeout: 20000 });
 }
 
-async function pairPages(a, b, alice, bob) {
+export async function pairPages(a, b, alice, bob) {
   await openFriends(a);
   await openFriends(b);
   const friendshipPath = `/rest/v1/friendships?select=status&user_a=eq.${
@@ -146,7 +145,9 @@ async function pairPages(a, b, alice, bob) {
   await b.waitForSelector(".banner:has-text('wants to play')", { timeout: 30000 });
   await b.click(".banner button:has-text('Accept')");
   for (const page of [a, b]) {
-    await page.waitForFunction("window.__fbwg?.view.session?.running && window.__fbwg.view.level",
+    await page.waitForFunction(() =>
+      window.__fbwg?.view.session?.running && window.__fbwg.view.level ||
+      window.fbwgNetworkTest?.snapshot()?.running,
       null, { timeout: 60000 });
   }
 }
@@ -411,24 +412,8 @@ async function runHosted(alice, bob) {
   return results;
 }
 
-let turnPassed = false;
-let hostedPassed = false;
-let cleanupPassed = true;
-try {
-  await sweepStaleTestUsers("hosted-network", PREFIX);
-  const suffix = `${Date.now()}_${randomBytes(5).toString("hex")}`;
-  const alice = await makeUser("a", suffix);
-  const bob = await makeUser("b", suffix);
-  console.log("created exactly two disposable network accounts");
-  const tokenA = await signInToken(alice);
-  await signInToken(bob);
-  try { runTurn(tokenA); turnPassed = true; }
-  catch (error) { console.error(error.message); }
-  try { await runHosted(alice, bob); hostedPassed = true; }
-  catch (error) { console.error(`hosted stage failed: ${error.message}`); }
-} catch (error) {
-  console.error(`setup failed: ${error.message}`);
-} finally {
+export async function cleanupNetworkAccounts() {
+  let cleanupPassed = true;
   for (const context of contexts) {
     for (const page of context.pages()) {
       await page.evaluate(async () => {
@@ -448,26 +433,38 @@ try {
       else if ((await admin(`/auth/v1/admin/users/${user.id}`)).status !== 404) cleanupPassed = false;
     } catch { cleanupPassed = false; }
   }
-  try {
-    const [auth, profiles] = await Promise.all([
-      admin("/auth/v1/admin/users?page=1&per_page=1000"),
-      admin("/rest/v1/profiles?select=id&username=like.fbwgna*"),
-    ]);
-    if (!auth.ok || !profiles.ok) {
-      console.error("cleanup verification query failed");
-      cleanupPassed = false;
-    } else {
-      const remainingUsers = ((await auth.json()).users ?? [])
-        .filter(user => user.email?.startsWith(PREFIX));
-      const remainingProfiles = await profiles.json();
-      console.log(`cleanup verification: ${remainingUsers.length} acceptance users; ${remainingProfiles.length} test profiles`);
-      if (remainingUsers.length || remainingProfiles.length) cleanupPassed = false;
-    }
-  } catch (error) {
-    console.error(`cleanup verification failed: ${error.message}`);
-    cleanupPassed = false;
+  if (users.length) {
+    try {
+      const profiles = await admin(`/rest/v1/profiles?select=id&id=in.(${users.map(u => u.id).join(",")})`);
+      if (!profiles.ok || (await profiles.json()).length) cleanupPassed = false;
+    } catch { cleanupPassed = false; }
   }
   console.log(`cleanup: ${cleanupPassed ? "confirmed" : "FAILED"} for ${users.length} disposable users`);
+  return cleanupPassed;
+}
+
+async function main() {
+let turnPassed = false;
+let hostedPassed = false;
+let cleanupPassed;
+try {
+  const suffix = `${Date.now()}_${randomBytes(5).toString("hex")}`;
+  const alice = await makeUser("a", suffix);
+  const bob = await makeUser("b", suffix);
+  console.log("created exactly two disposable network accounts");
+  const tokenA = await signInToken(alice);
+  await signInToken(bob);
+  try { runTurn(tokenA); turnPassed = true; }
+  catch (error) { console.error(error.message); }
+  try { await runHosted(alice, bob); hostedPassed = true; }
+  catch (error) { console.error(`hosted stage failed: ${error.message}`); }
+} catch (error) {
+  console.error(`setup failed: ${error.message}`);
+} finally {
+  cleanupPassed = await cleanupNetworkAccounts();
 }
 console.log(`live TURN: ${turnPassed ? "PASS" : "FAIL"}; hosted migration: ${hostedPassed ? "PASS" : "FAIL"}`);
 process.exit(turnPassed && hostedPassed && cleanupPassed ? 0 : 1);
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

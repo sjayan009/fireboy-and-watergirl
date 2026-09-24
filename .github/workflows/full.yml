@@ -1,9 +1,9 @@
-# Everything, nightly and on demand.
+# Expensive local, browser, and database coverage, twice weekly and on demand.
 #
 # The slow half: all 32 levels rendered and compared, the determinism soak, the
 # full netcode matrix, three browser engines, the database under load, and the
-# two-account end-to-end tests. Half an hour rather than five minutes, which is
-# why it is not on every push.
+# two-account end-to-end tests. Each run uses about 40 aggregate runner minutes;
+# daily scheduling consumed too much of a private repository's included quota.
 #
 # This one holds credentials. They are repo secrets, masked in logs, and
 # unavailable to pull requests from forks -- and the key stored here should be
@@ -24,7 +24,7 @@ name: full
 
 on:
   schedule:
-    - cron: "20 4 * * *"
+    - cron: "23 4 * * 2,5"
   workflow_dispatch:
 
 permissions:
@@ -34,7 +34,7 @@ jobs:
   # The migration runs once, before anything that reads the schema, and holds
   # the shared concurrency group while it does. `deployed` is in the same group.
   schema:
-    if: github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1'
+    if: (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/net/realtime-hardening')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -66,7 +66,7 @@ jobs:
         run: rm -f .env.local
 
   engine:
-    if: github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1'
+    if: (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/net/realtime-hardening')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -82,7 +82,7 @@ jobs:
         run: npm --prefix engine run test:full
 
   database:
-    if: github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1'
+    if: (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/net/realtime-hardening')
     runs-on: ubuntu-latest
     needs: schema
     timeout-minutes: 20
@@ -115,7 +115,7 @@ jobs:
         run: rm -f .env.local
 
   application:
-    if: github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1'
+    if: (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/net/realtime-hardening')
     runs-on: ubuntu-latest
     needs: schema
     timeout-minutes: 40
@@ -142,13 +142,31 @@ jobs:
       - name: build it as it ships
         run: npm run build && npm run check
       - name: and drive it in three browsers, with two accounts
-        run: npm run app:test
+        run: |
+          set -o pipefail
+          npm run app:test 2>&1 | tee app-test.log
       # Credentials are deliberately still in scope but unused: these drive a
       # local fixture page against a vite dev server, so they prove the shell,
       # the panels, the focus handling and the IndexedDB progress writes without
       # touching an account. Kept in this job for the browsers it has already
       # installed rather than paying for three more downloads in one of its own.
       - name: the play shell, at four laptop sizes and across two tabs
-        run: npm run test:play
-      - if: always()
+        run: |
+          set -o pipefail
+          npm run test:play 2>&1 | tee play-test.log
+      - name: remove private test environment
+        if: always()
         run: rm -f .env.local
+      - name: summarize browser assertions without credentials
+        if: always()
+        run: node app/test/ci-summary.mjs app-test.log play-test.log
+      - name: preserve sanitized failure summary
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: full-browser-failure-summary
+          path: artifacts/full-browser-summary.json
+          if-no-files-found: ignore
+          retention-days: 3
+      - if: always()
+        run: rm -f app-test.log play-test.log

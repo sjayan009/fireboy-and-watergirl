@@ -779,6 +779,13 @@ export class PairChannel {
   private occupancy(all: Presence[]): void {
     const was = this.occupied;
     this.occupied = all.some((p) => p.userId !== this.me.userId);
+    // A trailing announcement queued while a friend was present has no
+    // listener once they leave. Keep the activity, but cancel that send;
+    // their next arrival will announce the latest value.
+    if (!this.occupied && this.presenceTimer !== null) {
+      clearTimeout(this.presenceTimer);
+      this.presenceTimer = null;
+    }
     if (this.occupied && !was && this.announced !== this.activity) this.announce();
   }
 
