@@ -13,7 +13,7 @@
  * channel is also the fallback transport if this never connects, so a session
  * needs exactly one rendezvous and no dedicated signalling server.
  */
-import { Transport, transportStats } from "./transport.js";
+import { Transport, transportStats, RtcDiagnostics } from "./transport.js";
 
 /** Marks a signalling message on the shared channel, so it is never mistaken
  *  for a game packet. protocol.ts only ever emits 1 and 2. */
@@ -107,8 +107,36 @@ export function decodeSignal(d: Uint8Array): Signal | null {
   return null;
 }
 
+/** Prefer the transport's selected pair, never an arbitrary succeeded probe. */
+export function selectedIceDiagnostics(report: RTCStatsReport): RtcDiagnostics {
+  const rows = new Map<string, Record<string, unknown>>();
+  report.forEach((r) => rows.set(r.id, r as Record<string, unknown>));
+  const all = [...rows.values()];
+  const selected = all.find((r) => r.type === "transport" && typeof r.selectedCandidatePairId === "string");
+  const pair = selected ? rows.get(selected.selectedCandidatePairId as string) :
+    all.find((r) => r.type === "candidate-pair" && r.state === "succeeded" && r.selected === true) ??
+    all.find((r) => r.type === "candidate-pair" && r.state === "succeeded" && r.nominated === true);
+  if (!pair || pair.type !== "candidate-pair") return {};
+  const local = rows.get(pair.localCandidateId as string);
+  const remote = rows.get(pair.remoteCandidateId as string);
+  const type = local?.candidateType === "relay" || remote?.candidateType === "relay"
+    ? "relay" : local?.candidateType;
+  const out: RtcDiagnostics = {};
+  if (type === "host" || type === "srflx" || type === "prflx" || type === "relay") out.candidateType = type;
+  if (local?.protocol === "udp" || local?.protocol === "tcp") out.protocol = local.protocol;
+  if (local?.relayProtocol === "udp" || local?.relayProtocol === "tcp" || local?.relayProtocol === "tls") out.relayProtocol = local.relayProtocol;
+  if (typeof pair.currentRoundTripTime === "number" && Number.isFinite(pair.currentRoundTripTime) && pair.currentRoundTripTime >= 0) {
+    out.currentRoundTripTime = pair.currentRoundTripTime;
+  }
+  return out;
+}
+
 class DataChannelTransport implements Transport {
+  readonly kind = "webrtc" as const;
+  readonly activePath = "rtc" as const;
   readonly stats = transportStats();
+  private _rtc: RtcDiagnostics = {};
+  get rtc(): RtcDiagnostics { return this._rtc; }
   get sent(): number { return this.stats.sentPackets; }
   private handler: ((d: Uint8Array) => void) | null = null;
   private _rtt: number | null = null;
@@ -130,6 +158,7 @@ class DataChannelTransport implements Transport {
     // WebRTC reports round trip time in its stats; the session uses it to size
     // the input delay rather than guessing.
     this.rttTimer = setInterval(() => void this.sampleRtt(), 2000);
+    void this.sampleRtt();
 
     // The same signal `connectWebRTC` watches during the handshake, kept live
     // afterwards -- where it used to be set and then never consulted again,
@@ -161,12 +190,9 @@ class DataChannelTransport implements Transport {
   private async sampleRtt(): Promise<void> {
     try {
       const stats = await this.pc.getStats();
-      stats.forEach((r: any) => {
-        if (r.type === "candidate-pair" && r.state === "succeeded" &&
-            typeof r.currentRoundTripTime === "number") {
-          this._rtt = r.currentRoundTripTime * 1000;
-        }
-      });
+      if (this.gone) return;
+      this._rtc = selectedIceDiagnostics(stats);
+      this._rtt = this._rtc.currentRoundTripTime === undefined ? null : this._rtc.currentRoundTripTime * 1000;
     } catch { /* stats are a nicety, never a requirement */ }
   }
 
@@ -220,6 +246,8 @@ export function connectWebRTC(
   sig: Transport, caller: boolean,
   opts: {
     timeoutMs?: number; iceServers?: RTCIceServer[]; signal?: AbortSignal;
+    /** Test/dev opt-in. Omitted in production so ICE can prefer a direct path. */
+    iceTransportPolicy?: RTCIceTransportPolicy;
   } = {},
 ): Promise<Transport> {
   const timeoutMs = opts.timeoutMs ?? 8000;
@@ -231,6 +259,7 @@ export function connectWebRTC(
     }
     const pc = new RTCPeerConnection({
       iceServers: opts.iceServers ?? DEFAULT_ICE,
+      iceTransportPolicy: opts.iceTransportPolicy ?? "all",
     });
     let settled = false;
     const finish = (fn: () => void) => {
