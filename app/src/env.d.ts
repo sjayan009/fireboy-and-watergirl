@@ -11,6 +11,12 @@ declare const __SUPABASE_KEY__: string;
  */
 declare const __ICE_SERVERS__: string;
 
+/** Public rollout switches; TURN credentials are fetched only at runtime. */
+declare const __PATH_MANAGER__: boolean;
+declare const __LEGACY_RELAY_BATCHING__: boolean;
+declare const __ROLLBACK_SMOOTHING__: boolean;
+declare const __DESCENDANT_INTERPOLATION__: boolean;
+
 /**
  * Where the extracted art and audio are fetched from.
  *

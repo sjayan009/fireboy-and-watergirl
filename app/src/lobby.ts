@@ -42,6 +42,9 @@ import {
   Showing,
 } from "./net/pairchannel.js";
 import { RealtimeTransport } from "./net/realtime.js";
+import { runtimeIceServers } from "./net/turn.js";
+import { createPathManager } from "./net/pathmanager.js";
+import { networkFlags } from "./net/flags.js";
 import { boundedTransport, scopedChannel } from "./net/scope.js";
 import { auth, onAuth, onBeforeSignOut } from "./auth.js";
 import { Friend, listFriends } from "./friends.js";
@@ -69,19 +72,8 @@ export interface Ready {
   invite: Invite;
 }
 
-/**
- * Where to ask what our own address looks like from outside.
- *
- * Two public STUN servers by default, which is all a pair needs to find each
- * other unless one of them is behind a NAT that refuses to be discovered -- and
- * those pairs relay over their own Realtime channel instead, which is why there
- * is no TURN server here and no bill for one.
- *
- * It is a build-time value rather than a literal so that adding TURN later is a
- * setting and not a release: a relayed pair pays a hop of latency and, if cam
- * and mic ever happen, cannot have them at all.
- */
-const STUN: RTCIceServer[] = iceServers();
+/** Public STUN fallback. Short-lived TURN credentials are loaded at runtime. */
+const FALLBACK_ICE: RTCIceServer[] = iceServers();
 
 function iceServers(): RTCIceServer[] {
   const configured = __ICE_SERVERS__;
@@ -92,8 +84,8 @@ function iceServers(): RTCIceServer[] {
     ];
   }
   try {
-    // A JSON array of RTCIceServer, exactly as WebRTC wants it, so a TURN
-    // server with credentials needs no shape of our own inventing.
+    // Validated STUN-only JSON from the build configuration. Runtime TURN
+    // credentials never use this static value.
     return JSON.parse(configured) as RTCIceServer[];
   } catch (e) {
     console.warn("ICE_SERVERS is not valid JSON; using the defaults:", e);
@@ -151,7 +143,7 @@ export class Lobby {
    */
   private outbound = new Map<string, {
     friendId: string; attempt?: string;
-    accepted: () => void;
+    accepted: (managed: boolean) => void;
     ready: () => void;
     failed: (e: Error) => void;
   }>();
@@ -329,7 +321,7 @@ export class Lobby {
       const waiting = this.outbound.get(reply.session);
       if (!waiting || waiting.friendId !== friendId || waiting.attempt !== reply.attempt) return;
       if (!reply.accepted) { waiting.failed(new Error("they said not now")); return; }
-      waiting.accepted();
+      waiting.accepted(reply.pathManager === true);
       if (reply.ready) waiting.ready();
     });
     channel.onStatus(status => {
@@ -557,14 +549,15 @@ export class Lobby {
 
     const { session, fireboy } = invite;
     invite.attempt ??= crypto.randomUUID();
+    invite.pathManager = networkFlags.pathManager || undefined;
     const attempt = new AbortController();
     const abortLink = () => attempt.abort();
     o.signal?.addEventListener("abort", abortLink, { once: true });
 
-    let onAccepted!: () => void;
+    let onAccepted!: (managed: boolean) => void;
     let onReady!: () => void;
     let fail!: (e: Error) => void;
-    const accepted = new Promise<void>((r) => { onAccepted = r; });
+    const accepted = new Promise<boolean>((r) => { onAccepted = r; });
     const ready = new Promise<void>((r) => { onReady = r; });
     // One rejection for every way this can end badly -- a decline, a cancel,
     // and nobody answering at all. Raced against each step, so "not now" is
@@ -597,13 +590,15 @@ export class Lobby {
       o.onProgress?.(resuming ? "reconnecting…" : "waiting for them to accept…");
       if (resuming) channel.resume(invite);
       else channel.invite(invite);
-      await Promise.race([accepted, refused]);
+      const peerManaged = await Promise.race([accepted, refused]);
+      const managed = networkFlags.pathManager && peerManaged;
+      invite.pathManager = managed || undefined;
 
       // Offering before this point would put the offer on a channel the other
       // side is not yet listening to, and lose it.
       o.onProgress?.("connecting…");
       const link = await Promise.race([
-        this.link(channel, true, invite.attempt ?? invite.session, attempt.signal, invite.relay).then(link => {
+        this.link(channel, true, invite.attempt ?? invite.session, attempt.signal, invite.relay, managed).then(link => {
           if (attempt.signal.aborted) { link.transport.close(); throw new Error("cancelled"); }
           return link;
         }), refused,
@@ -683,11 +678,17 @@ export class Lobby {
     try {
       // Said FIRST, and listening started before the answer can arrive: the
       // inviter only offers once it has heard this.
-      channel.reply({ session: invite.session, attempt: invite.attempt, accepted: true });
+      // Prefetch before acceptance, so a slow broker cannot leave the receiver
+      // waiting for credentials while the caller sends its one-shot SDP.
+      await Promise.race([runtimeIceServers(FALLBACK_ICE), refused]);
+      if (attempt.signal.aborted) throw new Error("cancelled");
+      const managed = networkFlags.pathManager && invite.pathManager === true;
+      invite.pathManager = managed || undefined;
+      channel.reply({ session: invite.session, attempt: invite.attempt, accepted: true, pathManager: managed || undefined });
 
       o.onProgress?.("connecting…");
       const link = await Promise.race([
-        this.link(channel, false, invite.attempt ?? invite.session, attempt.signal, invite.relay).then(link => {
+        this.link(channel, false, invite.attempt ?? invite.session, attempt.signal, invite.relay, managed).then(link => {
           if (attempt.signal.aborted) { link.transport.close(); throw new Error("cancelled"); }
           return link;
         }), refused,
@@ -701,7 +702,7 @@ export class Lobby {
       // And only now the second half. The session is built from what this
       // returns, so telling them we are ready before it exists would invite a
       // Start we have nothing to hear it with.
-      channel.reply({ session: invite.session, attempt: invite.attempt, accepted: true, ready: true });
+      channel.reply({ session: invite.session, attempt: invite.attempt, accepted: true, ready: true, pathManager: managed || undefined });
 
       return {
         ...link,
@@ -716,16 +717,27 @@ export class Lobby {
     }
   }
 
-  /**
-   * A direct peer connection if one can be had, and the pair's own channel if
-   * not. The fallback is why this needs no TURN server -- and also why a pair
-   * on it gets the game but not video.
-   */
+  /** Load runtime ICE, then select the mutually agreed connection owner. */
   private async link(channel: PairChannel, caller: boolean,
-                     identity: string, signal?: AbortSignal, relayOnly?: boolean) {
-    const rendezvous = new RealtimeTransport(scopedChannel(channel,identity));
+                     identity: string, signal?: AbortSignal, relayOnly?: boolean, managed = false) {
+    const iceServers = await runtimeIceServers(FALLBACK_ICE);
+    if (signal?.aborted) throw new Error("cancelled");
+    const scoped = scopedChannel(channel, identity);
+    // This query is compile-time excluded from production behavior.
+    const iceTransportPolicy = import.meta.env.DEV && new URLSearchParams(location.search).get("forceTurn") === "1"
+      ? "relay" as const : undefined;
+    if (managed) {
+      const manager = createPathManager(scoped, caller, {
+        iceServers, iceTransportPolicy, legacyBatching: networkFlags.legacyBatching,
+        refreshIceServers: () => runtimeIceServers(FALLBACK_ICE),
+      });
+      // The attempt AbortSignal is released when setup completes. The stable
+      // manager owns its own lifetime after this point.
+      return { transport: boundedTransport(manager), kind: manager.kind };
+    }
+    const rendezvous = new RealtimeTransport(scoped, { legacyBatching: networkFlags.legacyBatching });
     const link = await connect(rendezvous, caller,
-                               { iceServers: STUN, signal, relayOnly });
+                               { iceServers, iceTransportPolicy, signal, relayOnly });
     if (link.reason) console.info("using the relay path:", link.reason);
     return { transport: boundedTransport(link.transport), kind: link.kind };
   }
