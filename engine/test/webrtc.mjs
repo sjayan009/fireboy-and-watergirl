@@ -14,11 +14,22 @@
  */
 import { loadPlaywright, startServer } from "./harness.mjs";
 
+// Only the live test launcher supplies these short-lived runtime credentials.
+// They never enter source files, Vite configuration, public assets or logs.
+const forcedTurn = process.env.FBWG_TEST_TURN_CREDENTIALS
+  ? JSON.parse(process.env.FBWG_TEST_TURN_CREDENTIALS) : null;
+if (forcedTurn && (!Array.isArray(forcedTurn.iceServers) || forcedTurn.expiresAt < Date.now() + 60_000)) {
+  throw new Error("The forced-TURN test needs fresh short-lived credentials");
+}
+
 const PORT = 5195;
 const URL_ = `http://localhost:${PORT}/`;
 
 const playwright = await loadPlaywright();
-if (!playwright) process.exit(0);
+if (!playwright) {
+  console.error("WEBRTC FAILED: Playwright is required for browser acceptance");
+  process.exit(1);
+}
 
 const server = await startServer(PORT);
 
@@ -34,9 +45,9 @@ let browser;
 try {
   browser = await playwright.chromium.launch();
 } catch {
-  console.log("chromium not installed -- skipping");
+  console.error("WEBRTC FAILED: Chromium could not start; browser acceptance did not run");
   server.kill();
-  process.exit(0);
+  process.exit(1);
 }
 
 try {
@@ -44,6 +55,16 @@ try {
   const a = await ctx.newPage();
   const b = await ctx.newPage();
   for (const p of [a, b]) {
+    await p.addInitScript((runtime) => {
+      const Original = window.RTCPeerConnection;
+      window.__testPeerConnections = [];
+      window.RTCPeerConnection = class extends Original {
+        constructor(config) {
+          super(runtime ? { ...config, iceServers: runtime.iceServers, iceTransportPolicy: "relay" } : config);
+          window.__testPeerConnections.push(this);
+        }
+      };
+    }, forcedTurn);
     p.on("pageerror", (e) => {
       failures++;
       console.log("  FAIL page error: " + e.message);
@@ -142,6 +163,14 @@ try {
       () => res(window.__debug.session ? "sampled" : "no session"), 2500));
   });
   check("stats sampling ran without throwing", rtt, "sampled");
+  const ice = await Promise.all([a, b].map((p) => p.evaluate(async () => {
+    const { selectedIceDiagnostics } = await import("/dist/net/webrtc.js");
+    const pc = window.__testPeerConnections.find((connection) => connection.connectionState === "connected");
+    return pc ? selectedIceDiagnostics(await pc.getStats()) : {};
+  })));
+  console.log("  selected ICE diagnostics: " + JSON.stringify(ice));
+  check("both selected candidate types are visible", ice.every((r) => !!r.candidateType), true);
+  if (forcedTurn) check("both peers completed gameplay through TURN", ice.map((r) => r.candidateType), ["relay", "relay"]);
   // ---- the fallback path ------------------------------------------------
   console.log("\nwith no peer connection available, the pair still plays");
   {
