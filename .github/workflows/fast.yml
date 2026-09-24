@@ -58,6 +58,9 @@ jobs:
       - name: free hosting constraints, server boundaries, and documentation
         run: npm run test:free && npm run test:servers && npm run test:docs
 
+      - name: runtime TURN security, relay edges, and stable path migration
+        run: npm run test:network-unit
+
       # Here rather than in `full`, because it is seconds and because it is the
       # thing that decides whether a score is real. It needs no browser and no
       # database: a recorded replay, run twice in isolated realms, has to derive

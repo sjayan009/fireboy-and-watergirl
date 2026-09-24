@@ -24,7 +24,7 @@ deploy needs it.
 |---|---|
 | `engine/` | the simulation, the renderer and the netcode. No network, no accounts, runs in Node |
 | `app/` | a static single-page app: sign-up, friends, and the game |
-| `supabase/` | migrations and the tests that prove row level security |
+| `supabase/` | migrations, row level security tests, and the authenticated TURN credential broker |
 | `tools/` | the Python that turned the SWF into everything else |
 | `web/` | the engine's own harness, with readouts and debug hooks |
 | `docs/` | [the architecture](docs/ARCHITECTURE.MD), and the release and hosting notes |
@@ -42,9 +42,13 @@ specific reason: a frame re-simulates in about 0.04 ms and a snapshot of the
 entire world costs about 5 ms, so rewinding further is always cheaper than
 having saved the exact frame.
 
-A pair on a direct peer connection never touches a server while playing. A pair
-whose NAT refuses one relays through their own Realtime channel, which costs a
-hop of latency and needs no TURN server.
+A direct pair sends gameplay inputs peer to peer. When direct ICE cannot
+connect, the authorized networking rollout uses Cloudflare TURN within the
+same WebRTC data channel. Supabase Realtime remains the emergency gameplay
+fallback and carries presence, invitations and signaling. Short-lived TURN
+credentials come from an authenticated Supabase Edge Function. See the
+[network rollout](docs/NETWORK_ROLLOUT.md) and
+[TURN deployment gate](docs/NETWORK_ROLLOUT_TURN.md).
 
 ## Accounts
 
@@ -53,7 +57,7 @@ sign-in satisfies verification without requiring an outbound email provider.
 `claim_username` creates the profile after verification; invite codes have been
 removed. An account with no profile cannot be
 found, befriended, or reach a row of anybody else's data: migration `0013` makes
-that true by requiring a profile in every policy and every function, where it
+that true by requiring a profile in its data policies and gameplay-data functions, where it
 had previously been an argument about what a profile is used for. It was not
 true before that — `profiles` was readable by any signed-in account, which was
 the id an attacker needed.
@@ -130,8 +134,8 @@ static-file uploader or `npx wrangler@4.131.1 deploy` with `wrangler.json`.
 The build generates security/cache headers and refuses more than 20,000 files,
 assets over 25 MiB, Worker scripts, resource bindings or build hooks. Pages Free
 can also serve this artifact. See [the deployment runbook](docs/free-hosting.md).
-Only `SUPABASE_URL` and
-`SUPABASE_PUBLISHABLE_KEY` reach the browser — the
+Only public configuration such as `SUPABASE_URL` and
+`SUPABASE_PUBLISHABLE_KEY` is embedded in the browser build — the
 secret key and the database password stay in `.env.local`, which is gitignored
 and must remain so.
 
@@ -148,12 +152,20 @@ reach the database tier and `deployed` can sign an account in rather than
 stopping after the headers. The secret key stored there should be one minted
 for CI and used nowhere else, so that revoking it costs nobody their afternoon.
 
-`ICE_SERVERS` is optional and accepts **STUN only**. The build rejects TURN URLs
-and credentials. Unset, a pair gets two public STUN servers and the ones whose
-NAT refuses to be discovered relay over their own private Realtime channel.
+Build-time `ICE_SERVERS` remains optional and accepts **public STUN only**;
+static TURN URLs and credentials are rejected. At link creation the browser
+requests short-lived ICE credentials from `turn-credentials`, with the public
+STUN list as a fallback if issuance fails. Store `CLOUDFLARE_TURN_KEY_ID` and
+`CLOUDFLARE_TURN_API_TOKEN` only as Supabase Edge Function secrets. They never
+belong in Vite or public files. The
+[TURN runbook](docs/NETWORK_ROLLOUT_TURN.md) covers deployment, the live forced
+relay test and the remaining acceptance gates.
 
 Read [FREE_TIER_BUDGET.md](FREE_TIER_BUDGET.md) before deploying. Quota exhaustion
-must restrict service, never trigger a paid upgrade. Private-repository Actions
+must restrict service, never trigger a paid upgrade. Cloudflare TURN's published
+1,000 GB monthly allowance supports the $0 target at modest usage, but has
+metered overage; billing alerts do not impose a spend cap. Review its usage and
+rollback plan before enabling it. Private-repository Actions
 jobs default to disabled; set `FBWG_ZERO_DOLLAR_ACTIONS=1` only after verifying
 the account's $0 stop-spend budget. Local tests do not need hosted CI. The
 optional verifier may be unavailable while ordinary play and progress continue;

@@ -43,6 +43,8 @@ import { PlayController, loadSelection, selectionKey } from "../playstate.js";
 import { Ranking } from "../ranking.js";
 import { MatchLease } from "../matchlease.js";
 import { MatchSharing, type SharingState } from "../sharing.js";
+import { QoeRecorder } from "../net/qoe.js";
+import { networkFlags } from "../net/flags.js";
 
 const MUTE_KEY = "fbwg.muted";
 
@@ -310,9 +312,14 @@ export function playScreen(host: HTMLElement): () => void {
     };
   }
 
+  const qoe = new QoeRecorder();
+  if (import.meta.env.DEV) (window as Window & { fbwgQoe?: () => unknown }).fbwgQoe = () => qoe.summary();
   const view = new GameView({
     canvas,
     assets: __ASSETS__,
+    rollbackSmoothing: networkFlags.rollbackSmoothing,
+    localDescendantInterpolation: networkFlags.descendantInterpolation,
+    onRenderTiming: sample => qoe.rendered(sample),
     save: progress.store,
     onPrepareRun: async v => {
       // Said once per prepared scene, so a level that starts with holes in it
@@ -358,7 +365,15 @@ export function playScreen(host: HTMLElement): () => void {
       const context = rankedContext();
       if (context && view.session) ranking.observe(context, view.session, view.game);
     },
-    onFrame: () => { watchStall(); pace(); freshenReadout(); },
+    onFrame: () => {
+      qoe.tick(performance.now(), view.session);
+      const path = link?.activePath;
+      if (path === "rtc" || path === "relay") {
+        const nextKind = path === "rtc" ? "direct" : "relay";
+        if (nextKind !== linkKind) { linkKind = nextKind; refreshStatus(); }
+      }
+      watchStall(); pace(); freshenReadout();
+    },
     onConfirmed: (v, frame) => {
       if (v.session) mirror?.confirmed(v.session,frame);
       if (frame % 26 === 0 || v.game.children.some((c: { Rboard?: unknown }) => c.Rboard)) {
@@ -451,6 +466,7 @@ export function playScreen(host: HTMLElement): () => void {
     // works on every browser. `getStats` is the cross-check and is null on
     // Firefox forever -- see `sampleRtt` in webrtc.ts.
     const rtt = s?.rttMs ?? (typeof link?.rttMs === "number" ? link.rttMs : null);
+    if (link?.rtc?.candidateType) parts.push(`ICE ${link.rtc.candidateType}/${link.rtc.protocol ?? "?"}`);
     if (rtt !== null) parts.push(`${Math.round(rtt)}ms rtt`);
     if (s && s.jitterMs > 0) parts.push(`±${Math.round(s.jitterMs)}ms`);
     // The whole point of the exercise: how far apart the two clocks are, and
@@ -1239,6 +1255,7 @@ export function playScreen(host: HTMLElement): () => void {
     shell.notify("");
     shell.close(true);
     linkKind = ready.kind === "webrtc" ? "direct" : "relay";
+    qoe.attach(ready.transport, ready.kind);
     partner = ready.friend;
     // Whoever was picking before this link died is still picking. Only a match
     // that did not exist a moment ago starts with the inviter.
@@ -1374,7 +1391,7 @@ export function playScreen(host: HTMLElement): () => void {
         // invitation, so the two of them cannot disagree about it.
         const ready = await lobby!.resume(
           match.friend.id,
-          { ...match.invite, relay: linkKind === "relay" },
+          { ...match.invite, relay: match.invite.pathManager ? false : linkKind === "relay" },
           { signal: abort.signal });
         rebuilding = null;
         begin(ready, ready.invite);
@@ -1548,6 +1565,8 @@ export function playScreen(host: HTMLElement): () => void {
   // to each other every time somebody opened their friends list.
   return () => {
     gone = true;
+    qoe.close();
+    if (import.meta.env.DEV) delete (window as Window & { fbwgQoe?: () => unknown }).fbwgQoe;
     flow.cancel();
     if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
     if (leaving !== null) { clearTimeout(leaving); leaving = null; }

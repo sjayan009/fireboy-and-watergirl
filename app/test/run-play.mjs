@@ -17,7 +17,10 @@ try {
     await delay(100);
   }
   if(!ready) throw new Error("Fixture server did not become ready");
-  for(const test of ["app/test/play-experience.mjs","app/test/play-pair.mjs","app/test/social-experience.mjs"]) {
+  const cases=["app/test/play-experience.mjs","app/test/play-pair.mjs","app/test/social-experience.mjs"];
+  const selected=process.argv[2] ? cases.filter(test=>test.endsWith(`/${process.argv[2]}.mjs`)) : cases;
+  if(!selected.length) throw new Error("Unknown play fixture test");
+  for(const test of selected) {
     await new Promise((resolve,reject)=>{
       const child=spawn(process.execPath,[test],{cwd:root,env:{...process.env,FBWG_TEST_URL:target},stdio:"inherit"});
       child.on("error",reject);child.on("exit",code=>code===0?resolve():reject(new Error(`${test} failed (${code})`)));

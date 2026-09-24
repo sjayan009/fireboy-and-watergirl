@@ -1,0 +1,49 @@
+{
+  "capturedAt": "2026-09-12T23:41:18.892Z",
+  "browser": "151.0.7922.34",
+  "scope": "Actual loopback Chromium RTC; relay transport is local rendezvous, not hosted Supabase. No global WAN/NAT hardware tested.",
+  "handshakeMs": 390.80000001192093,
+  "failureDetectionMs": 26.19999998807907,
+  "fallbackSetupMs": 0.20000004768371582,
+  "natTimeoutMs": 163.5,
+  "rttMs": [
+    1,
+    1
+  ],
+  "stats": [
+    {
+      "sentPackets": 69,
+      "receivedPackets": 65,
+      "sentBytes": 3768,
+      "receivedBytes": 3729,
+      "droppedPackets": 0,
+      "queueSamples": 0,
+      "queueTotalMs": 0,
+      "queueMaxMs": 0,
+      "bufferedBytes": 65
+    },
+    {
+      "sentPackets": 65,
+      "receivedPackets": 69,
+      "sentBytes": 3729,
+      "receivedBytes": 3768,
+      "droppedPackets": 0,
+      "queueSamples": 0,
+      "queueTotalMs": 0,
+      "queueMaxMs": 0,
+      "bufferedBytes": 65
+    }
+  ],
+  "framesBeforeFailure": [
+    64,
+    64
+  ],
+  "closed": [
+    1,
+    1
+  ],
+  "relayFrames": [
+    60,
+    60
+  ]
+}
