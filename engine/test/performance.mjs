@@ -16,6 +16,10 @@ const seconds = Number(process.env.FBWG_BENCH_SECONDS ?? 20);
 // time-based pattern remains available to reproduce the original audit.
 const steering = process.env.FBWG_BENCH_STEERING ?? "timed";
 if (!["timed", "position"].includes(steering)) throw new Error("Unknown benchmark steering mode");
+const presentation = {
+  rollbackSmoothing: process.env.FBWG_BENCH_ROLLBACK_SMOOTHING === "1",
+  localDescendantInterpolation: process.env.FBWG_BENCH_DESCENDANTS === "1",
+};
 const types = { ".js": "text/javascript", ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml", ".webp": "image/webp", ".ttf": "font/ttf", ".mp3": "audio/mpeg", ".wav": "audio/wav" };
 const server = createServer(async (req, res) => {
   if (req.url === "/") { res.setHeader("content-type", "text/html"); res.end('<!doctype html><canvas id="stage" tabindex="0"></canvas>'); return; }
@@ -34,12 +38,12 @@ try {
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Performance.enable");
-  const preparation = await page.evaluate(async () => {
+  const preparation = await page.evaluate(async presentation => {
     const { GameView } = await import("/dist/embed.js");
     const { GameHost } = await import("/dist/net/gamehost.js");
     const { MemorySave } = await import("/dist/game/save.js");
     const started = performance.now();
-    const view = new GameView({ canvas: document.querySelector("canvas"), assets: "/assets", save: new MemorySave() });
+    const view = new GameView({ canvas: document.querySelector("canvas"), assets: "/assets", save: new MemorySave(), ...presentation });
     view.setMuted(true);
     await view.prepare();
     view.setRunning(false);
@@ -47,7 +51,7 @@ try {
     await view.sprites.prepare(view.game);
     window.bench = { view };
     return { prepareMs: performance.now() - started, missing: view.sprites.missing };
-  });
+  }, presentation);
   await page.waitForTimeout(1000);
   const before = Object.fromEntries((await cdp.send("Performance.getMetrics")).metrics.map(m => [m.name, m.value]));
   const trace = [];
@@ -150,6 +154,7 @@ try {
   const gcEvents = trace.filter(e => e.ph === "X" && /^(MajorGC|MinorGC)$/.test(e.name));
   const output = { label, recordedAt: new Date().toISOString(), commit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), environment: { platform: platform(), release: release(), cpu: cpus()[0]?.model, logicalCpus: cpus().length, node: process.version, browser: browser.version(), headless: true, engine, assets }, preparation, ...result, taskCpuPercent: 100 * (after.TaskDuration - before.TaskDuration) / (after.Timestamp - before.Timestamp), gc: { count: gcEvents.length, totalMs: gcEvents.reduce((s,e)=>s+(e.dur ?? 0)/1000,0), maxMs: Math.max(0,...gcEvents.map(e=>(e.dur ?? 0)/1000)) }, errors, limitations: ["Native headless rAF cadence, not a physical high-refresh monitor", "Input-to-render callback proxy excludes OS input and display scanout", "Unresolved inputs include events replaced before movement or blocked by collision; reported separately", "Canvas instrumentation and trace overhead included equally in both variants", "GC trace durations are collector activity, not necessarily all stop-the-world time", "CPU is Chromium TaskDuration/wall time including measurement setup/teardown; no process RSS meter", "Solo renderer workload; network results are separate"] };
   output.steering = steering;
+  output.presentation = presentation;
   await mkdir(resolve(root,"benchmarks"),{recursive:true});
   await writeFile(resolve(root,"benchmarks",`${label}.json`),JSON.stringify(output,null,2)+"\n");
   console.log(JSON.stringify(output,null,2));
