@@ -9,11 +9,11 @@
     "serve": "node serve.mjs",
     "dev": "npm --prefix app run dev",
     "build": "npm --prefix app run build",
-    "test": "npm --prefix engine test && npm run test:free && npm run test:servers && npm run test:docs && npm run build && npm run check && npm run lint",
+    "test": "npm --prefix engine test && npm run test:network-unit && npm run test:free && npm run test:servers && npm run test:docs && npm run build && npm run check && npm run lint",
     "unenrol": "node supabase/unenrol.mjs",
     "app:test": "npm --prefix app test",
     "check": "npm --prefix app run check",
-    "test:all": "npm --prefix engine run test:full && npm run test:servers && npm run test:docs && npm run build && npm run check && npm run lint && npm run db:test && npm --prefix app test",
+    "test:all": "npm --prefix engine run test:full && npm run test:network-unit && npm run test:servers && npm run test:docs && npm run build && npm run check && npm run lint && npm run db:test && npm --prefix app test",
     "test:db": "npm run db:test",
     "test:deployed": "node app/test/deployed.mjs",
     "test:servers": "node test/servers.mjs",
@@ -24,7 +24,10 @@
     "test:free": "node test/free-config.mjs && node relay/region-selection.test.mjs",
     "bench:render": "node engine/test/performance.mjs",
     "bench:network": "node engine/test/networkbench.mjs",
-    "test:network-conditions": "npm --prefix engine run build && node engine/test/networkbench.mjs --label after && node engine/test/transport-failover.mjs"
+    "test:network-conditions": "npm --prefix engine run build && node engine/test/networkbench.mjs --label after && node engine/test/transport-failover.mjs",
+    "test:network-unit": "node test/turn-credentials.mjs && node engine/test/ice-diagnostics.mjs && node test/realtime-edges.mjs && node test/qoe.mjs && node app/test/pathmanager.mjs",
+    "test:network-rollout": "npm --prefix engine run build && npm run test:network-unit && node test/network-rollout-browser.mjs",
+    "test:turn-live": "node test/turn-live.mjs"
   },
   "description": "Fireboy & Watergirl: The Forest Temple, recovered from the 2009 SWF and rebuilt for online co-op.",
   "dependencies": {

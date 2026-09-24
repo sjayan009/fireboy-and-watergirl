@@ -23,6 +23,7 @@ const base64Module = asModule(await readFile(resolve(ROOT, "app/src/net/base64.t
 const sourceAtStart = await readFile(resolve(ROOT, "app/src/net/realtime.ts"), "utf8");
 const realtimeSource = sourceAtStart
   .replace('from "./base64.js"', `from ${JSON.stringify(base64Module)}`)
+  .replace('from "@engine/net/protocol.js"', `from ${JSON.stringify(pathToFileURL(resolve(ROOT,"engine/dist/net/protocol.js")).href)}`)
   .replace('from "@engine/net/transport.js"', `from ${JSON.stringify(pathToFileURL(resolve(ROOT,"engine/dist/net/transport.js")).href)}`);
 const { RealtimeTransport } = await import(asModule(realtimeSource));
 const pct = (values, q) => {
@@ -61,7 +62,7 @@ const conditions = [
 ];
 
 const rows = [];
-for (const mode of ["direct", "supabase230", "supabase115"]) {
+for (const mode of ["direct", "supabase230", "supabase115", "supabaseEdge"]) {
   for (const condition of conditions) {
     const clock = new Clock(), rng = new Rng(12345);
     const epoch = clock.now;
@@ -72,7 +73,8 @@ for (const mode of ["direct", "supabase230", "supabase115"]) {
     try {
       const handlers = [null, null];
       let settling = false;
-      const metrics = { messages: 0, bytes: 0, binaryBytes: 0, lost: 0, queue: [], tick: [], rtts: [], stalls: [0,0] };
+      const metrics = { messages: 0, bytes: 0, binaryBytes: 0, lost: 0, queue: [], edgeQueue: [], tick: [], rtts: [], stalls: [0,0] };
+      const published = [null, null];
       // 36-char session + ':' + 36-char attempt + ':'; the real scoped channel
       // adds this before base64. Supabase Phoenix/TLS/TCP headers are excluded.
       const prefix = "00000000-0000-4000-8000-000000000000:11111111-1111-4111-8111-111111111111:";
@@ -81,7 +83,15 @@ for (const mode of ["direct", "supabase230", "supabase115"]) {
         for (const bytes of packets) {
           metrics.binaryBytes += bytes.length;
           const parsed = decode(bytes);
-          if (parsed?.timing) metrics.queue.push(Math.max(0, clock.now-parsed.timing.sent));
+          if (parsed?.timing) {
+            const queue = Math.max(0, clock.now-parsed.timing.sent);
+            metrics.queue.push(queue);
+            if (parsed.kind === 1) {
+              const previous = published[side];
+              if (!previous || parsed.epoch !== previous.epoch || parsed.bits[0] !== previous.bits[0]) metrics.edgeQueue.push(queue);
+              published[side] = parsed;
+            }
+          }
         }
         metrics.bytes += mode === "direct" ? packets[0].length : Buffer.byteLength(JSON.stringify({ p: packets.map(d => Buffer.concat([Buffer.from(prefix), d]).toString("base64")) }));
         const elapsed = clock.now-epoch;
@@ -98,7 +108,7 @@ for (const mode of ["direct", "supabase230", "supabase115"]) {
           onBytes(fn) { handlers[side] = fn; return () => { handlers[side] = null; }; },
           sendBytes(packets) { transmit(side, packets.map(p => new Uint8Array(Buffer.from(p, "base64")))); },
           onStatus() { return () => {}; },
-        });
+        }, { legacyBatching: mode !== "supabaseEdge", now: () => clock.now });
         if (mode === "supabase115") tr.hurry(true);
         return tr;
       });
@@ -131,6 +141,7 @@ for (const mode of ["direct", "supabase230", "supabase115"]) {
         measuredRttP50Ms: pct(metrics.rtts,.5), measuredRttP95Ms: pct(metrics.rtts,.95),
         jitterMs: peers.map(p => +p.session.jitterMs.toFixed(3)),
         relayQueueP50Ms: pct(metrics.queue,.5), relayQueueP95Ms: pct(metrics.queue,.95), relayQueueP99Ms: pct(metrics.queue,.99),
+        relayQueueMaxMs: Math.max(0,...metrics.queue), edgeQueueP95Ms: pct(metrics.edgeQueue,.95),
         wireMessages: metrics.messages, messagesPerSecond: metrics.messages*1000/durationMs,
         payloadBytes: metrics.bytes, payloadBytesPerSecond: metrics.bytes*1000/durationMs,
         binaryPacketBytes: metrics.binaryBytes, droppedMessages: metrics.lost,
@@ -159,6 +170,10 @@ for (const mode of ["direct", "supabase230", "supabase115"]) {
         assert.equal(p.host.hash(), replay("adventure",1,p.session.log.slice(0,p.session.frame)).hash(), `${mode}/${condition.name} replay differs`);
       }
       for (const tr of transports) tr.close();
+      measurement.finalHashes = peers.map(p => p.host.hash());
+      measurement.replayHashes = peers.map(p => replay("adventure",1,p.session.log.slice(0,p.session.frame)).hash());
+      measurement.sharedFrames = shared;
+      measurement.sharedHash = replay("adventure",1,peers[0].session.log.slice(0,shared)).hash();
       rows.push(measurement);
       console.log(`${mode.padEnd(12)} ${condition.name.padEnd(15)} p99 ${measurement.tickP99Ms.toFixed(2)}ms, ${measurement.messagesPerSecond.toFixed(2)} msg/s, ${measurement.payloadBytesPerSecond.toFixed(0)} B/s, queue p95 ${measurement.relayQueueP95Ms}ms, rollback ${measurement.rollbacks}, stalls ${measurement.stalledCallbacks}`);
     } finally {
