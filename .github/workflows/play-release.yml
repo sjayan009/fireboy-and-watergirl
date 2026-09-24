@@ -1,16 +1,64 @@
-# Manual container build gate. Browser play and replay verification already run
-# in full and fast respectively; this keeps the unique worker-image check.
-name: worker-image
+# Manual release-gate dispatcher. The existing default-branch workflow can
+# invoke branch-local reusable workflows before they are merged to main.
+# Browser play and replay verification already run in full and fast.
+name: release-gate
 on:
   workflow_dispatch:
+    inputs:
+      gate:
+        description: Gate to run for the selected branch
+        required: true
+        default: worker-image
+        type: choice
+        options: [worker-image, hosted, remote]
+      preview_url:
+        description: Exact successful Preview URL, required for remote
+        required: false
+        type: string
+      expected_sha:
+        description: Full commit SHA, required for remote
+        required: false
+        type: string
+      repetitions:
+        description: One or two fresh remote games
+        required: false
+        default: "1"
+        type: choice
+        options: ["1", "2"]
 permissions:
   contents: read
 jobs:
-  browser-and-worker:
-    if: github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1'
+  worker-image:
+    if: inputs.gate == 'worker-image' && (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: build the verifier container
         run: docker build -f worker/Dockerfile -t fbwg-verifier:ci .
+  hosted:
+    if: inputs.gate == 'hosted' && vars.FBWG_ZERO_DOLLAR_ACTIONS == '1' && (github.ref == 'refs/heads/net/realtime-hardening' || github.ref == 'refs/heads/main')
+    uses: ./.github/workflows/network-hosted.yml
+    secrets:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+  remote:
+    if: inputs.gate == 'remote' && vars.FBWG_ZERO_DOLLAR_ACTIONS == '1' && (github.ref == 'refs/heads/net/realtime-hardening' || github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+      deployments: read
+    uses: ./.github/workflows/network-remote.yml
+    with:
+      preview_url: ${{ inputs.preview_url }}
+      expected_sha: ${{ inputs.expected_sha }}
+      repetitions: ${{ inputs.repetitions }}
+    secrets:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+      BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
+      FBWG_VERCEL_SHARE_URL: ${{ secrets.FBWG_VERCEL_SHARE_URL }}

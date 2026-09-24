@@ -17,6 +17,32 @@ on:
         default: "1"
         type: choice
         options: ["1", "2"]
+  workflow_call:
+    inputs:
+      preview_url:
+        required: true
+        type: string
+      expected_sha:
+        required: true
+        type: string
+      repetitions:
+        required: true
+        type: string
+    secrets:
+      SUPABASE_URL:
+        required: true
+      SUPABASE_PUBLISHABLE_KEY:
+        required: true
+      SUPABASE_SECRET_KEY:
+        required: true
+      SUPABASE_PROJECT_REF:
+        required: true
+      BROWSERBASE_API_KEY:
+        required: true
+      BROWSERBASE_PROJECT_ID:
+        required: true
+      FBWG_VERCEL_SHARE_URL:
+        required: true
 
 permissions:
   contents: read
