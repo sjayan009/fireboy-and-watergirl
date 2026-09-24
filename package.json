@@ -27,7 +27,8 @@
     "test:network-conditions": "npm --prefix engine run build && node engine/test/networkbench.mjs --label after && node engine/test/transport-failover.mjs",
     "test:network-unit": "node test/turn-credentials.mjs && node engine/test/ice-diagnostics.mjs && node test/realtime-edges.mjs && node test/qoe.mjs && node app/test/pathmanager.mjs",
     "test:network-rollout": "npm --prefix engine run build && npm run test:network-unit && node test/network-rollout-browser.mjs",
-    "test:turn-live": "node test/turn-live.mjs"
+    "test:turn-live": "node test/turn-live.mjs",
+    "test:network-hosted": "node app/test/hosted-network.mjs"
   },
   "description": "Fireboy & Watergirl: The Forest Temple, recovered from the 2009 SWF and rebuilt for online co-op.",
   "dependencies": {

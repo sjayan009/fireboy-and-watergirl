@@ -1,42 +1,44 @@
 {
-  "capturedAt": "2026-09-12T23:41:31.224Z",
+  "capturedAt": "2026-09-23T21:25:37.076Z",
   "browser": "151.0.7922.34",
   "scope": "Actual Chromium RTC with local byte-channel emergency relay. No hosted Supabase, WAN or TURN credentials used.",
-  "initialRtcMs": 352.19999998807907,
-  "fallbackMs": 19.700000047683716,
-  "recoveryMs": 817.1000000238419,
+  "initialRtcMs": 110.60000000149012,
+  "fallbackMs": 24.299999997019768,
+  "recoveryMs": 743.6000000014901,
+  "silentProtectionMs": 1547,
+  "silentFreshMs": 7347.5,
   "before": [
     {
-      "frame": 50,
+      "frame": 40,
       "generation": 1,
       "runSerial": 1
     },
     {
-      "frame": 50,
+      "frame": 40,
       "generation": 1,
       "runSerial": 1
     }
   ],
   "final": [
     {
-      "frame": 144,
-      "hash": "86fe42ec",
+      "frame": 330,
+      "hash": "a10807fd",
       "generation": 1,
       "runSerial": 1,
       "desyncs": 0,
-      "rollbacks": 18,
-      "deepestRollback": 9,
-      "stalls": 0
+      "rollbacks": 40,
+      "deepestRollback": 32,
+      "stalls": 20
     },
     {
-      "frame": 144,
-      "hash": "86fe42ec",
+      "frame": 330,
+      "hash": "a10807fd",
       "generation": 1,
       "runSerial": 1,
       "desyncs": 0,
-      "rollbacks": 20,
-      "deepestRollback": 8,
-      "stalls": 0
+      "rollbacks": 38,
+      "deepestRollback": 31,
+      "stalls": 17
     }
   ],
   "down": [
@@ -44,8 +46,12 @@
     0
   ],
   "relayPublishes": [
-    18,
+    19,
     15
+  ],
+  "silentRelayPublishes": [
+    74,
+    70
   ],
   "initialStats": [
     {
@@ -54,16 +60,16 @@
         "protocol": "udp",
         "currentRoundTripTime": 0.001
       },
-      "sent": 69,
+      "sent": 62,
       "stats": {
-        "sentPackets": 69,
-        "receivedPackets": 63,
-        "sentBytes": 3692,
-        "receivedBytes": 3539,
+        "sentPackets": 62,
+        "receivedPackets": 54,
+        "sentBytes": 3103,
+        "receivedBytes": 2929,
         "droppedPackets": 0,
-        "queueSamples": 4,
-        "queueTotalMs": 37.500000059604645,
-        "queueMaxMs": 32.40000003576279,
+        "queueSamples": 5,
+        "queueTotalMs": 194.39999999850988,
+        "queueMaxMs": 138.69999999552965,
         "bufferedBytes": 65,
         "queueRecentMs": []
       }
@@ -74,16 +80,16 @@
         "protocol": "udp",
         "currentRoundTripTime": 0.001
       },
-      "sent": 63,
+      "sent": 54,
       "stats": {
-        "sentPackets": 63,
-        "receivedPackets": 69,
-        "sentBytes": 3539,
-        "receivedBytes": 3692,
+        "sentPackets": 54,
+        "receivedPackets": 62,
+        "sentBytes": 2929,
+        "receivedBytes": 3103,
         "droppedPackets": 0,
-        "queueSamples": 3,
-        "queueTotalMs": 19.600000023841858,
-        "queueMaxMs": 19.600000023841858,
+        "queueSamples": 4,
+        "queueTotalMs": 29.5,
+        "queueMaxMs": 29.5,
         "bufferedBytes": 65,
         "queueRecentMs": []
       }
@@ -91,47 +97,47 @@
   ],
   "finalStats": [
     {
-      "attempts": 2,
-      "migrations": 2,
-      "duplicates": 8,
+      "attempts": 3,
+      "migrations": 3,
+      "duplicates": 13,
       "rtc": {
         "candidateType": "host",
         "protocol": "udp",
         "currentRoundTripTime": 0.001
       },
-      "sent": 167,
+      "sent": 259,
       "stats": {
-        "sentPackets": 167,
-        "receivedPackets": 160,
-        "sentBytes": 10089,
-        "receivedBytes": 9871,
+        "sentPackets": 259,
+        "receivedPackets": 249,
+        "sentBytes": 15962,
+        "receivedBytes": 15658,
         "droppedPackets": 0,
-        "queueSamples": 16,
-        "queueTotalMs": 262.89999997615814,
-        "queueMaxMs": 33.59999996423721,
+        "queueSamples": 71,
+        "queueTotalMs": 1389.1999999806285,
+        "queueMaxMs": 138.69999999552965,
         "bufferedBytes": 65,
         "queueRecentMs": []
       }
     },
     {
-      "attempts": 2,
-      "migrations": 2,
-      "duplicates": 11,
+      "attempts": 3,
+      "migrations": 3,
+      "duplicates": 18,
       "rtc": {
         "candidateType": "host",
         "protocol": "udp",
-        "currentRoundTripTime": 0.002
+        "currentRoundTripTime": 0.001
       },
-      "sent": 162,
+      "sent": 251,
       "stats": {
-        "sentPackets": 162,
-        "receivedPackets": 166,
-        "sentBytes": 10001,
-        "receivedBytes": 10024,
+        "sentPackets": 251,
+        "receivedPackets": 258,
+        "sentBytes": 15788,
+        "receivedBytes": 15897,
         "droppedPackets": 0,
-        "queueSamples": 15,
-        "queueTotalMs": 238.39999997615814,
-        "queueMaxMs": 59.19999998807907,
+        "queueSamples": 70,
+        "queueTotalMs": 1102.9999999925494,
+        "queueMaxMs": 100.39999999850988,
         "bufferedBytes": 65,
         "queueRecentMs": []
       }

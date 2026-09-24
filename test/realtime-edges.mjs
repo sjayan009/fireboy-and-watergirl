@@ -60,6 +60,14 @@ try {
   assert.equal(messages.length,discarded,'promotion leaked a heartbeat');
   tr.close(); assert.equal(timers.size,0);
 
+  const uncoalesced = make();
+  uncoalesced.tr.send(packet(100, Array(32).fill(0)));
+  uncoalesced.tr.sendUncoalesced([packet(60, Array(32).fill(0)),
+    packet(80, Array(32).fill(0)), packet(100, Array(32).fill(0))]);
+  assert.deepEqual(uncoalesced.messages.at(-1).packets.map(bytes => decode(bytes).frame),
+    [60, 80, 100], 'recovery coalesced away the missing older history');
+  uncoalesced.tr.close();
+
   const legacy = make({legacyBatching:true});
   legacy.tr.send(packet(0,[0])); advance(10); legacy.tr.send(packet(1,[2,0]));
   assert.equal(legacy.messages.length,1,'rollback switch no longer batches');

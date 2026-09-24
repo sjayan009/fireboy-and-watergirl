@@ -79,6 +79,28 @@ try {
     check(channel.every(ch => ch.gameplayPublishes > 0), "emergency relay carried no game input during migration");
     check(down.every(n => n === 0), "a physical migration notified NetSession that its link was lost");
     check(peers.every((p, side) => p.session.generation === before[side].generation && p.session.runSerial === before[side].runSerial), "migration restarted the level");
+    // A real peer connection can remain open while its packets disappear. Keep
+    // the browser RTC alive and silently discard both directions of send().
+    await pump(250);
+    const silentOld = transports.map(t => t.inner);
+    silentOld.forEach(t => { t.send = () => {}; });
+    const silentAt = performance.now();
+    await pump(3000, () => transports.every(t => t.state === "RTC_SUSPECT"));
+    check(transports.every(t => t.state === "RTC_SUSPECT"), "silent RTC did not enter suspect mode");
+    const silentProtectionMs = performance.now() - silentAt;
+    check(silentProtectionMs <= 2200, `silent protection took ${silentProtectionMs}ms`);
+    const beforeSilentRelay = channel.map(ch => ch.gameplayPublishes);
+    await pump(500);
+    check(channel.every((ch, side) => ch.gameplayPublishes > beforeSilentRelay[side]), "suspect mode carried no relay gameplay");
+    await pump(8500, () => rtc() && transports.every(t => t.attempts >= 3));
+    const silentFreshMs = performance.now() - silentAt;
+    check(rtc(), "fresh RTC after silent failure did not promote");
+    check(transports.every((t, side) => t.inner !== silentOld[side]), "silent failure reused the old RTC");
+    await pump(1000);
+    const afterSilentRelay = channel.map(ch => ch.gameplayPublishes);
+    await pump(500);
+    check(channel.every((ch, side) => ch.gameplayPublishes === afterSilentRelay[side]), "relay gameplay continued after silent recovery");
+    check(peers.every((p, side) => p.session.generation === before[side].generation && p.session.runSerial === before[side].runSerial), "silent migration restarted the level");
     const target = Math.max(...peers.map(p => p.session.frame)) + 30;
     const deadline = performance.now() + 5000;
     while (peers.some(p => p.session.frame < target) && performance.now() < deadline) {
@@ -96,8 +118,8 @@ try {
     transports.forEach(t => t.close());
     check(channel.every(ch => ch.handlers.size === 0 && ch.statuses.size === 0), "manager leaked pair subscriptions");
     check(oldRTC.every(t => t.rttTimer === null), "retired RTC stats polling leaked");
-    return { initialRtcMs, fallbackMs, recoveryMs, before, final, down,
-      relayPublishes: counts, initialStats, finalStats };
+    return { initialRtcMs, fallbackMs, recoveryMs, silentProtectionMs, silentFreshMs, before, final, down,
+      relayPublishes: counts, silentRelayPublishes: afterSilentRelay, initialStats, finalStats };
   }, moduleUrl);
   assert.deepEqual(errors, []);
   await mkdir(resolve(ROOT, "docs/benchmarks"), { recursive: true });

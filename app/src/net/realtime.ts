@@ -50,6 +50,8 @@ export class RealtimeTransport implements Transport {
     legacyBatching?: boolean;
     /** Monotonic sample clock; tests supply a virtual timestamp. */
     now?: () => number;
+    /** Benchmark override for unchanged held input; edges remain immediate. */
+    heldHeartbeatMs?: 115 | 230;
   } = {}) {}
 
   private now(): number { return this.options.now?.() ?? performance.now(); }
@@ -66,7 +68,7 @@ export class RealtimeTransport implements Transport {
   }
 
   /** What a queued packet is currently waiting, in ms. Read by the readout. */
-  get waitMs(): number { return this.options.legacyBatching ? this.flushMs : FAST_MS; }
+  get waitMs(): number { return this.options.legacyBatching ? this.flushMs : this.options.heldHeartbeatMs ?? FAST_MS; }
 
   /**
    * The same number, under the name the session asks for it by.
@@ -138,6 +140,20 @@ export class RealtimeTransport implements Transport {
       this.flush();
     }, this.flushMs - since);
   }
+
+  /** Publish a bounded recovery history in order, without held-input
+   * coalescing replacing the older packet that contains a missing frame. */
+  sendUncoalesced(packets: readonly Uint8Array[]): void {
+    if (this.closed || packets.length === 0) return;
+    this.flush();
+    this.pair.sendBytes(packets.map(encode));
+    this.sent++;
+    for (const packet of packets) {
+      this.stats.sentPackets++;
+      this.stats.sentBytes += packet.byteLength;
+    }
+    this.lastSent = Date.now();
+  }
   private lastInput: { frame: number; slot: number; epoch: number } | null = null;
 
   private observed: InputPacket | null = null;
@@ -145,6 +161,7 @@ export class RealtimeTransport implements Transport {
   /** Per-frame logical inputs still come from NetSession. Only publication is
    * coalesced: the newest packet carries the skipped frames in its history. */
   private sendEdge(data: Uint8Array, input: InputPacket): void {
+    const heartbeatMs = this.options.heldHeartbeatMs ?? FAST_MS;
     const previous = this.observed;
     const boundary = !previous || input.slot !== previous.slot || input.epoch !== previous.epoch ||
       input.frame < previous.frame;
@@ -160,8 +177,8 @@ export class RealtimeTransport implements Transport {
     this.queuedBytes.push(data.byteLength);
     this.stats.bufferedBytes += data.byteLength;
     const since = Date.now() - this.lastSent;
-    if (edge || since >= FAST_MS) { this.flush(); return; }
-    this.timer = setTimeout(() => { this.timer = null; this.flush(); }, FAST_MS - since);
+    if (edge || since >= heartbeatMs) { this.flush(); return; }
+    this.timer = setTimeout(() => { this.timer = null; this.flush(); }, heartbeatMs - since);
   }
 
   /** Promotion stops pending emergency gameplay while retaining its receiver. */

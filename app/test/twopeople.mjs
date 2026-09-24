@@ -140,7 +140,7 @@ try {
   const ctxB = await browser.newContext();
   const a = await ctxA.newPage();
   const b = await ctxB.newPage();
-  for (const [tag, p] of [["A", a], ["B", b]]) {
+  function watchPage(tag, p) {
     p.on("pageerror", (err) => {
       failures++;
       console.log("  FAIL page error: " + err.message);
@@ -170,6 +170,8 @@ try {
       console.log(`  [${tag}] HTTP ${r.status()} ${what}${body ? " -- " + body : ""}`);
     });
   }
+  watchPage("A", a);
+  watchPage("B", b);
 
   await signIn(a, alice);
   await signIn(b, bob);
@@ -328,7 +330,14 @@ try {
   if (!seeded.ok) throw new Error("could not seed: " + (await seeded.text()));
 
   console.log("\nand see each other come online");
+  // Signing in already opens the friend channel. Navigating Bob away closes
+  // that subscription while retaining his session in this browser context.
+  await b.goto("about:blank");
   await goPlay(a);
+  await a.waitForFunction(() => {
+    const pair = [...(window.__fbwg?.lobby?.channels?.values() ?? [])][0];
+    return pair && !pair.occupied;
+  }, null, { timeout: 30000 });
 
   // Alice is in the lobby and bob is not yet, which is the only window in this
   // file where somebody holds a channel with nobody on the other end -- and it
@@ -368,7 +377,7 @@ try {
     // Said out loud, because the two ways this can be vacuous both return a
     // sentence explaining themselves and would otherwise read as three
     // assertions failing on `undefined`.
-    if (typeof gated === "string") check("the window is there to test", gated, "");
+    if (typeof gated === "string") throw new Error(`offline presence premise: ${gated}`);
     check("an activity change with nobody listening is not announced",
           gated.scheduled, false);
     check("and is not quietly deferred to the next window either",
@@ -381,6 +390,8 @@ try {
           gated.held, "in_game");
   }
 
+  await b.goto(URL_, { waitUntil: "load" });
+  await b.waitForSelector("#stage", { timeout: 30000 });
   await goPlay(b);
   const seeEachOther = async () => {
     for (let i = 0; i < 150; i++) {
@@ -652,6 +663,7 @@ try {
     await a.waitForSelector(".banner:has-text('not now')", { timeout: 20000 });
     check("alice hears it, well inside the two minutes she used to wait",
           /not now/.test(await a.locator(".banner").innerText()), true);
+    await b.locator(".banner").waitFor({ state: "hidden", timeout: 5000 });
     check("and bob's banner is gone", await b.locator(".banner").isHidden(), true);
     await a.click(".banner button:has-text('Cancel')");
   }
@@ -1152,6 +1164,7 @@ try {
           .map((b) => b.textContent + (b.hidden ? " (hidden)" : "")),
       }));
       console.log("  [A] " + JSON.stringify(await look(a)));
+      console.log("  [B] " + JSON.stringify(await look(b)));
       console.log("  [C] " + JSON.stringify(await look(c)));
     }
     check("and a row appears once they do", offered, true);
