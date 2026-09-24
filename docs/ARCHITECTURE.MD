@@ -57,7 +57,7 @@ flowchart TB
         APP2 --- ENG2
     end
 
-    CDN["Static origin (Vercel)<br/>bundle + 27 MB of extracted art"]
+    CDN["Static origin (Cloudflare Workers)<br/>bundle + 27 MB of extracted art"]
     subgraph SB["Supabase project"]
         AUTH["Auth<br/>email + optional TOTP"]
         PG[("Postgres<br/>public + play_private<br/>row level security")]
@@ -794,7 +794,7 @@ turn it off.
 The rule that shapes every migration:
 
 > **A migration must survive the release before it.** `deployed` applies
-> migrations *before* it waits for Vercel, and Vercel builds on push, so for a
+> migrations *before* it waits for Workers, and Workers builds on push, so for a
 > few seconds either release may be talking to either schema.
 
 Add before you read; widen before you narrow; split anything that removes or
@@ -1042,28 +1042,35 @@ flowchart TB
     PUSH["git push"]
     subgraph GH["GitHub Actions"]
         FAST["fast — every push<br/>engine · verifier · build · check · lint"]
-        FULL["full — nightly 04:20<br/>schema → engine / database / application"]
+        FULL["full — Tue/Fri 04:23 UTC<br/>schema → engine / database / application"]
         DEP["deployed — after a release<br/>build+check → migrate → WAIT → test:deployed"]
         KA["keepalive — daily 06:40<br/>touch the database"]
-        PR["play-release — on demand<br/>test:play · test:verifier · docker build"]
+        HOSTED["network-hosted — manual<br/>TURN + local hosted migration"]
+        REMOTE["network-remote — manual<br/>runner + Browserbase migration"]
+        PR["worker-image — on demand<br/>docker build"]
     end
-    VERCEL["Vercel — builds on push<br/>npm ci --include=dev, outputDirectory dist"]
+    WORKERS["Workers Git integration — builds on main push<br/>npm run build, wrangler deploy --assets=./dist"]
+    VERCEL["Vercel — branch Preview<br/>PathManager and test hooks only there"]
     LIVE["Static origin + CSP, X-Robots-Tag: noindex"]
     SUPA[("Supabase project")]
     VM["Free Linux VM — docker compose up worker"]
 
     PUSH --> FAST
-    PUSH --> VERCEL --> LIVE
+    PUSH --> WORKERS --> LIVE
+    PUSH -. branch preview .-> VERCEL
     PUSH --> DEP
     DEP -->|"npm run db:migrate"| SUPA
     DEP -->|"poll /version.txt until it is THIS commit"| LIVE
     FULL --> SUPA
+    HOSTED --> SUPA
+    REMOTE --> VERCEL
+    REMOTE --> SUPA
     KA --> SUPA
     PR -.->|"image, installed by hand"| VM
     VM --> SUPA
 ```
 
-The waiting is the interesting part. Vercel builds on its own schedule and the
+The waiting is the interesting part. Workers Git integration builds on its own schedule and the
 workflow starts on the same push, so the two race. `deployed` proves the release
 *builds*, applies migrations, then **polls the live origin until `/version.txt`
 is this commit** before asserting anything against it. Waiting for anything

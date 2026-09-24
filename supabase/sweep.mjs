@@ -28,9 +28,10 @@ const HOUR = 60 * 60 * 1000;
 
 /**
  * @param {string} label  which suite is asking, for the one line it prints
+ * @param {string} [emailPrefix]  optional exact test-account prefix for a scoped sweep
  * @returns {Promise<number>} how many it removed
  */
-export async function sweepStaleTestUsers(label = "") {
+export async function sweepStaleTestUsers(label = "", emailPrefix = "") {
   const e = env();
   const API = e.SUPABASE_URL;
   const SECRET = e.SUPABASE_SECRET_KEY;
@@ -56,6 +57,7 @@ export async function sweepStaleTestUsers(label = "") {
   const cutoff = Date.now() - HOUR;
   const stale = users.filter((u) =>
     (u.email ?? "").endsWith("@example.com") &&
+    (!emailPrefix || (u.email ?? "").startsWith(emailPrefix)) &&
     new Date(u.created_at).getTime() < cutoff);
 
   for (const u of stale) {

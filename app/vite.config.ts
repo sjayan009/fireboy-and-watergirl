@@ -53,6 +53,7 @@ function publicEnv(): Record<string, string> {
     __LEGACY_RELAY_BATCHING__: JSON.stringify(pick("FBWG_LEGACY_RELAY_BATCHING") === "1"),
     __ROLLBACK_SMOOTHING__: JSON.stringify(pick("FBWG_ROLLBACK_SMOOTHING") === "1"),
     __DESCENDANT_INTERPOLATION__: JSON.stringify(pick("FBWG_DESCENDANT_INTERPOLATION") === "1"),
+    __NETWORK_TEST_HOOKS__: JSON.stringify(pick("FBWG_NETWORK_TEST_HOOKS") === "1"),
   };
 }
 

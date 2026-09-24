@@ -15,6 +15,7 @@ import { held, replay } from "../dist/netlink.js";
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const args = process.argv.slice(2);
 const tag = args[args.indexOf("--label") + 1] || "after";
+const heartbeatExperiment = args.includes("--heartbeat-experiment");
 const durationMs = 20_000;
 const asModule = source => `data:text/javascript;base64,${Buffer.from(ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
@@ -62,7 +63,8 @@ const conditions = [
 ];
 
 const rows = [];
-for (const mode of ["direct", "supabase230", "supabase115", "supabaseEdge"]) {
+for (const mode of heartbeatExperiment ? ["supabaseEdge", "supabaseEdge230"] :
+  ["direct", "supabase230", "supabase115", "supabaseEdge"]) {
   for (const condition of conditions) {
     const clock = new Clock(), rng = new Rng(12345);
     const epoch = clock.now;
@@ -73,7 +75,7 @@ for (const mode of ["direct", "supabase230", "supabase115", "supabaseEdge"]) {
     try {
       const handlers = [null, null];
       let settling = false;
-      const metrics = { messages: 0, bytes: 0, binaryBytes: 0, lost: 0, queue: [], edgeQueue: [], tick: [], rtts: [], stalls: [0,0] };
+      const metrics = { messages: 0, bytes: 0, binaryBytes: 0, lost: 0, queue: [], edgeQueue: [], heldQueue: [], tick: [], rtts: [], stalls: [0,0] };
       const published = [null, null];
       // 36-char session + ':' + 36-char attempt + ':'; the real scoped channel
       // adds this before base64. Supabase Phoenix/TLS/TCP headers are excluded.
@@ -89,6 +91,7 @@ for (const mode of ["direct", "supabase230", "supabase115", "supabaseEdge"]) {
             if (parsed.kind === 1) {
               const previous = published[side];
               if (!previous || parsed.epoch !== previous.epoch || parsed.bits[0] !== previous.bits[0]) metrics.edgeQueue.push(queue);
+              else metrics.heldQueue.push(queue);
               published[side] = parsed;
             }
           }
@@ -108,7 +111,8 @@ for (const mode of ["direct", "supabase230", "supabase115", "supabaseEdge"]) {
           onBytes(fn) { handlers[side] = fn; return () => { handlers[side] = null; }; },
           sendBytes(packets) { transmit(side, packets.map(p => new Uint8Array(Buffer.from(p, "base64")))); },
           onStatus() { return () => {}; },
-        }, { legacyBatching: mode !== "supabaseEdge", now: () => clock.now });
+        }, { legacyBatching: !mode.startsWith("supabaseEdge"),
+          heldHeartbeatMs: mode === "supabaseEdge230" ? 230 : 115, now: () => clock.now });
         if (mode === "supabase115") tr.hurry(true);
         return tr;
       });
@@ -142,6 +146,7 @@ for (const mode of ["direct", "supabase230", "supabase115", "supabaseEdge"]) {
         jitterMs: peers.map(p => +p.session.jitterMs.toFixed(3)),
         relayQueueP50Ms: pct(metrics.queue,.5), relayQueueP95Ms: pct(metrics.queue,.95), relayQueueP99Ms: pct(metrics.queue,.99),
         relayQueueMaxMs: Math.max(0,...metrics.queue), edgeQueueP95Ms: pct(metrics.edgeQueue,.95),
+        heldQueueP95Ms: pct(metrics.heldQueue,.95),
         wireMessages: metrics.messages, messagesPerSecond: metrics.messages*1000/durationMs,
         payloadBytes: metrics.bytes, payloadBytesPerSecond: metrics.bytes*1000/durationMs,
         binaryPacketBytes: metrics.binaryBytes, droppedMessages: metrics.lost,

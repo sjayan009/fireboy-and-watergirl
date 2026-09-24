@@ -10,7 +10,7 @@ import { encode } from "./base64.js";
 import { RealtimeTransport, type ByteChannel } from "./realtime.js";
 import { scopedChannel } from "./scope.js";
 
-export type PathState = "STARTING" | "RTC_ACTIVE" | "RELAY_ACTIVE" | "RTC_PROBING" | "OFFLINE";
+export type PathState = "STARTING" | "RTC_ACTIVE" | "RTC_SUSPECT" | "RELAY_ACTIVE" | "RTC_PROBING" | "OFFLINE";
 export interface PathClock {
   now(): number;
   setTimeout(fn: () => void, ms: number): ReturnType<typeof setTimeout>;
@@ -45,16 +45,26 @@ const MAX_PENDING = 64;
 const TICK_MS = 250;
 const PROBE_MS = 500;
 const HEARTBEAT_MS = 1000;
+// 32 input frames span 1.23 s at 26 Hz. Allow one heartbeat plus WAN jitter
+// before protecting gameplay; a suspect is reversible and does not retire ICE.
+const SUSPECT_MS = 1500;
+const RECOVERY_MS = 250;
+const RELAY_LEASE_MS = 1500;
 const DEAD_MS = 6000;
 const DEDUP_MS = 2000;
 const DEDUP_BYTES = 128 * 1024;
+// One input packet covers 32 frames (1.23 s). Samples 500 ms apart keep
+// overlapping coverage across the 1.5 s suspect detection interval, including
+// the sender that can still advance on a one-way RTC failure.
+const REPLAY_SAMPLE_MS = 500;
+const MAX_REPLAY_INPUTS = 8;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const summedStats = ["sentPackets", "receivedPackets", "sentBytes", "receivedBytes", "droppedPackets",
   "queueSamples", "queueTotalMs", "bufferedBytes"] as const;
-type ControlType = "PROBE" | "ACCEPT" | "RETRY" | "PATH_HELLO" | "PATH_ACK" | "PATH_READY" | "PATH_ACTIVE";
+type ControlType = "PROBE" | "ACCEPT" | "RETRY" | "RELAY_ON" | "RELAY_OFF" | "PATH_HELLO" | "PATH_ACK" | "PATH_READY" | "PATH_ACTIVE";
 interface Control { t: ControlType; n: string; g: number }
-const controlTypes = new Set<ControlType>(["PROBE", "ACCEPT", "RETRY", "PATH_HELLO", "PATH_ACK", "PATH_READY", "PATH_ACTIVE"]);
+const controlTypes = new Set<ControlType>(["PROBE", "ACCEPT", "RETRY", "RELAY_ON", "RELAY_OFF", "PATH_HELLO", "PATH_ACK", "PATH_READY", "PATH_ACTIVE"]);
 function controlBytes(value: Control): Uint8Array {
   const json = encoder.encode(JSON.stringify(value));
   const bytes = new Uint8Array(json.length + 1);
@@ -105,6 +115,7 @@ interface Attempt {
   connecting: boolean; transport?: Transport;
   heardHello: boolean; acked: boolean; peerReady: boolean; peerActive: boolean;
   active: boolean; activeAt: number; dualUntil: number;
+  suspect: boolean; recoverySince: number; remoteRelayUntil: number; lastRelayOn: number; lastReplay: number;
   pending: Uint8Array[]; pendingBytes: number;
 }
 
@@ -140,6 +151,8 @@ export class PathManager implements Transport {
   private retiredSends = 0;
   private readonly seen = new Map<string, { data: Uint8Array; source: string; at: number }>();
   private seenBytes = 0;
+  private lastInput: Uint8Array | null = null;
+  private readonly recentInputs: { data: Uint8Array; at: number }[] = [];
 
   constructor(private readonly channel: ByteChannel, private readonly caller: boolean,
               options: PathManagerOptions = {}) {
@@ -214,9 +227,18 @@ export class PathManager implements Transport {
   }
   send(data: Uint8Array): void {
     if (this.closed) return;
+    if (data[0] === 1 && data.length <= 256) {
+      this.lastInput = data.slice();
+      const last = this.recentInputs.at(-1);
+      if (!last || this.time.now() - last.at >= REPLAY_SAMPLE_MS) {
+        this.recentInputs.push({ data: this.lastInput, at: this.time.now() });
+        if (this.recentInputs.length > MAX_REPLAY_INPUTS) this.recentInputs.shift();
+      }
+    }
     const attempt = this.attempt;
     if (attempt?.transport && this.verified(attempt)) attempt.transport.send(data);
-    if (this.relayUp && (!attempt?.active || !attempt.peerActive || this.time.now() < attempt.dualUntil)) {
+    if (this.relayUp && (!attempt?.active || !attempt.peerActive ||
+        this.time.now() < attempt.dualUntil || this.needsRelay(attempt, this.time.now()))) {
       this.relay.send(data);
     }
   }
@@ -228,9 +250,11 @@ export class PathManager implements Transport {
   }
 
   private verified(a: Attempt): boolean { return a.heardHello && a.acked; }
+  private needsRelay(a: Attempt, now: number): boolean { return a.suspect || now < a.remoteRelayUntil; }
   private usableRTC(): Transport | undefined {
     const a = this.attempt;
-    return a && this.verified(a) && (a.active || !this.relayUp) ? a.transport : undefined;
+    return a && this.verified(a) && (a.active || !this.relayUp) &&
+      (!this.relayUp || !this.needsRelay(a, this.time.now())) ? a.transport : undefined;
   }
   private schedule(ms: number): void {
     this.timer = this.time.setTimeout(() => { this.timer = null; this.tick(); }, ms);
@@ -244,6 +268,17 @@ export class PathManager implements Transport {
       else if (a.active && !a.peerActive && now - a.activeAt > 4000) this.failAttempt(a);
       else if (a.active && now - a.lastHeard > DEAD_MS) this.failAttempt(a);
       else {
+        if (a.active && a.peerActive && this.relayUp && now - a.lastHeard >= SUSPECT_MS && !a.suspect) {
+          a.suspect = true; a.recoverySince = 0; this.state = "RTC_SUSPECT";
+          this.replayInput(a);
+        }
+        if (a.suspect && this.relayUp && now - a.lastRelayOn >= PROBE_MS) {
+          this.signal("RELAY_ON", a); a.lastRelayOn = now;
+          this.replayInput(a);
+        }
+        if (!a.suspect && a.remoteRelayUntil && now >= a.remoteRelayUntil) {
+          a.remoteRelayUntil = 0; this.state = "RTC_ACTIVE";
+        }
         if (this.caller && !a.connecting && now - a.lastControl >= PROBE_MS) {
           this.signal("PROBE", a); a.lastControl = now;
         }
@@ -251,7 +286,7 @@ export class PathManager implements Transport {
           this.pathSignal("PATH_HELLO", a); a.lastHello = now;
           if (this.verified(a)) this.pathSignal(a.active ? "PATH_ACTIVE" : "PATH_READY", a);
         }
-        if (a.active && a.peerActive && now >= a.dualUntil) {
+        if (a.active && a.peerActive && now >= a.dualUntil && !this.needsRelay(a, now)) {
           // A coalesced held-input timer must not publish after promotion.
           (this.relay as Transport & { discardPending?(): void }).discardPending?.();
         }
@@ -277,6 +312,7 @@ export class PathManager implements Transport {
       signaling: new SignalingTransport(scopedChannel(this.channel, `rtc:${g}:${n}`, "signaling")),
       connecting: false, heardHello: false, acked: false, peerReady: false, peerActive: false,
       active: false, activeAt: 0, dualUntil: Infinity, pending: [], pendingBytes: 0,
+      suspect: false, recoverySince: 0, remoteRelayUntil: 0, lastRelayOn: -Infinity, lastReplay: -Infinity,
     };
     this.attempt = a; this.spent++; this.attempts++; this.retryRequest = null;
     this.state = "RTC_PROBING";
@@ -301,6 +337,15 @@ export class PathManager implements Transport {
       return;
     }
     if (!a || message.n !== a.n || message.g !== a.g) return;
+    if (message.t === "RELAY_ON" && a.active) {
+      a.remoteRelayUntil = this.time.now() + RELAY_LEASE_MS;
+      this.state = "RTC_SUSPECT";
+      this.replayInput(a);
+    }
+    if (message.t === "RELAY_OFF" && a.active) {
+      a.remoteRelayUntil = 0;
+      if (!a.suspect) this.state = "RTC_ACTIVE";
+    }
     if (message.t === "ACCEPT" && this.caller && !a.connecting) this.connectAttempt(a);
     if (message.t === "RETRY" && this.caller) this.failAttempt(a);
   }
@@ -320,7 +365,7 @@ export class PathManager implements Transport {
     const message = readControl(data);
     if (data[0] === CONTROL) {
       if (!message || message.n !== a.n || message.g !== a.g) return;
-      a.lastHeard = this.time.now();
+      this.heardRTC(a);
       if (message.t === "PATH_HELLO") { a.heardHello = true; this.pathSignal("PATH_ACK", a); }
       if (message.t === "PATH_ACK") a.acked = true;
       if (message.t === "PATH_READY" || message.t === "PATH_ACTIVE") a.peerReady = true;
@@ -330,7 +375,8 @@ export class PathManager implements Transport {
         for (const bytes of pending) this.deliver(bytes, `rtc:${a.n}`);
         if (!a.active && a.peerReady) {
           a.active = true; a.activeAt = this.time.now(); this.migrations++;
-          this.state = "RTC_ACTIVE"; this.pathSignal("PATH_ACTIVE", a);
+          this.state = this.needsRelay(a, this.time.now()) ? "RTC_SUSPECT" : "RTC_ACTIVE";
+          this.pathSignal("PATH_ACTIVE", a);
         }
         if (a.active && a.peerActive && a.dualUntil === Infinity) a.dualUntil = this.time.now() + this.handoverMs;
         if (!a.active) this.pathSignal("PATH_READY", a);
@@ -339,10 +385,36 @@ export class PathManager implements Transport {
     }
     // An early game packet can overtake HELLO on an unordered data channel.
     // Hold a bounded window until this exact candidate has proved both ways.
-    if (this.verified(a)) { a.lastHeard = this.time.now(); this.deliver(data, `rtc:${a.n}`); }
+    if (this.verified(a)) { this.heardRTC(a); this.deliver(data, `rtc:${a.n}`); }
     else if (a.pending.length < MAX_PENDING && a.pendingBytes + data.length <= 128 * 1024) {
       a.pending.push(data.slice()); a.pendingBytes += data.length;
     }
+  }
+
+  private heardRTC(a: Attempt): void {
+    const now = this.time.now();
+    a.lastHeard = now;
+    if (!a.suspect) return;
+    if (!a.recoverySince) { a.recoverySince = now; return; }
+    if (now - a.recoverySince < RECOVERY_MS) return;
+    a.suspect = false; a.recoverySince = 0;
+    this.signal("RELAY_OFF", a);
+    if (!this.needsRelay(a, now)) this.state = "RTC_ACTIVE";
+  }
+
+  private replayInput(a: Attempt, force = false): void {
+    const now = this.time.now();
+    if (!this.relayUp || !this.lastInput || (!force && now - a.lastReplay < PROBE_MS)) return;
+    a.lastReplay = now;
+    // The sender can run 30 frames ahead while the other peer waits 1.5 s to
+    // suspect a one-way failure. By then its newest 32-frame history may no
+    // longer include the missing frame. Replay overlapping older snapshots in
+    // order; a stalled session also keeps its last snapshot available.
+    const packets = this.recentInputs.map(item => item.data);
+    if (packets.at(-1) !== this.lastInput) packets.push(this.lastInput);
+    const relay = this.relay as Transport & { sendUncoalesced?(packets: readonly Uint8Array[]): void };
+    if (relay.sendUncoalesced) relay.sendUncoalesced(packets);
+    else for (const data of packets) relay.send(data);
   }
 
   private failAttempt(a: Attempt): void {
@@ -355,6 +427,7 @@ export class PathManager implements Transport {
     }
     this.disposeAttempt(a);
     this.state = "RELAY_ACTIVE";
+    if (this.relayUp) this.replayInput(a, true);
     this.nextAttempt = this.time.now() + this.retries[Math.min(Math.max(0, this.spent - 1), this.retries.length - 1)];
     if (!this.relayUp) this.offline("all gameplay paths are unavailable");
   }
@@ -408,7 +481,8 @@ export class PathManager implements Transport {
     this.timer = null; this.offControl(); this.offStatus();
     if (this.attempt) this.disposeAttempt(this.attempt);
     this.relay.close(); this.retryRequest = null;
-    this.seen.clear(); this.seenBytes = 0; this.receiver = null; this.lost = null;
+    this.seen.clear(); this.seenBytes = 0; this.lastInput = null; this.recentInputs.length = 0;
+    this.receiver = null; this.lost = null;
   }
 }
 

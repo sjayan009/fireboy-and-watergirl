@@ -17,6 +17,7 @@ for (const authorization of [undefined, "Bearer invalid-test-token"]) {
     signal: AbortSignal.timeout(10_000),
   });
   assert.equal(denied.status, 401, "credential endpoint must reject unauthenticated/forged calls");
+  assert.equal(denied.headers.get("cache-control"), "no-store");
 }
 const client = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 const { data: identity, error: authError } = await client.auth.getUser(token);

@@ -9,6 +9,7 @@ import { resolveUnder } from "../../safepath.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
 const label = process.argv[2] ?? "after";
+const presentationCode = /^presentation-([01]{2})$/.exec(label)?.[1];
 const engine = resolve(root, process.env.FBWG_BENCH_ENGINE ?? "engine/dist");
 const assets = resolve(root, process.env.FBWG_BENCH_ASSETS ?? "extracted/assets");
 const seconds = Number(process.env.FBWG_BENCH_SECONDS ?? 20);
@@ -17,8 +18,8 @@ const seconds = Number(process.env.FBWG_BENCH_SECONDS ?? 20);
 const steering = process.env.FBWG_BENCH_STEERING ?? "timed";
 if (!["timed", "position"].includes(steering)) throw new Error("Unknown benchmark steering mode");
 const presentation = {
-  rollbackSmoothing: process.env.FBWG_BENCH_ROLLBACK_SMOOTHING === "1",
-  localDescendantInterpolation: process.env.FBWG_BENCH_DESCENDANTS === "1",
+  rollbackSmoothing: presentationCode ? presentationCode[0] === "1" : process.env.FBWG_BENCH_ROLLBACK_SMOOTHING === "1",
+  localDescendantInterpolation: presentationCode ? presentationCode[1] === "1" : process.env.FBWG_BENCH_DESCENDANTS === "1",
 };
 const types = { ".js": "text/javascript", ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml", ".webp": "image/webp", ".ttf": "font/ttf", ".mp3": "audio/mpeg", ".wav": "audio/wav" };
 const server = createServer(async (req, res) => {
