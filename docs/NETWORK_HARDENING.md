@@ -1,5 +1,32 @@
 # Realtime hardening evidence — 2026-09-23
 
+## Production rollout status — 2026-09-25
+
+**PathManager was rolled back to OFF in production.** The six networking-stack PRs were merged in order with normal merge commits, and the exact merged source was first deployed successfully with all five feature flags off. The source remains merged; no networking commit was reverted.
+
+| PR | Merge commit |
+| --- | --- |
+| #24 TURN credentials | `2b70806cb26b501e8a18fd4625a7cbb92ef0cd45` |
+| #25 relay edge publishing | `1e14bc48833a23c2cd7e0fa347baa6f70220456c` |
+| #26 PathManager | `395f49e4ce655a88a92afeeaf25c2f6dce0fb18d` |
+| #27 presentation gates | `bbdaee269e39bd135f5c78a71a5237b8461a727d` |
+| #28 QoE evidence | `3df0db3610247eb6d96bbde99bc8805dd0f7f31d` |
+| #29 realtime hardening | `a05ae33a6902d4ad440c7684a8050461dd675060` |
+
+All ten validated stack commits were verified as ancestors of merged main `a05ae33a6902d4ad440c7684a8050461dd675060`. The initial dark Cloudflare build `8ad8ccf0-1eb8-48df-8a18-08f0cc35593f` deployed that exact SHA with PathManager off. The live `/version.txt`, `deployed` workflow and a two-player sign-in, friendship, invitation and gameplay smoke passed. The production Workers URL is `https://fireboy-and-watergirl.sjayan009.workers.dev/`.
+
+At 2026-09-24 19:16:59 UTC, Cloudflare deployed build `353326f4-8291-4aa1-b70b-a7cd0788c0a0`, Worker version `5ae8693c-8af0-4f82-a2c9-8f56757b8637`, from the same merged SHA with `FBWG_PATH_MANAGER=1`. The other flags remained false: `FBWG_LEGACY_RELAY_BATCHING`, `FBWG_ROLLBACK_SMOOTHING`, `FBWG_DESCENDANT_INTERPOLATION`, and `FBWG_NETWORK_TEST_HOOKS` were unset. A comparison of the live lobby JavaScript with local flag-on and flag-off builds showed the live code matched the flag-on build after normalizing generated asset filenames. The production `window.fbwgNetworkTest` hook was absent. The enabled `deployed` workflow passed.
+
+Two separate three-minute production sessions signed in disposable pairs, established friendship and invitations, started the same game on both peers, and responded to movement. Both stayed paired without visible reconnect UI or page exceptions. Browser-side RTC observation in the second session found both peers in `connected` ICE and peer-connection state, but one selected candidate pair reported zero received bytes while the other reported received bytes. The first session's WebSocket observer also failed to see a managed-capability frame; the bundle comparison established the compiled flag independently. These observations leave a possible one-way path or fallback regression unresolved, so the strict production smoke gate did **not** pass. Two HTTP 400 responses per session from `register_ranked_attempt` were the expected ranking fallback while no ranked engine version was accepting; no other failed responses were observed. The normal production build contains no failure-injection hook, and no production network disruption was intentionally induced.
+
+Per the rollback rule, `FBWG_PATH_MANAGER` was set to `0` in Cloudflare's production **build** variables and the exact same merged SHA was rebuilt. Rollback build `56e1737a-ac8a-475a-aab9-315f355b3f8d` deployed Worker version `c23e7031-5545-4e07-878c-fb3b6d9ac243` at 2026-09-25 05:16:27 UTC. Live `/version.txt` still reported `a05ae33a6902d4ad440c7684a8050461dd675060`, and its lobby bundle matched a local flag-off build after normalizing generated asset filenames. The rollback smoke passed sign-in, friendship, invitation, gameplay movement and connected direct RTC on both peers; the selected candidate pair byte counts were reciprocal. Every disposable account used by these production smokes was signed out and deleted, with the cleanup helper confirming no test users or associated profiles remained. The rollback `deployed` workflow [passed on the exact merged SHA](https://github.com/sjayan009/fireboy-and-watergirl/actions/runs/36098026641).
+
+The temporary hardening Preview origin remains in Supabase `TURN_ALLOWED_ORIGINS` alongside the Workers production origin so the unresolved path can be investigated in staging. The Vercel `net/realtime-hardening` Preview still has branch-only `FBWG_PATH_MANAGER=1` and `FBWG_NETWORK_TEST_HOOKS=1`; production has no test hooks. Remove that origin and the Preview hook only after a passing production PathManager smoke makes staging unnecessary. Browserbase credentials remain for future manual release gates; the short-lived Preview share secret was already removed.
+
+The new main CI layout is active: `fast` runs on push and pull request; `full` runs Tuesday and Friday at 04:23 UTC or manually; hosted and remote network tests are manual/reusable; `release-gate` dispatches worker-image, hosted and remote gates; `deployed` runs on main push; and `keepalive` runs daily. GitHub Actions billing headroom was checked before the merges. Main branch protection could not be applied: GitHub returned HTTP 403 because this repository is private on GitHub Free. No plan purchase or visibility change was made.
+
+For a future production rollback, set Cloudflare Workers production **build** variable `FBWG_PATH_MANAGER=0`, retry the build for the exact current main commit, wait for `/version.txt` to match that commit, verify the live bundle is flag-off, and repeat the two-player production smoke. Keep all other flags false. Do not revert the merged networking commits unless the flag-off build also fails.
+
 This branch adds a reversible RTC suspect phase above the existing hard timeout. It does not enable PathManager or either presentation flag in production.
 
 ## Silent RTC failure
