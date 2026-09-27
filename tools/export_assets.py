@@ -32,6 +32,8 @@ import shutil
 import subprocess
 import sys
 
+import text_masks as TM
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
 SWF = os.path.join(ROOT, "Fireboy & Watergirl - The Forest Temple.swf")
@@ -68,7 +70,7 @@ def run_jpexs(ffdec, fmt, kind, outdir):
         check=True, stdout=subprocess.DEVNULL)
 
 
-def parse_svg_frame(path, base_out=None, wanted=None):
+def parse_svg_frame(path, base_out=None, wanted=None, text_masks=None):
     """Registration offset, size, and named child placements for one frame.
 
     `wanted` is the set of child names the SWF itself says this symbol has,
@@ -146,9 +148,16 @@ def parse_svg_frame(path, base_out=None, wanted=None):
             stripped.append(txt[prev:a])
             prev = b
         stripped.append(txt[prev:])
+        base = "".join(stripped)
+        # JPEXS writes a text mask as its bounds rectangle; the PNG pass gets
+        # it right, but this SVG is what the renderer draws. See text_masks.py.
+        if text_masks:
+            base, _ = TM.restore_text_masks(
+                base, text_masks, os.path.join(ROOT, "extracted", "assets",
+                                               "_raw", "text"))
         os.makedirs(os.path.dirname(base_out), exist_ok=True)
         with open(base_out, "w", encoding="utf-8") as fh:
-            fh.write("".join(stripped))
+            fh.write(base)
         geom["base"] = os.path.basename(base_out)
     return geom
 
@@ -361,6 +370,10 @@ def main():
     svg_dir = os.path.join(tmp, "svg")
     run_jpexs(ffdec, "sprite:png", "sprite", png_dir)
     run_jpexs(ffdec, "sprite:svg", "sprite", svg_dir)
+    # Needed before the sprites, not just for the buttons: the title's masks
+    # are text, and their glyphs come from this export.
+    run_jpexs(ffdec, "text:svg", "text", os.path.join(tmp, "text"))
+    masks = TM.text_masks()
 
     if os.path.isdir(OUT):
         shutil.rmtree(OUT)
@@ -415,7 +428,7 @@ def main():
             copied += 1
             svg = os.path.join(svg_dir, d, "%d.svg" % fr)
             base_out = os.path.join(dest, "%d_base.svg" % fr)
-            info["geom"].append(parse_svg_frame(svg, base_out, wanted)
+            info["geom"].append(parse_svg_frame(svg, base_out, wanted, masks)
                                 if os.path.isfile(svg)
                                 else {"w": 0, "h": 0, "ox": 0, "oy": 0,
                                       "children": []})
