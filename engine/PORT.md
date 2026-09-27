@@ -239,6 +239,19 @@ invisible until it wasn't:
    `app/scripts/check.mjs` asserts the margin is uniform, which is the part
    neither export states and the halving depends on.
 
+9. **JPEXS cannot clip with text.** The title wordmarks are a texture seen
+   through a word: sprite 70 places the text "FireBoy" (DefineText 68) with
+   ClipDepth 3 under the lava fill, and sprite 66 does the same with
+   "Watergirl" (text 64) over the water. The PNG pass clips them properly. The
+   SVG pass writes the text's *bounds rectangle* as the `<clipPath>`, and that
+   SVG is the base image IntroMenu draws, so the menu showed a lava slab and a
+   bubble slab where the words belong. `tools/text_masks.py` finds every
+   text-character mask in the SWF (these two are the only ones) and replaces
+   the rectangle with the glyph outlines from the `text:svg` export, under the
+   mask's placement matrix. It refuses unless the rectangle it replaces is
+   exactly that text's bounds, and `export_assets.py` runs it on every base it
+   writes.
+
 The renderer never writes to the scene graph: that tree is simulation state.
 The physics view is still one checkbox away, because sprite art hides exactly
 the kind of collision bug it was built to expose.
