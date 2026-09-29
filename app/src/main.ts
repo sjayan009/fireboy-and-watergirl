@@ -31,6 +31,9 @@ function lazy(load: () => Promise<Route["render"]>): Route["render"] {
 }
 
 const routes: Route[] = [
+  // The bare site address, signed out: the landing page. Signed in, the router
+  // sends the same address straight to /play, because this admits "out" only.
+  { path: "/", stages: ["out"], render: lazy(async () => (await import("./screens/landing.js")).landingScreen) },
   { path: "/login", stages: ["out"], render: loginScreen },
   { path: "/signup", stages: ["out"], render: signUpScreen },
   { path: "/reset", stages: ["out"], render: resetScreen },
@@ -103,7 +106,12 @@ startAuth().then(() => {
   if (location.search) {
     history.replaceState(null, "", location.pathname + location.hash);
   }
-  if (refused) reportSignInTrouble(refused);
+  if (refused) {
+    reportSignInTrouble(refused);
+    // The answer comes back to the bare address, which is now the landing
+    // page; the sign-in form is where the message is shown and acted on.
+    if (!location.hash || location.hash === "#/") location.hash = "/login";
+  }
   // A password reset lands signed in, so the stage alone cannot tell that the
   // point of arriving was to choose a new password.
   if (wanted === "password") location.hash = "/password";

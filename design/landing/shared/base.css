@@ -13,6 +13,13 @@
  *   data      numbers, frames, bytes: tabular mono
  */
 
+/*
+ * Cinzel, self-hosted: the deployment's CSP allows fonts from this origin
+ * only. 15 KB, Latin, one weight, and fetched only when text set in it is
+ * actually on screen ("Level complete", the Recovery catalogue).
+ */
+@font-face { font-family: "Cinzel"; font-style: normal; font-weight: 600; font-display: swap; src: url("../assets/fonts/cinzel-600-latin.woff2") format("woff2"); }
+
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; scroll-padding-top: 5.5rem; }

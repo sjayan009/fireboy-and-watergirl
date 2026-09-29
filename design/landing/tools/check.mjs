@@ -23,9 +23,11 @@ for (const path of PAGES) {
       theme: document.documentElement.dataset.theme,
     }));
     // Keyboard: focus the checked theme radio and press → once (dark > light).
+    // The theme commits inside a view transition, which can take a while on the
+    // first, cold page: wait for it, up to a limit, rather than a fixed time.
     const radio = p.locator('.nav .theme button[aria-checked="true"]');
     let themeAfter = null;
-    if (await radio.count()) { await radio.focus(); await p.keyboard.press("ArrowRight"); await p.waitForTimeout(700); themeAfter = await p.evaluate(() => document.documentElement.dataset.theme); }
+    if (await radio.count()) { await radio.focus(); await p.keyboard.press("ArrowRight"); await p.waitForFunction(() => document.documentElement.dataset.theme === "light", null, { timeout: 3000 }).catch(() => {}); themeAfter = await p.evaluate(() => document.documentElement.dataset.theme); }
     const ok = !errs.length && r.overflow <= 0 && (themeAfter === null || themeAfter === "light") && (!reduced || r.done !== false);
     if (!ok) bad++;
     console.log(ok ? "ok  " : "FAIL", w, reduced ? "reduced" : "motion ", path, JSON.stringify({ ...r, themeAfter, errs }));

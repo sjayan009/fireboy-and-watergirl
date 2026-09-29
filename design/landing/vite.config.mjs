@@ -32,28 +32,38 @@ function mount(prefix, dir) {
   };
 }
 
-export default defineConfig({
+const DEVELOPERS = {
+  developers: resolve(HERE, "developers/index.html"),
+  netcode: resolve(HERE, "developers/netcode.html"),
+  recovery: resolve(HERE, "developers/recovery.html"),
+  architecture: resolve(HERE, "developers/architecture.html"),
+};
+
+export default defineConfig(({ mode }) => ({
   root: HERE,
   // Module imports go through Vite's resolver, which never sees middleware, so
   // "/engine/..." is an alias for the import graph as well.
   resolve: { alias: [{ find: /^\/engine\//, replacement: resolve(ROOT, "engine/dist").replaceAll("\\", "/") + "/" }] },
   server: { fs: { allow: [ROOT] } },
   // `npx vite build design/landing`: the landing page and the For Developers
-  // subsite only. The exploration pages are not inputs, so they never ship.
-  // The Netcode page still fetches /extracted/assets at run time; wherever this
-  // is hosted must serve those, as the app's own build does.
-  build: {
+  // subsite only, into design/landing/dist, to preview on their own. The
+  // exploration pages are not inputs, so they never ship.
+  //
+  // `--mode ship` (run by the app's build): the For Developers pages only,
+  // into the app's own dist/developers. The landing page itself is not built
+  // here in that mode: the app renders it at the site root. Their scripts and
+  // styles go to dist/developers/assets, apart from the app's dist/assets and
+  // its budget, and the Netcode page takes the game's art from the app's
+  // dist/extracted, which the app build has already written.
+  build: mode === "ship" ? {
+    outDir: resolve(ROOT, "dist"),
+    emptyOutDir: false,
+    assetsDir: "developers/assets",
+    rollupOptions: { input: DEVELOPERS },
+  } : {
     outDir: resolve(HERE, "dist"),
     emptyOutDir: true,
-    rollupOptions: {
-      input: {
-        index: resolve(HERE, "index.html"),
-        developers: resolve(HERE, "developers/index.html"),
-        netcode: resolve(HERE, "developers/netcode.html"),
-        recovery: resolve(HERE, "developers/recovery.html"),
-        architecture: resolve(HERE, "developers/architecture.html"),
-      },
-    },
+    rollupOptions: { input: { index: resolve(HERE, "index.html"), ...DEVELOPERS } },
   },
   plugins: [{
     name: "engine-and-art",
@@ -67,4 +77,4 @@ export default defineConfig({
       server.middlewares.use(mount("/extracted", "extracted"));
     },
   }],
-});
+}));

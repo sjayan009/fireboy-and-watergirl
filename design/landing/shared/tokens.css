@@ -23,7 +23,42 @@
  * temple, and it sits in a dark "window" in both themes. The theme changes the
  * chrome around the content, never the content.
  */
+/*
+ * Dark is the base: it is the default, so it is also what a page shows with
+ * no script, or before the script that reads a saved choice has run. The
+ * site's CSP allows no inline script, so there is no pre-paint snippet any
+ * more; a reader who chose Light sees dark for a moment, everyone else sees
+ * exactly the right theme from the first frame.
+ */
 :root {
+  color-scheme: dark;
+  --fire: #FF865B;
+  --fire-ink: #24170E;
+  --water: #75D5EB;
+  --water-ink: #0C2A33;
+  --window: #0D0B09;           /* the frame game art sits in, both themes */
+  --bg: #14110E;
+  --surface: #1E1A15;
+  --raised: #262119;
+  --sunken: #100E0B;
+  --ink: #F2ECE0;
+  --dim: #A99E8D;
+  --faint: #8F8573;
+  --edge: #342E24;
+  --edge-strong: #776D5C;
+  --fire-text: #FF865B;
+  --water-text: #75D5EB;
+  --gold-text: #F0CE7B;
+  --moss-text: #8DBF6A;
+  --window-edge: #3A3328;
+  --glow-fire: #ff865b40;
+  --glow-water: #75d5eb40;
+  --shadow: 0 1px 2px #00000040, 0 .5rem 1.5rem #00000059;
+  --shadow-lift: 0 2px .25rem #00000059, 0 1.5rem 4rem #00000080;
+  --grain: .06;
+}
+
+:root[data-theme="light"] {
   color-scheme: light;
   --bg: #ECEAE1;
   --surface: #F7F6F1;
@@ -51,54 +86,6 @@
   --grain: .035;
 }
 
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #14110E;
-  --surface: #1E1A15;
-  --raised: #262119;
-  --sunken: #100E0B;
-  --ink: #F2ECE0;
-  --dim: #A99E8D;
-  --faint: #8F8573;
-  --edge: #342E24;
-  --edge-strong: #776D5C;
-  --fire-text: #FF865B;
-  --water-text: #75D5EB;
-  --gold-text: #F0CE7B;
-  --moss-text: #8DBF6A;
-  --window-edge: #3A3328;
-  --glow-fire: #ff865b40;
-  --glow-water: #75d5eb40;
-  --shadow: 0 1px 2px #00000040, 0 .5rem 1.5rem #00000059;
-  --shadow-lift: 0 2px .25rem #00000059, 0 1.5rem 4rem #00000080;
-  --grain: .06;
-}
-
-/* No script at all: follow the system, since there is no stored choice to honour. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --bg: #14110E;
-    --surface: #1E1A15;
-    --raised: #262119;
-    --sunken: #100E0B;
-    --ink: #F2ECE0;
-    --dim: #A99E8D;
-    --faint: #8F8573;
-    --edge: #342E24;
-    --edge-strong: #776D5C;
-    --fire-text: #FF865B;
-    --water-text: #75D5EB;
-    --gold-text: #F0CE7B;
-    --moss-text: #8DBF6A;
-    --window-edge: #3A3328;
-    --glow-fire: #ff865b40;
-    --glow-water: #75d5eb40;
-    --shadow: 0 1px 2px #00000040, 0 .5rem 1.5rem #00000059;
-    --shadow-lift: 0 2px .25rem #00000059, 0 1.5rem 4rem #00000080;
-    --grain: .06;
-  }
-}
 
 :root {
   /*

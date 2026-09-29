@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fireboy &amp; Watergirl</title>
 <meta name="description" content="Fireboy &amp; Watergirl in the Forest Temple: play as two on one computer, or online with a friend.">
-<script>try{var q=new URLSearchParams(location.search).get('theme'),p=q||localStorage.getItem('fbwg.theme.v2')||'dark',d=p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=d?'dark':'light';document.documentElement.dataset.themePref=p}catch(e){}</script>
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
 <link rel="icon" href="assets/icon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="assets/icon-180.png">
@@ -126,7 +125,7 @@
     </nav>
     <div class="nav-end">
       <div id="theme"></div>
-      <a class="btn btn-ghost btn-s" href="https://fireboy-and-watergirl-official.vercel.app/#/login" data-signin>Sign In</a>
+      <a class="btn btn-ghost btn-s" href="#/login" data-signin>Sign In</a>
     </div>
   </div>
 </header>
@@ -142,7 +141,7 @@
         </h1>
         <p class="t-lede">The Forest Temple, the 2009 classic, now in your browser. Play as two on one computer, or online with a friend anywhere: invite them, choose who plays fire, and pick up where the two of you left off.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="https://fireboy-and-watergirl-official.vercel.app/#/login" data-signin>Sign In to Play</a>
+          <a class="btn btn-primary" href="#/login" data-signin>Sign In to Play</a>
           <a class="btn btn-water" href="#multiplayer">See Online Multiplayer
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12m0 0-5-5m5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
         </div>
@@ -249,7 +248,7 @@
       <svg class="emblem" viewBox="0 0 48 48" aria-hidden="true"><path d="M23 4C24 15 9 17 9 29a14 14 0 0 0 14 14V30c-6-1-6-7-3-10 1 4 3 5 3 5V4Z"/><path d="M29 6c0 9 12 14 12 23a14 14 0 0 1-14 14V29c7-2 8-7 2-13V6Z"/></svg>
       <h2 class="t-title" id="end-h">Find a friend and start at level one</h2>
       <p class="t-lede">Two keyboards, two browsers, one save.</p>
-      <a class="btn btn-primary" href="https://fireboy-and-watergirl-official.vercel.app/#/login" data-signin>Sign In to Play</a>
+      <a class="btn btn-primary" href="#/login" data-signin>Sign In to Play</a>
     </div>
   </section>
 </main>
@@ -262,18 +261,10 @@
 </footer>
 
 <script type="module">
-  // site.js mounts the theme control and points Sign In at the app.
-  import { still, afterFirstPaint } from "./shared/site.js";
-  import { createDoorsScene } from "./shared/doors-scene.js";
-  import { createJourney } from "./shared/journey.js";
-  import { createWatchClip } from "./shared/watch-clip.js";
-
-  window.scene = createDoorsScene(document.getElementById("scene"), { autoplay: !still });
-  window.journey = createJourney(document.getElementById("journey"));
-  window.watch = createWatchClip(document.getElementById("watch"));
-  // Cinzel sets only "Level complete", which appears seconds after load:
-  // fetched after the first paint, for just those letters.
-  afterFirstPaint("https://fonts.googleapis.com/css2?family=Cinzel:wght@600&display=swap&text=Level%20complete");
+  // The same call the app makes when it shows this page (shared/landing.js).
+  import { mountLanding } from "./shared/landing.js";
+  const landing = mountLanding(document, { autoplay: !new URLSearchParams(location.search).has("still") });
+  Object.assign(window, { scene: landing.scene, journey: landing.journey, watch: landing.watch });
 </script>
 </body>
 </html>

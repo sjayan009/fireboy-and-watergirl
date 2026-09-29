@@ -95,7 +95,7 @@ async function startVite() {
 }
 
 export async function pageSignIn(page, user, site = URL_) {
-  await page.goto(site, { waitUntil: "load" });
+  await page.goto(new URL("/#/login", site).href, { waitUntil: "load" });
   await page.locator("input[type=email]").fill(user.email);
   await page.locator("input[type=password]").fill(user.password);
   await page.click("button[type=submit]");

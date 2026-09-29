@@ -189,7 +189,13 @@ console.log("\nevery asset the manifests name is there");
 
 console.log("\nthe download is the size it should be");
 {
-  const code = walk(join(DIST, "assets")).filter((p) => /\.(js|css)$/.test(p));
+  // The landing page's chunk is budgeted on its own: it is lazy, and only a
+  // signed-out visitor at the bare address downloads it -- a player never does,
+  // so it would be wrong to let it eat the game's allowance, or to raise the
+  // game's allowance to fit it.
+  const all = walk(join(DIST, "assets")).filter((p) => /\.(js|css)$/.test(p));
+  const landing = all.filter((p) => /[\\/]landing-[\w-]+\.js$/.test(p));
+  const code = all.filter((p) => !landing.includes(p));
   const bytes = code.reduce((n, p) => n + statSync(p).size, 0);
   // Audited networking rollout adds the runtime broker client, path manager,
   // presentation options and local QoE (~805 kB total in the enabled build).
@@ -200,6 +206,16 @@ console.log("\nthe download is the size it should be");
   check(`under the ${BUDGET / 1000} kB budget`, bytes < BUDGET,
         `${(bytes / 1000).toFixed(0)} kB`);
 
+  // Markup, styles and behaviour of the whole page in one file (~80 kB).
+  const LANDING_BUDGET = 100_000;
+  const landingBytes = landing.reduce((n, p) => n + statSync(p).size, 0);
+  check("the landing page is its own chunk", landing.length === 1,
+        `${landing.length} files`);
+  console.log(`  ${(landingBytes / 1000).toFixed(0)} kB for the landing page, ` +
+              `fetched only by signed-out visitors at the bare address`);
+  check(`under its own ${LANDING_BUDGET / 1000} kB budget`,
+        landingBytes < LANDING_BUDGET, `${(landingBytes / 1000).toFixed(0)} kB`);
+
   const assetBytes = walk(ASSETS).reduce((n, p) => n + statSync(p).size, 0);
   console.log(`  ${(assetBytes / 1e6).toFixed(1)} MB of art and audio, ` +
               `fetched only as levels need it`);
@@ -207,16 +223,38 @@ console.log("\nthe download is the size it should be");
         !existsSync(join(ASSETS, "_raw")));
 }
 
-console.log("\nand the deployment says it is not for indexing");
+console.log("\nand search finds the landing page, not the game's art");
 {
+  // Indexing is on by choice: the bare address is the landing page. What is
+  // kept out is the art extracted from the 2009 game, which the game fetches
+  // and nobody reads.
   const robots = join(DIST, "robots.txt");
   check("robots.txt exists", existsSync(robots));
   if (existsSync(robots)) {
-    check("and disallows everything",
-          /Disallow:\s*\/\s*$/m.test(readFileSync(robots, "utf8")));
+    const text = readFileSync(robots, "utf8");
+    check("and does not disallow the whole site", !/Disallow:\s*\/\s*$/m.test(text));
+    check("but does disallow the extracted art", /Disallow:\s*\/extracted\//m.test(text));
   }
   const html = readFileSync(join(DIST, "index.html"), "utf8");
-  check("the page asks not to be indexed", /noindex/.test(html));
+  check("the page does not ask not to be indexed", !/noindex/.test(html));
+  check("and says what it is", /<meta name="description"/.test(html));
+}
+
+/*
+ * The For Developers pages, built by design/landing/vite.config.mjs in ship
+ * mode into dist/developers. Static pages under the same CSP as the app, so
+ * the same rule as the 404 page: an inline script would be silently refused.
+ */
+console.log("\nand the For Developers pages are there and can run");
+{
+  for (const name of ["index", "netcode", "recovery", "architecture"]) {
+    const path = join(DIST, "developers", `${name}.html`);
+    check(`developers/${name}.html is in the build`, existsSync(path));
+    if (!existsSync(path)) continue;
+    const live = readFileSync(path, "utf8").replace(/<!--[\s\S]*?-->/g, "");
+    check("  with no inline script", !/<script\b(?![^>]*\bsrc=)/.test(live));
+    check("  and nothing from another origin", !/(?:src|href)="https?:\/\//.test(live));
+  }
 }
 
 /*
