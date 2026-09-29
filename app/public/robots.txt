@@ -1,2 +1,5 @@
+# The landing page and the For Developers pages are for finding. The game's
+# extracted art is not: it is fetched by the game, not read by people.
 User-agent: *
-Disallow: /
+Allow: /
+Disallow: /extracted/

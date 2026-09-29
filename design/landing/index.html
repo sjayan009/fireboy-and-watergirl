@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fireboy &amp; Watergirl</title>
+<meta name="description" content="Fireboy &amp; Watergirl in the Forest Temple: play as two on one computer, or online with a friend.">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/icon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<link rel="stylesheet" href="shared/tokens.css">
+<link rel="stylesheet" href="shared/base.css">
+<link rel="stylesheet" href="shared/study.css">
+<link rel="stylesheet" href="shared/journey.css">
+<link rel="stylesheet" href="shared/doors-scene.css">
+<link rel="preload" as="image" href="assets/wall.webp">
+<link rel="preload" as="image" href="assets/doors/fire.webp">
+<link rel="preload" as="image" href="assets/doors/water.webp">
+<style>
+  /* ---------- Hero ---------- */
+  .hero { padding: clamp(2.25rem, 5vw, 4.5rem) 0 clamp(4.5rem, 9vw, 8rem); }
+  .hero-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6.2fr); gap: clamp(2rem, 5vw, 4.5rem); align-items: center; }
+  .hero-copy { display: grid; gap: 2rem; justify-items: start; }
+  .hero h1 > span { display: block; }
+  /* The full stops carry the palette; nothing else in the headline does. */
+  .stop-fire { color: var(--fire-text); } .stop-water { color: var(--water-text); } .stop-gold { color: var(--gold-text); }
+  .hero-actions { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+  /*
+   * Ember and water, like the two players. The secondary is tinted rather than
+   * filled so it stays second in rank: one saturated action per screen.
+   */
+  .btn-water { color: var(--water-text); background: color-mix(in srgb, var(--water) 16%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--water-text) 55%, transparent); }
+  .btn-water svg { transition: transform var(--settle) var(--ease); }
+  @media (hover: hover) and (pointer: fine) {
+    .btn-water:hover { background: color-mix(in srgb, var(--water) 26%, transparent); }
+    .btn-water:hover svg { transform: translateY(2px); }
+  }
+  .hero-meta { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; margin: 0; padding: 0; list-style: none; color: var(--faint); font-size: .875rem; }
+  .hero-meta li { display: inline-flex; align-items: center; gap: .5rem; }
+  .hero-meta svg { width: 1rem; height: 1rem; color: var(--moss-text); flex: none; }
+  /* The two ways to play lead the list, in the players' own colours. */
+  .hero-meta .mode { color: var(--ink); }
+  .hero-meta .mode b { font-weight: 700; margin-right: .25rem; }
+  .hero-meta .mode-local svg { color: var(--fire-text); }
+  .hero-meta .mode-online svg { color: var(--water-text); }
+  .hero-scene-wrap { position: relative; }
+  @media (max-width: 900px) {
+    .hero-grid { grid-template-columns: minmax(0, 1fr); }
+    .hero-scene-wrap { margin-inline: calc(-1 * min(var(--gutter), 1rem)); }
+  }
+
+  /* ---------- Sections ---------- */
+  /*
+   * Nav links land a section exactly under the sticky nav (4rem + its 1px
+   * border), and "How it plays" and "Netcode" are sized to fill the rest of the
+   * window, so a click shows the whole section and nothing of the next.
+   */
+  html { scroll-padding-top: 4.0625rem; }
+  section { scroll-margin-top: 0; }
+  .band { padding: clamp(4rem, 8vw, 7.25rem) 0; }
+  .band + .band { border-top: 1px solid var(--edge); }
+  .band-head { display: grid; gap: 1.125rem; margin-bottom: clamp(2.25rem, 4.5vw, 3.5rem); max-width: 44rem; }
+  @media (min-width: 900px) { #multiplayer .band-head, #between .band-head { max-width: none; } #multiplayer .t-title, #between .t-title { white-space: nowrap; } }
+  /*
+   * Short laptop screens only (under 56.25rem tall): the How it plays head goes
+   * title-left, lede-right, so the three cards and their demo controls still
+   * fit under the nav. Taller screens keep the roomy stacked layout.
+   */
+  /* 900-1000px-tall screens: a little less room above this one section, so
+     the demo's Pause and Replay stay on screen. Everything else keeps its air. */
+  @media (min-height: 810px) and (max-height: 900px) and (min-width: 900px) {
+    #multiplayer { padding-top: 3.75rem; }
+    #multiplayer .band-head { margin-bottom: 2.5rem; }
+  }
+  @media (max-height: 809px) and (min-width: 900px) {
+    #multiplayer { padding-top: 2rem; padding-bottom: 2.5rem; }
+    #multiplayer .band-head { margin-bottom: 1.5rem; }
+  }
+
+  /* How a game starts: a true sequence, so it is numbered. */
+
+
+  /* Watch and board */
+  .board .medal { width: 1.375rem; height: 1.375rem; border-radius: 50%; box-shadow: inset 0 0 0 1px #00000026, inset 0 -3px 0 #00000026; }
+  .board .medal.g { background: #f0ce7b; } .board .medal.s { background: #ded7cc; } .board .medal.b { background: #d6a686; }
+  /* Watch: the engine running a finish (shared/watch.js). */
+  .watch { position: relative; aspect-ratio: 16 / 9; border-radius: var(--radius-m); overflow: hidden; background: #000; box-shadow: 0 0 0 1px var(--window-edge); }
+  .watch img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .watch-hud { position: absolute; left: .75rem; top: .75rem; display: flex; gap: .375rem; pointer-events: none; }
+  .watch-hud span { padding: .3125rem .5625rem; border-radius: .4375rem; background: #0d0b09d9; color: #d9d0bf; font: 600 .75rem/1 var(--ui); box-shadow: inset 0 0 0 1px #3a3328; }
+  .watch-hud .t-data { font-family: var(--mono); }
+  .watch-done { position: absolute; left: 50%; bottom: 14%; transform: translate(-50%, .375rem); margin: 0; opacity: 0; white-space: nowrap; font: 600 clamp(1rem, 2.6vw, 1.5rem)/1 var(--inscription); letter-spacing: .08em; color: #ffcb00; text-shadow: 0 2px 0 #3d2c00, 0 0 1.25rem #ffcb0055; transition: opacity 300ms var(--ease-out), transform 300ms var(--ease-out); }
+  .watch[data-done] .watch-done { opacity: 1; transform: translate(-50%, 0); }
+  .watch-replay { position: absolute; right: .75rem; top: .75rem; display: inline-flex; align-items: center; gap: .4375rem; min-height: 2.125rem; padding: 0 .8125rem 0 .6875rem; border: 0; border-radius: 62.4375rem; background: #f2ece0; color: #1d1a13; font: 650 .8125rem/1 var(--ui); box-shadow: 0 2px 0 #00000059, 0 .375rem 1.25rem #00000080; }
+  .watch-replay svg { width: .875rem; height: .875rem; }
+  @media (hover: hover) and (pointer: fine) { .watch-replay:hover { background: #fff; } }
+  .watch .net-loading { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: #a99e8d; }
+  .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.75rem; }
+  .panel { padding: 1.75rem; border-radius: var(--radius-l); background: var(--surface); box-shadow: inset 0 0 0 1px var(--edge); display: grid; gap: 1rem; align-content: start; }
+  .live { color: var(--fire-text); }
+  .live .dot { animation: live 1.6s ease-in-out infinite; }
+  @keyframes live { 50% { opacity: .35; } }
+  .board { width: 100%; border-collapse: collapse; font-size: .9375rem; }
+  .board th { text-align: left; font: 600 .75rem/1 var(--ui); letter-spacing: .06em; text-transform: uppercase; color: var(--faint); padding: 0 .5rem .625rem; border-bottom: 1px solid var(--edge); }
+  .board td { padding: .75rem .5rem; border-bottom: 1px solid var(--edge); }
+  .board td:last-child, .board th:last-child { text-align: right; }
+  .board .t-data { font-size: .9375rem; }
+  .board tr.you td { background: color-mix(in srgb, var(--water) 10%, transparent); }
+  @media (max-width: 900px) { .pair { grid-template-columns: minmax(0, 1fr); } }
+
+  /* Closing */
+  .closing { text-align: center; display: grid; justify-items: center; gap: 1.5rem; }
+  .closing .emblem { width: 3.5rem; height: 3.5rem; }
+
+  @media (prefers-reduced-motion: reduce) { .pending .spin { animation-duration: 2.4s; } .live .dot { animation: none; } }
+</style>
+</head>
+<body>
+<header class="nav">
+  <div class="wrap nav-row">
+    <a class="brand" href="#top" aria-label="Fireboy and Watergirl, home">
+      <svg class="emblem" viewBox="0 0 48 48" aria-hidden="true"><path d="M23 4C24 15 9 17 9 29a14 14 0 0 0 14 14V30c-6-1-6-7-3-10 1 4 3 5 3 5V4Z"/><path d="M29 6c0 9 12 14 12 23a14 14 0 0 1-14 14V29c7-2 8-7 2-13V6Z"/></svg><span class="brand-text">Fireboy &amp; Watergirl</span></a>
+    <nav class="nav-links" aria-label="Sections">
+      <a href="#multiplayer">Online Multiplayer</a><a href="#between">Watch &amp; Compete</a><a href="developers/">For Developers</a>
+    </nav>
+    <div class="nav-end">
+      <div id="theme"></div>
+      <a class="btn btn-ghost btn-s" href="#/login" data-signin>Sign In</a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <h1 class="t-display">
+          <span>Two players<span class="stop-fire">.</span></span>
+          <span>Two places<span class="stop-water">.</span></span>
+          <span>One temple<span class="stop-gold">.</span></span>
+        </h1>
+        <p class="t-lede">The Forest Temple, the 2009 classic, now in your browser. Play as two on one computer, or online with a friend anywhere: invite them, choose who plays fire, and pick up where the two of you left off.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#/login" data-signin>Sign In to Play</a>
+          <a class="btn btn-water" href="#multiplayer">See Online Multiplayer
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12m0 0-5-5m5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+        </div>
+        <ul class="hero-meta">
+          <li class="mode mode-local"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="4" width="13" height="8.5" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4 7h.01M6.5 7h.01M9 7h.01M11.5 7h.01M5 9.8h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span><b>Local</b> 2 Players</span></li>
+          <li class="mode mode-online"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M1.8 8h12.4M8 1.8c1.8 1.8 2.6 3.9 2.6 6.2S9.8 12.4 8 14.2C6.2 12.4 5.4 10.3 5.4 8S6.2 3.6 8 1.8Z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span><b>Online</b> with a friend</span></li>
+        </ul>
+      </div>
+      <div class="hero-scene-wrap">
+        <div id="scene" class="scene" role="img" aria-label="Fireboy and Watergirl each run to their own door in the temple. Each door opens as its player arrives, and they climb out together once both doors are open."><img class="scene-wall" src="assets/wall.webp" alt="" width="1920" height="1440" fetchpriority="high"><div class="scene-shade"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="multiplayer" aria-labelledby="how-h">
+    <div class="wrap">
+      <div class="band-head">
+        <p class="t-eyebrow">Online Multiplayer</p>
+        <h2 class="t-title" id="how-h">From sign-in to level one, with a friend</h2>
+      </div>
+      <div class="journey" id="journey">
+        <ol class="steps">
+          <li class="step" data-state="active">
+            <div class="step-top"><span class="step-n"><span>1</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="step-state">Now</span></div>
+            <h3 class="t-heading">Sign In</h3>
+            <p class="t-body">Use Google, or an email address you confirm. Two-factor is there if you want it.</p>
+            <div class="vignette">
+              <button type="button" class="vg-btn" data-act="google"><svg viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92a8.78 8.78 0 0 0 2.68-6.62Z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.33-1.58-5.04-3.7H.96v2.33A9 9 0 0 0 9 18Z"/><path fill="#FBBC05" d="M3.96 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3-2.33Z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58A9 9 0 0 0 .96 4.95l3 2.33C4.67 5.16 6.66 3.58 9 3.58Z"/></svg>Continue with Google</button>
+              <div class="vg-or">or</div>
+              <label class="vg-field"><span>Email</span><input class="vg-input" data-act="email-input" type="text" inputmode="email" autocomplete="off" spellcheck="false" placeholder="you@example.com"></label>
+              <button type="button" class="vg-btn primary" data-act="email">Continue with email</button>
+              <p class="vg-note" data-note="1" role="status"></p>
+            </div>
+          </li>
+          <li class="step" data-state="upcoming">
+            <div class="step-top"><span class="step-n"><span>2</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="step-state">Next</span></div>
+            <h3 class="t-heading">Invite a friend, choose roles</h3>
+            <p class="t-body">Pick who plays Fireboy and who plays Watergirl before you send it, so nobody argues at the door.</p>
+            <div class="vignette">
+              <div class="friend"><span class="avatar" aria-hidden="true">SK</span><span class="who">sam_k<small>Online</small></span></div>
+              <div class="roles" data-you="fire" aria-live="polite"><span class="role-fill fill-fire" aria-hidden="true"></span><span class="role-fill fill-water" aria-hidden="true"></span><span class="role-label" data-slot="you">You: Fireboy</span><span class="role-label" data-slot="them">sam_k: Watergirl</span></div>
+              <button type="button" class="vg-btn" data-act="switch"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 7h11m0 0-3-3m3 3-3 3M16 13H5m0 0 3-3m-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>Switch characters</button>
+              <button type="button" class="vg-btn primary" data-act="invite" aria-disabled="true">Send invite</button>
+              <div class="pending" data-slot="pending" role="status">Sign in first.</div>
+            </div>
+          </li>
+          <li class="step" data-state="upcoming">
+            <div class="step-top"><span class="step-n"><span>3</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="step-state">Next</span></div>
+            <h3 class="t-heading">Play, and come back together</h3>
+            <p class="t-body">Progress belongs to the pair. Whichever of you invites next, you resume from the same level.</p>
+            <div class="vignette" data-slot="save"><div class="save-empty">Your pair save appears here when sam_k accepts.</div></div>
+          </li>
+        </ol>
+        <div class="journey-bar">
+          <p style="margin:0"><span class="demo-tag">Demo</span><span data-status aria-live="off"><b>Step 1 of 3:</b> Sign In</span></p>
+          <div class="journey-controls">
+            <button type="button" class="btn btn-ghost btn-s" data-pause aria-pressed="false" aria-disabled="true">Pause demo</button>
+            <button type="button" class="btn btn-ghost btn-s" data-replay>Replay demo</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="between" aria-labelledby="wb-h">
+    <div class="wrap">
+      <div class="band-head">
+        <p class="t-eyebrow">Watch &amp; Compete</p>
+        <h2 class="t-title" id="wb-h">Watch a friend's game, or chase their time</h2>
+      </div>
+      <div class="pair">
+        <div class="panel">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:.75rem">
+            <h3 class="t-heading">Watch</h3>
+            <span class="chip live"><span class="dot"></span>Live</span>
+          </div>
+          <div id="watch" class="watch">
+            <img src="assets/watch-poster.webp" alt="Fireboy and Watergirl walk to their doors on the last ledge of the first level; the doors open and both climb out" width="768" height="432" decoding="async" loading="lazy">
+            <div class="watch-hud" aria-hidden="true"><span>Watching ember &amp; tide</span><span class="t-data">Adventure 1</span></div>
+            <p class="watch-done" aria-hidden="true">Level complete</p>
+            <button type="button" class="watch-replay" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8a5 5 0 1 0 1.6-3.7M3 2.5v3h3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Replay</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3 class="t-heading">Leaderboard</h3>
+          <table class="board">
+            <caption class="sr-only">Fastest pairs, Adventure level 4</caption>
+            <thead><tr><th scope="col">Pair</th><th scope="col">Medal</th><th scope="col">Time</th></tr></thead>
+            <tbody>
+              <tr><td>ember &amp; tide</td><td><span class="medal g" style="display:inline-block;vertical-align:middle"></span></td><td class="t-data">0:41.08</td></tr>
+              <tr class="you"><td>you &amp; sam_k</td><td><span class="medal g" style="display:inline-block;vertical-align:middle"></span></td><td class="t-data">0:43.62</td></tr>
+              <tr><td>kiln &amp; brook</td><td><span class="medal s" style="display:inline-block;vertical-align:middle"></span></td><td class="t-data">0:58.15</td></tr>
+              <tr><td>ash &amp; rain</td><td><span class="medal b" style="display:inline-block;vertical-align:middle"></span></td><td class="t-data">1:12.90</td></tr>
+            </tbody>
+          </table>
+          <p class="t-body" style="font-size:.9375rem">Times are per pair, per level, written the moment a level is saved.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="end-h">
+    <div class="wrap closing">
+      <svg class="emblem" viewBox="0 0 48 48" aria-hidden="true"><path d="M23 4C24 15 9 17 9 29a14 14 0 0 0 14 14V30c-6-1-6-7-3-10 1 4 3 5 3 5V4Z"/><path d="M29 6c0 9 12 14 12 23a14 14 0 0 1-14 14V29c7-2 8-7 2-13V6Z"/></svg>
+      <h2 class="t-title" id="end-h">Find a friend and start at level one</h2>
+      <p class="t-lede">Two keyboards, two browsers, one save.</p>
+      <a class="btn btn-primary" href="#/login" data-signin>Sign In to Play</a>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-row">
+    <p style="max-width:34rem;margin:0">Fireboy &amp; Watergirl: The Forest Temple, rebuilt for online co-op. The original game, its art and its audio are by Oslo Albet, 2009. <a href="developers/">For Developers</a></p>
+    <p style="margin:0">Online multiplayer implemented by Jayan Sirikonda</p>
+  </div>
+</footer>
+
+<script type="module">
+  // The same call the app makes when it shows this page (shared/landing.js).
+  import { mountLanding } from "./shared/landing.js";
+  const landing = mountLanding(document, { autoplay: !new URLSearchParams(location.search).has("still") });
+  Object.assign(window, { scene: landing.scene, journey: landing.journey, watch: landing.watch });
+</script>
+</body>
+</html>

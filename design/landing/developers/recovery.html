@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recovery · For Developers</title>
+<meta name="description" content="How Fireboy and Watergirl was recovered from one compiled Flash file with no source code.">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="icon" href="../assets/icon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../assets/icon-180.png">
+<link rel="stylesheet" href="../shared/tokens.css">
+<link rel="stylesheet" href="../shared/base.css">
+<link rel="stylesheet" href="../shared/study.css">
+<link rel="stylesheet" href="../shared/rollback.css">
+<link rel="stylesheet" href="../shared/devsite.css">
+</head>
+<body>
+<header class="nav">
+  <div class="wrap nav-row">
+    <a class="brand" href="../" aria-label="Fireboy and Watergirl, home"><svg class="emblem" viewBox="0 0 48 48" aria-hidden="true"><path d="M23 4C24 15 9 17 9 29a14 14 0 0 0 14 14V30c-6-1-6-7-3-10 1 4 3 5 3 5V4Z"/><path d="M29 6c0 9 12 14 12 23a14 14 0 0 1-14 14V29c7-2 8-7 2-13V6Z"/></svg><span class="brand-text">Fireboy &amp; Watergirl</span></a>
+    <nav class="nav-links" aria-label="Site">
+      <a href="../#multiplayer">Online Multiplayer</a><a href="../#between">Watch &amp; Compete</a><a href="./" aria-current="page">For Developers</a>
+    </nav>
+    <div class="nav-end">
+      <div id="theme"></div>
+      <a class="btn btn-ghost btn-s" href="../#/login" data-signin>Sign In</a>
+    </div>
+  </div>
+</header>
+<nav class="devnav" aria-label="For Developers">
+  <div class="wrap devnav-row"><span class="devnav-label">For Developers</span><a href="./">Overview</a><a href="netcode.html">Netcode</a><a href="recovery.html" aria-current="page">Recovery</a><a href="architecture.html">Architecture</a></div>
+</nav>
+<main>
+
+  <section class="bytes-band" aria-labelledby="rc-h">
+    <div class="wrap">
+      <div class="recovery">
+        <div class="band-head" style="margin-bottom:0">
+          <p class="t-eyebrow">Recovery</p>
+          <h1 class="t-title" id="rc-h">Rebuilt from the original file, not remade</h1>
+          <p class="t-lede">There was no source code. Every level, sprite and sound here came out of one compiled Flash file from 2009, and the physics was ported line by line from the bytecode inside it.</p>
+        </div>
+        <pre class="manifest" aria-label="What was recovered from the original file"><span class="c"># Fireboy &amp; Watergirl - The Forest Temple.swf</span>
+<span class="k">format</span>   <span class="v">CWS v9</span>, 1,855,972 bytes
+<span class="k">levels</span>   <span class="v">32</span>   adventure 17 · puzzle 9 · speed 6
+<span class="k">sprites</span>  <span class="v">268</span>  shapes 460 · fonts 5
+<span class="k">sounds</span>   <span class="v">17</span>
+<span class="k">classes</span>  <span class="v">220</span>  ActionScript 3, ported to TypeScript
+<span class="c"># verified</span>
+<span class="ok">✓</span> all 32 levels pinned by digest
+<span class="ok">✓</span> 640,000 frames of soak, run twice, identical</pre>
+      </div>
+      <p class="bytes-intro">The first sixteen bytes of that file already say what it is:</p>
+      <div class="hex armed" id="hex">
+        <span class="b g1">43</span><span class="b g1">57</span><span class="b g1">53</span><span class="b g2">09</span><span class="b g3">AA</span><span class="b g3">E6</span><span class="b g3">23</span><span class="b g3">00</span><span class="b g4">78</span><span class="b g4">9C</span><span class="b fade">EC</span><span class="b fade">BD</span><span class="b fade">77</span><span class="b fade">7C</span><span class="b fade">54</span><span class="b fade">D5</span>
+        <span class="ascii">C</span><span class="ascii">W</span><span class="ascii">S</span><span class="ascii"></span><span class="ascii"></span><span class="ascii"></span><span class="ascii">#</span><span class="ascii"></span><span class="ascii">x</span><span class="ascii"></span><span class="ascii"></span><span class="ascii"></span><span class="ascii">w</span><span class="ascii">|</span><span class="ascii">T</span><span class="ascii"></span>
+        <p class="note g1 n1" style="--d:0ms"><b>CWS</b></p>
+        <p class="note g2 n2" style="--d:90ms"><b>9</b></p>
+        <p class="note g3 n3" style="--d:180ms"><b>2,352,810</b></p>
+        <p class="note g4 n4" style="--d:270ms"><b>zlib</b></p>
+        <p class="note n5" style="--d:360ms;color:#5a5245"><b style="color:#8f8573">…the game</b></p>
+      </div>
+      <dl class="legend">
+        <div class="g1"><dt>43 57 53 · “CWS”</dt><dd>A compressed Flash file.</dd></div>
+        <div class="g2"><dt>09</dt><dd>Flash Player 9, which means ActionScript 3.</dd></div>
+        <div class="g3"><dt>AA E6 23 00</dt><dd>2,352,810 bytes once inflated, stored little-endian.</dd></div>
+        <div class="g4"><dt>78 9C</dt><dd>A zlib stream: everything after this is the game, deflated.</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="i-h">
+    <div class="wrap">
+      <div class="band-head"><p class="t-eyebrow">What was inside</p><h2 class="t-title" id="i-h">A catalogue of one file</h2><p class="t-lede">Each entry is the real thing, extracted and redrawn, not a recreation.</p></div>
+      <div class="catalogue">
+        <article class="entry wide">
+          <div class="plinth"><div class="collage"><img src="../assets/levels/adventure-09.webp" alt="" width="640" height="480" loading="lazy"><img src="../assets/levels/puzzle-04.webp" alt="" width="640" height="480" loading="lazy"><img src="../assets/levels/speed-02.webp" alt="" width="640" height="480" loading="lazy"><img src="../assets/levels/adventure-15.webp" alt="" width="640" height="480" loading="lazy"></div></div>
+          <div class="entry-body"><span class="entry-no">01 · LEVELS</span><h3>Thirty-two levels</h3><p>Adventure 17, puzzle 9, speed 6. Each tile grid was decoded on its own and then checked against the collision shapes the engine builds from it.</p></div>
+        </article>
+        <article class="entry wide">
+          <div class="plinth"><div class="strip-rows">
+            <div class="filmstrip" id="fireStrip" aria-hidden="true"></div>
+            <div class="filmstrip" id="waterStrip" aria-hidden="true"></div>
+          </div></div>
+          <div class="entry-body"><span class="entry-no">02 · SPRITES</span><h3>Two run cycles</h3><p>Eight drawn frames each, played at the game's 26 frames per second. Two of 268 sprites and 460 vector shapes.</p></div>
+        </article>
+        <article class="entry">
+          <div class="plinth"><div class="filmstrip" id="doorStrip" aria-hidden="true"></div></div>
+          <div class="entry-body"><span class="entry-no">03 · ANIMATION</span><h3>The exit door</h3><p>Twenty-two frames of the door lifting on its stair. Every eighth-of-a-second of it is still vector art.</p></div>
+        </article>
+        <article class="entry">
+          <div class="plinth"><div class="wave" id="waves" aria-hidden="true"></div></div>
+          <div class="entry-body"><span class="entry-no">04 · SOUND</span><h3>Seventeen sounds</h3><p>Real waveforms of four of them, drawn from the extracted audio.</p></div>
+        </article>
+        <article class="entry">
+          <div class="plinth"><pre class="code"><span class="c">// Game.as, decompiled</span>
+<span class="k">m_level</span> = <span class="k">new</span> level(_loc3_, param2);
+trace(<span class="s">"COOL"</span>);
+<span class="k">m_level</span>.scaleX = <span class="n">0.8</span>;
+<span class="k">m_level</span>.scaleY = <span class="n">0.8</span>;
+<span class="k">m_level</span>.x += <span class="n">16</span>;
+<span class="k">m_level</span>.y += <span class="n">16</span>;</pre></div>
+          <div class="entry-body"><span class="entry-no">05 · CODE</span><h3>220 classes</h3><p>Ported line by line to TypeScript. 39 tiles × 20 px × 0.8 + 16 = 640: the stage size falls straight out of the original.</p></div>
+        </article>
+        <article class="entry wide">
+          <div class="plinth"><div class="fonts">
+            <div><span class="ins">Trajan Pro</span><span>menus · two cuts</span></div>
+            <div><span>Thayer Street NDP</span><span>level text</span></div>
+            <div><span>Solemnity</span><span>titles</span></div>
+            <div><span style="font-style:italic">Adine Kirnberg Script</span><span>credits</span></div>
+          </div></div>
+          <div class="entry-body"><span class="entry-no">06 · TYPE</span><h3>Five embedded fonts</h3><p>Named here, not shipped: they are licensed faces, so the rebuilt interface uses the reader's own system font and keeps the originals inside the game.</p></div>
+        </article>
+        <article class="entry wide">
+          <div class="plinth"><img src="../assets/wall.webp" alt="" width="1920" height="1440" loading="lazy" style="border-radius:.375rem;width:100%;height:auto;max-height:13.75rem;object-fit:cover"></div>
+          <div class="entry-body"><span class="entry-no">07 · BACKGROUND</span><h3>The temple wall</h3><p>The menu's backdrop: rows of paired doors, fire and water, which is the whole game in one picture.</p></div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="t-h">
+    <div class="wrap split">
+      <div class="band-head" style="margin-bottom:0"><p class="t-eyebrow">The tools</p><h2 class="t-title" id="t-h">Read once, cross-checked, then left alone</h2><p class="t-lede">Python that runs once and is not part of any build. Where it mattered, two independent readers had to agree.</p></div>
+      <ul class="list">
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b><code>swfabc.py</code>, <code>disasm.py</code></b>: the ActionScript bytecode's constant pool, classes and method bodies, and their operand shapes.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b><code>extract_levels.py</code></b> walks the if/else chain that builds each level, and is cross-checked against <b><code>parse_source_levels.py</code></b>, an independent path through the decompiled source.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b><code>export_assets.py</code></b>: every sprite as PNG and SVG, the 17 sounds, the 35 text fields and the button states.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b><code>as3_to_ts.py</code>, <code>gen_game.py</code></b>: Box2DFlash 2.0.2 and the game's own classes, transliterated into TypeScript the engine compiles.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <div class="wrap next-page"><a href="netcode.html">← Netcode</a><a href="architecture.html">Architecture →</a></div>
+</main>
+<footer class="footer">
+  <div class="wrap footer-row">
+    <p style="max-width:34rem;margin:0">Fireboy &amp; Watergirl: The Forest Temple, rebuilt for online co-op. The original game, its art and its audio are by Oslo Albet, 2009. <a href="../">Back to the game</a></p>
+    <p style="margin:0">Online multiplayer implemented by Jayan Sirikonda</p>
+  </div>
+</footer>
+<script type="module">
+  import { still, reduceMotion } from "../shared/site.js";
+  // Imported, not written as strings: the build then ships each file and
+  // gives this script its hashed address.
+  import fireRun from "../assets/sprites/fire-run.webp";
+  import waterRun from "../assets/sprites/water-run.webp";
+  import waterDoor from "../assets/doors/water.webp";
+  import waves from "../assets/waveforms.json";
+  const hex = document.getElementById("hex");
+  if (reduceMotion || still) hex.classList.remove("armed");
+  else { const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { io.disconnect(); hex.classList.add("shown"); } }, { threshold: 0.6 }); io.observe(hex); }
+  // Filmstrips: show every drawn frame (or every third door frame) side by side.
+  const strip = (id, src, n, w, h, pick) => {
+    document.getElementById(id).innerHTML = pick.map((i) =>
+      `<span class="frame" style="--n:${n};--ar:${w}/${h};background-image:url(${src});background-position:${(i / (n - 1)) * 100}% 0"></span>`).join("");
+  };
+  strip("fireStrip", fireRun, 8, 205, 162, [0, 1, 2, 3, 4, 5, 6, 7]);
+  strip("waterStrip", waterRun, 8, 225, 186, [0, 1, 2, 3, 4, 5, 6, 7]);
+  strip("doorStrip", waterDoor, 22, 237, 253, [0, 4, 8, 12, 16, 21]);
+
+  document.getElementById("waves").innerHTML = Object.entries(waves).map(([name, { peaks, seconds }]) => {
+    const w = 240, h = 30, bw = w / peaks.length;
+    const d = peaks.map((p, i) => { const ph = Math.max(1, p * h); return `M${(i * bw).toFixed(2)} ${((h - ph) / 2).toFixed(2)}h${(bw * .7).toFixed(2)}v${ph.toFixed(2)}h-${(bw * .7).toFixed(2)}Z`; }).join("");
+    return `<div class="wave-row"><span>${name.replace("_Sound", "").replace(/1$/, "")}</span><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${d}"/></svg><span>${seconds.toFixed(2)}s</span></div>`;
+  }).join("");
+
+</script>
+</body>
+</html>

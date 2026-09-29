@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Netcode · For Developers</title>
+<meta name="description" content="Rollback netcode in the recovered Fireboy and Watergirl engine, running live.">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="icon" href="../assets/icon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../assets/icon-180.png">
+<link rel="stylesheet" href="../shared/tokens.css">
+<link rel="stylesheet" href="../shared/base.css">
+<link rel="stylesheet" href="../shared/study.css">
+<link rel="stylesheet" href="../shared/rollback.css">
+<link rel="stylesheet" href="../shared/devsite.css">
+</head>
+<body>
+<header class="nav">
+  <div class="wrap nav-row">
+    <a class="brand" href="../" aria-label="Fireboy and Watergirl, home"><svg class="emblem" viewBox="0 0 48 48" aria-hidden="true"><path d="M23 4C24 15 9 17 9 29a14 14 0 0 0 14 14V30c-6-1-6-7-3-10 1 4 3 5 3 5V4Z"/><path d="M29 6c0 9 12 14 12 23a14 14 0 0 1-14 14V29c7-2 8-7 2-13V6Z"/></svg><span class="brand-text">Fireboy &amp; Watergirl</span></a>
+    <nav class="nav-links" aria-label="Site">
+      <a href="../#multiplayer">Online Multiplayer</a><a href="../#between">Watch &amp; Compete</a><a href="./" aria-current="page">For Developers</a>
+    </nav>
+    <div class="nav-end">
+      <div id="theme"></div>
+      <a class="btn btn-ghost btn-s" href="../#/login" data-signin>Sign In</a>
+    </div>
+  </div>
+</header>
+<nav class="devnav" aria-label="For Developers">
+  <div class="wrap devnav-row"><span class="devnav-label">For Developers</span><a href="./">Overview</a><a href="netcode.html" aria-current="page">Netcode</a><a href="recovery.html">Recovery</a><a href="architecture.html">Architecture</a></div>
+</nav>
+<main>
+
+  <div class="wrap dev-hero">
+    <p class="t-eyebrow">Netcode</p>
+    <h1 class="t-display" style="font-size:clamp(2.2rem,4.6vw,3.6rem)">Your character moves on the next frame, even online</h1>
+    <p class="t-lede">Your keypress is played at once. Your friend's is predicted, and if the prediction was wrong the game rewinds and replays the few frames between, faster than one frame takes to draw. Below is the real game engine doing it, at a quarter speed: your screen as Fireboy, while sam_k plays Watergirl somewhere else.</p>
+  </div>
+  <div class="wrap"><div id="net"></div></div>
+
+  <section class="band" style="margin-top:clamp(1.5rem,4vw,3rem)" aria-labelledby="w-h">
+    <div class="wrap">
+      <div class="band-head"><p class="t-eyebrow">What to watch for</p><h2 class="t-title" id="w-h">Three moments, in order</h2></div>
+      <div class="cards3">
+        <div class="devcard"><h3 class="t-heading">f104 to f111: the guess</h3><p>sam_k's frames past the dashed line are outlined: guesses, "whatever sam_k did last". On your screen Watergirl runs on toward the lava while the ring shows her really jumping.</p></div>
+        <div class="devcard"><h3 class="t-heading">f112: the correction</h3><p>The input for f108 arrives: jump, not run. The engine restores the snapshot at f104 and replays 8 frames in 0.32 ms. She is in the air, where she has been all along.</p></div>
+        <div class="devcard"><h3 class="t-heading">f114: the second one</h3><p>Releasing jump is also a change, so it is also mispredicted. Every change of input costs one correction; holding a key costs none, which is why the guess is so often right.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="why-h">
+    <div class="wrap net-grid">
+      <div>
+        <div class="band-head" style="margin-bottom:0"><p class="t-eyebrow">Why rollback</p><h2 class="t-title" id="why-h">Rewinding is cheaper than waiting</h2>
+          <p class="t-lede">Lockstep waits until both players' input has arrived before it draws a frame. Rollback draws yours immediately and fixes the rare frames it guessed wrong.</p></div>
+        <dl class="facts">
+          <div class="fact"><dt class="t-data">0.04 ms</dt><dd>to re-simulate one frame, against a 38.5 ms frame budget.</dd></div>
+          <div class="fact"><dt class="t-data">4.7 ms</dt><dd>to capture a snapshot: a hundred times dearer, so there is one, not one per frame.</dd></div>
+          <div class="fact"><dt class="t-data">1.4 MB</dt><dd>of memory for that single snapshot, refreshed every ~8 settled frames, instead of 17 MB.</dd></div>
+        </dl>
+      </div>
+      <figure class="delay" style="margin:0">
+        <h3 class="t-heading">Time from keypress to movement</h3>
+        <p>Measured in this build, at the game's 26 frames per second.</p>
+        <div class="ruler">
+          <div class="lane"><span class="lane-name">Lockstep<small>5 frames · 192 ms</small></span><div class="track"><span class="bar bar-lock">192</span></div></div>
+          <div class="lane"><span class="lane-name">Rollback<small>1 frame · 38 ms</small></span><div class="track"><span class="bar bar-roll">38</span></div></div>
+          <div class="ticks" aria-hidden="true"><span></span><ol><li>0</li><li>1</li><li>2</li><li>3</li><li>4</li><li>5</li><li>6</li><li>7</li><li>8</li></ol></div>
+        </div>
+        <figcaption class="delay-note">Frames, at 38.5 ms each.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="wire-h">
+    <div class="wrap split">
+      <div class="band-head" style="margin-bottom:0"><p class="t-eyebrow">The wire</p><h2 class="t-title" id="wire-h">No acknowledgements, no retransmission, no ordering</h2></div>
+      <ul class="list">
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Three bits per player per frame.</b> Left, right, up. Nothing else crosses the network during play: the world is recomputed on each side from the inputs alone.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Every packet repeats the last 16 frames.</b> A packet is about 34 bytes and a session about 700 bytes a second, and a lost packet costs nothing because the next one carries the same frames.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>An unreliable, unordered data channel.</b> Retransmission would hold newer input behind older input that no longer matters; head-of-line blocking is the one thing this cannot afford.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>An epoch on every packet.</b> A retry restarts the frame count at zero; without a generation number, in-flight input from the old level would be replayed as real input in the new one.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="p-h">
+    <div class="wrap paths">
+      <div>
+        <div class="band-head" style="margin-bottom:1.75rem"><p class="t-eyebrow">Connection</p><h2 class="t-title" id="p-h">Direct when it can be, relayed when it can't</h2></div>
+        <ul class="tiers">
+          <li><i style="background:var(--moss-text)"></i><div><b>Direct</b><span>A WebRTC data channel between the two browsers. Most pairs play here, at no server cost.</span></div></li>
+          <li><i style="background:var(--gold-text)"></i><div><b>Relay</b><span>If a network refuses direct connections, the same channel goes through a TURN relay, with short-lived credentials from a signed-in session.</span></div></li>
+          <li><i style="background:var(--faint)"></i><div><b>Fallback</b><span>If neither connects, gameplay continues over the realtime channel that already carries invitations and presence, batched every 230 ms.</span></div></li>
+        </ul>
+      </div>
+      <svg viewBox="0 0 560 300" role="img" aria-label="Diagram: two browsers connected directly, through a relay, or through the realtime fallback">
+        <defs><marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 8 4 0 8Z" fill="currentColor"/></marker></defs>
+        <rect class="node" x="10" y="110" width="140" height="80" rx="14" stroke-width="1.5"/>
+        <text class="lbl" x="80" y="146" text-anchor="middle">You</text><text class="sub" x="80" y="167" text-anchor="middle">Fireboy</text>
+        <rect class="node" x="410" y="110" width="140" height="80" rx="14" stroke-width="1.5"/>
+        <text class="lbl" x="480" y="146" text-anchor="middle">sam_k</text><text class="sub" x="480" y="167" text-anchor="middle">Watergirl</text>
+        <g style="color:var(--moss-text)"><path class="p1" d="M150 150H410" stroke-width="3" fill="none" marker-end="url(#ar)" marker-start="url(#ar)"/><text class="ptext" x="280" y="140" text-anchor="middle" fill="currentColor">direct</text></g>
+        <g style="color:var(--gold-text)"><path class="p2" d="M120 110C150 40 410 40 440 110" stroke-width="2" stroke-dasharray="7 6" fill="none" marker-end="url(#ar)" marker-start="url(#ar)"/><rect class="node" x="222" y="28" width="116" height="34" rx="9" stroke-width="1.2"/><text class="sub" x="280" y="50" text-anchor="middle">TURN relay</text></g>
+        <g style="color:var(--faint)"><path class="p3" d="M120 190C150 260 410 260 440 190" stroke-width="2" stroke-dasharray="2 6" stroke-linecap="round" fill="none" marker-end="url(#ar)" marker-start="url(#ar)"/><rect class="node" x="204" y="238" width="152" height="34" rx="9" stroke-width="1.2"/><text class="sub" x="280" y="260" text-anchor="middle">realtime fallback</text></g>
+      </svg>
+    </div>
+  </section>
+
+  <div class="wrap next-page"><a href="./">← Overview</a><a href="recovery.html">Recovery →</a></div>
+</main>
+<footer class="footer">
+  <div class="wrap footer-row">
+    <p style="max-width:34rem;margin:0">Fireboy &amp; Watergirl: The Forest Temple, rebuilt for online co-op. The original game, its art and its audio are by Oslo Albet, 2009. <a href="../">Back to the game</a></p>
+    <p style="margin:0">Online multiplayer implemented by Jayan Sirikonda</p>
+  </div>
+</footer>
+<script type="module">
+  import { still, reduceMotion } from "../shared/site.js";
+  import { createNetDemo } from "../shared/netdemo.js";
+  window.rb = createNetDemo(document.getElementById("net"), { autoplay: !still });
+</script>
+</body>
+</html>

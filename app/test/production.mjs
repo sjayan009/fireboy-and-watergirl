@@ -137,13 +137,28 @@ try {
   });
 
   console.log("the built app, served as static files");
+  // The bare address, signed out, is the landing page, and its Sign In is the
+  // way to the form.
   await page.goto(URL_, { waitUntil: "load" });
+  await page.waitForSelector("#scene", { timeout: 40000 });
+  check("the bare address shows the landing page", true, true);
+  await page.click('.nav a[href="#/login"]');
+  await page.waitForSelector("input[type=email]", { timeout: 40000 });
+  check("and its Sign In reaches the form", await page.evaluate(() => location.hash), "#/login");
+  await page.goto(URL_ + "#/login", { waitUntil: "load" });
   await page.waitForSelector("input[type=email]", { timeout: 40000 });
   await page.fill("input[type=email]", email);
   await page.fill("input[type=password]", password);
   await page.click("button[type=submit]");
   await page.waitForSelector("#stage", { timeout: 40000 });
   check("signs in and reaches the game", true, true);
+
+  // Signed in, the same bare address skips the landing page for the game.
+  await page.goto(URL_, { waitUntil: "load" });
+  await page.waitForFunction(() => location.hash === "#/play", null, { timeout: 40000 });
+  await page.waitForSelector("#stage", { timeout: 40000 });
+  check("signed in, the bare address goes straight to /play",
+        await page.evaluate(() => !!document.querySelector("#scene")), false);
 
   // No __fbwg here, so the art is waited for by watching the canvas settle.
   const paint = () => page.evaluate(() => {

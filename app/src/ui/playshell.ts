@@ -39,6 +39,8 @@ export class PlayShell {
     actions: HTMLElement[]; input: (enabled: boolean) => void;
     onPanel?: (panel: Panel, changed: boolean) => void; watching?: boolean;
     primaryAction?: HTMLElement;
+    /** The pair's link state, shown beside the sound and fullscreen controls. */
+    connection?: HTMLElement;
   }) {
     this.screen = el("div", { class: "screen" }, options.canvas);
     const close = el("button", { class: "ghost close-panel", "aria-label": "Close panel", title: "Close panel (Escape)" }, "×");
@@ -84,10 +86,14 @@ export class PlayShell {
         el("div", { class: "play-identity" }, emblem(),
           el("div", { class: "identity-copy" }, el("strong", { class: "game-title" }, "Fireboy & Watergirl"),
             el("div", { class: "identity-detail" }, copy, options.status))),
-        this.friendButton, this.boardButton, options.mute, this.full, this.menuButton, options.primaryAction),
+        this.friendButton, this.boardButton, this.menuButton, options.primaryAction),
       el("div", { class: "play-workspace" }, this.viewport, this.drawer, this.notices),
+      // Sound and fullscreen change the screen, not the session, so they sit
+      // under the screen they change, opposite "Saved": the footer is the
+      // game's own status bar, the toolbar is for the social panels.
       el("footer", { class: "play-footer" }, this.saveStatus,
-        el("span", { class: "focus-hint", id: "play-keys" }, options.watching ? "Watching together · The players have the controls" : "Click the game to play · Arrows / W A D · P pauses")), this.toast);
+        el("span", { class: "focus-hint", id: "play-keys" }, options.watching ? "Watching together · The players have the controls" : "Click the game to play · Arrows / W A D · P pauses"),
+        el("div", { class: "footer-controls" }, ...(options.connection ? [options.connection] : []), options.mute, this.full)), this.toast);
     host.append(this.root);
     this.off.push(on(this.friendButton, "click", () => this.toggle("friends")),
       on(this.boardButton, "click", () => this.toggle("leaderboard")),
