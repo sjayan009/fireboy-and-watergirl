@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture · For Developers</title>
+<meta name="description" content="The architecture of the recovered Fireboy and Watergirl: determinism, security and testing.">
+<script>try{var q=new URLSearchParams(location.search).get('theme'),p=q||localStorage.getItem('fbwg.theme.v2')||'dark',d=p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=d?'dark':'light';document.documentElement.dataset.themePref=p}catch(e){}</script>
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="icon" href="../assets/icon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../assets/icon-180.png">
+<link rel="stylesheet" href="../shared/tokens.css">
+<link rel="stylesheet" href="../shared/base.css">
+<link rel="stylesheet" href="../shared/study.css">
+<link rel="stylesheet" href="../shared/rollback.css">
+<link rel="stylesheet" href="../shared/devsite.css">
+</head>
+<body>
+<header class="nav">
+  <div class="wrap nav-row">
+    <a class="brand" href="../" aria-label="Fireboy and Watergirl, home"><svg class="emblem" viewBox="0 0 48 48" aria-hidden="true"><path d="M23 4C24 15 9 17 9 29a14 14 0 0 0 14 14V30c-6-1-6-7-3-10 1 4 3 5 3 5V4Z"/><path d="M29 6c0 9 12 14 12 23a14 14 0 0 1-14 14V29c7-2 8-7 2-13V6Z"/></svg><span class="brand-text">Fireboy &amp; Watergirl</span></a>
+    <nav class="nav-links" aria-label="Site">
+      <a href="../#multiplayer">Online Multiplayer</a><a href="../#between">Watch &amp; Compete</a><a href="./" aria-current="page">For Developers</a>
+    </nav>
+    <div class="nav-end">
+      <div id="theme"></div>
+      <a class="btn btn-ghost btn-s" href="https://fireboy-and-watergirl-official.vercel.app/#/login" data-signin>Sign In</a>
+    </div>
+  </div>
+</header>
+<nav class="devnav" aria-label="For Developers">
+  <div class="wrap devnav-row"><span class="devnav-label">For Developers</span><a href="./">Overview</a><a href="netcode.html">Netcode</a><a href="recovery.html">Recovery</a><a href="architecture.html" aria-current="page">Architecture</a></div>
+</nav>
+<main>
+
+  <div class="wrap dev-hero">
+    <p class="t-eyebrow">Architecture</p>
+    <h1 class="t-display" style="font-size:clamp(2.2rem,4.6vw,3.6rem)">The simulation is a pure function of its inputs</h1>
+    <p class="t-lede">Same level, same inputs, same world, on every browser engine. Almost everything else in the design is bought with that one property.</p>
+  </div>
+
+  <section class="band" style="padding-top:0" aria-labelledby="s-h">
+    <div class="wrap split">
+      <div class="band-head" style="margin-bottom:0"><p class="t-eyebrow">The system</p><h2 class="t-title" id="s-h">Five things run; two are always on</h2></div>
+      <ul class="list">
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>The browser</b> holds the simulation: the ported engine, the renderer, and an outbox for progress that survives a closed tab.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>The pair's own connection</b> carries the game itself, and touches none of the servers below.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Supabase</b> holds identity, friendships and progress, behind row level security, with Realtime for presence and invitations.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>A CDN</b> holds the static bytes: the bundle and the extracted art.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>A replay verifier</b> can re-execute a submitted run in isolated worker threads, so a ranked time means something. It is built and tested, and switched off until an operator enables a build.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="d-h">
+    <div class="wrap">
+      <div class="band-head"><p class="t-eyebrow">Determinism</p><h2 class="t-title" id="d-h">What it buys</h2></div>
+      <table class="sheet">
+        <caption class="sr-only">What determinism enables</caption>
+        <tbody>
+          <tr><th scope="row">Same inputs, same world</th><td>3 bits</td><td>The netcode exchanges inputs, never state.</td></tr>
+          <tr><th scope="row">Replaying is cheap and exact</th><td>Rollback</td><td>Rewind, re-simulate, correct before anyone sees it.</td></tr>
+          <tr><th scope="row">A third party can re-derive a result</th><td>Verifier</td><td>And therefore a leaderboard that cannot be typed into.</td></tr>
+          <tr><th scope="row">A watcher fed the inputs sees the same world</th><td>Spectating</td><td>Watching costs the two players nothing to compute.</td></tr>
+          <tr><th scope="row">A digest pins a level</th><td>32 digests</td><td>CI catches a physics change nobody intended.</td></tr>
+        </tbody>
+      </table>
+      <div class="split" style="margin-top:clamp(2rem,4vw,3rem)">
+        <div class="band-head" style="margin-bottom:0"><h3 class="t-heading">Four silent hazards, each with its own machinery</h3><p class="t-body">Each one diverges without an error, which is what makes it dangerous.</p></div>
+        <ul class="list limits">
+          <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5 14.5 13.5h-13Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 7v3M8 11.8v.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span><b>Trigonometry.</b> <code>Math.sin</code>, <code>cos</code> and <code>atan2</code> may differ in the last bits between engines, so the physics uses its own deterministic versions.</span></li>
+          <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5 14.5 13.5h-13Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 7v3M8 11.8v.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span><b>Scenery randomness.</b> The level calls <code>Math.random()</code> for fireflies and tile variants. It never touched physics, but two peers saw different levels; it is now seeded from the level.</span></li>
+          <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5 14.5 13.5h-13Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 7v3M8 11.8v.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span><b>Float comparison.</b> The state hash covers the exact IEEE-754 bits of every value, because rounding first would hide the one-ulp drift being hunted.</span></li>
+          <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5 14.5 13.5h-13Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 7v3M8 11.8v.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span><b>Effects outside the simulation.</b> Sound and save writes happen on a frame's first run only; a replayed frame must be silent.</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="sec-h">
+    <div class="wrap split">
+      <div class="band-head" style="margin-bottom:0"><p class="t-eyebrow">Security</p><h2 class="t-title" id="sec-h">The gate is on the data, not the download</h2><p class="t-lede">The bundle and the art are public static files. What is protected is every row of anybody's data.</p></div>
+      <ul class="list">
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Row level security everywhere.</b> Data policies require a profile and a satisfied assurance level, so an account that has not finished signing up, or answered its second factor, reaches no one's rows.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Two-factor, enforced in the database.</b> Ten single-use recovery codes, hashed and shown once.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Per-attempt scoping.</b> Every message is tagged with its connection attempt, so delayed input from a superseded attempt is dropped before it is decoded.</span></li>
+        <li><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Untrusted replays run in a sandbox.</b> A fresh worker thread, an empty environment, a memory cap, a deadline and no database handle.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="test-h">
+    <div class="wrap">
+      <div class="band-head"><p class="t-eyebrow">Testing</p><h2 class="t-title" id="test-h">What is actually proved</h2></div>
+      <table class="sheet">
+        <caption class="sr-only">Test coverage</caption>
+        <tbody>
+          <tr><th scope="row">Simulation</th><td>32 digests</td><td>Every level pinned; snapshot round-trips on each; a 640,000-frame soak run twice and compared.</td></tr>
+          <tr><th scope="row">Cross-engine</th><td>3 engines</td><td>V8, SpiderMonkey and JavaScriptCore agree after 600 frames.</td></tr>
+          <tr><th scope="row">Netcode</th><td>192 cases</td><td>Latency, jitter, loss, mode and input pattern; damaged, duplicated and stale packets; a hostile peer.</td></tr>
+          <tr><th scope="row">Rendering</th><td>Per level</td><td>A perceptual signature, so a mask that stops clipping is caught.</td></tr>
+          <tr><th scope="row">Database</th><td>RLS</td><td>Policies from a third account, races run in parallel, ordering fuzz.</td></tr>
+          <tr><th scope="row">The app</th><td>Browsers</td><td>Emailed links, username rules, two-factor, Google, and two people playing.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <div class="wrap next-page"><a href="recovery.html">← Recovery</a><a href="../">Back to the game →</a></div>
+</main>
+<footer class="footer">
+  <div class="wrap footer-row">
+    <p style="max-width:34rem;margin:0">Fireboy &amp; Watergirl: The Forest Temple, rebuilt for online co-op. The original game, its art and its audio are by Oslo Albet, 2009. <a href="../">Back to the game</a></p>
+    <p style="margin:0">Online multiplayer implemented by Jayan Sirikonda</p>
+  </div>
+</footer>
+<script type="module">
+  import { still, reduceMotion } from "../shared/site.js";
+</script>
+</body>
+</html>

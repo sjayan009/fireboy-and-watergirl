@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Fireboy and Watergirl">
+  <!--
+    The paired glyph from ui/brand.ts, given the ground it needs at 16px.
+
+    The toolbar mark is two thin shapes on whatever happens to be behind them,
+    which in a light browser tab is white: an ember and a pool, both nearly
+    invisible. On its own tile it reads at every size, and the tile is the
+    page's own near-black, so the icon looks like the thing it opens.
+
+    The colours are literal here rather than the fire and water custom
+    properties. A favicon renders outside the document, with no custom
+    properties to inherit, and an unknown var() resolves to nothing at all.
+  -->
+  <rect width="64" height="64" rx="14" fill="#14110E"/>
+  <rect x="0.5" y="0.5" width="63" height="63" rx="13.5" fill="none" stroke="#342E24"/>
+  <g transform="translate(3.8 5.5) scale(1.128)">
+    <path d="M23 4C24 15 9 17 9 29a14 14 0 0 0 14 14V30c-6-1-6-7-3-10 1 4 3 5 3 5V4Z" fill="#FF865B"/>
+    <path d="M29 6c0 9 12 14 12 23a14 14 0 0 1-14 14V29c7-2 8-7 2-13V6Z" fill="#75D5EB"/>
+  </g>
+</svg>
