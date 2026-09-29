@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recovery · For Developers</title>
 <meta name="description" content="How Fireboy and Watergirl was recovered from one compiled Flash file with no source code.">
-<script>try{var q=new URLSearchParams(location.search).get('theme'),p=q||localStorage.getItem('fbwg.theme.v2')||'dark',d=p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=d?'dark':'light';document.documentElement.dataset.themePref=p}catch(e){}</script>
 <link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
 <link rel="icon" href="../assets/icon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="../assets/icon-180.png">
@@ -24,7 +23,7 @@
     </nav>
     <div class="nav-end">
       <div id="theme"></div>
-      <a class="btn btn-ghost btn-s" href="https://fireboy-and-watergirl-official.vercel.app/#/login" data-signin>Sign In</a>
+      <a class="btn btn-ghost btn-s" href="../#/login" data-signin>Sign In</a>
     </div>
   </div>
 </header>
@@ -141,9 +140,13 @@ trace(<span class="s">"COOL"</span>);
   </div>
 </footer>
 <script type="module">
-  import { still, reduceMotion, afterFirstPaint } from "../shared/site.js";
-  // The catalogue's names are set in Cinzel; fetched after load so it never holds up first paint.
-  afterFirstPaint("https://fonts.googleapis.com/css2?family=Cinzel:wght@600&display=swap");
+  import { still, reduceMotion } from "../shared/site.js";
+  // Imported, not written as strings: the build then ships each file and
+  // gives this script its hashed address.
+  import fireRun from "../assets/sprites/fire-run.webp";
+  import waterRun from "../assets/sprites/water-run.webp";
+  import waterDoor from "../assets/doors/water.webp";
+  import waves from "../assets/waveforms.json";
   const hex = document.getElementById("hex");
   if (reduceMotion || still) hex.classList.remove("armed");
   else { const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { io.disconnect(); hex.classList.add("shown"); } }, { threshold: 0.6 }); io.observe(hex); }
@@ -152,11 +155,10 @@ trace(<span class="s">"COOL"</span>);
     document.getElementById(id).innerHTML = pick.map((i) =>
       `<span class="frame" style="--n:${n};--ar:${w}/${h};background-image:url(${src});background-position:${(i / (n - 1)) * 100}% 0"></span>`).join("");
   };
-  strip("fireStrip", "../assets/sprites/fire-run.webp", 8, 205, 162, [0, 1, 2, 3, 4, 5, 6, 7]);
-  strip("waterStrip", "../assets/sprites/water-run.webp", 8, 225, 186, [0, 1, 2, 3, 4, 5, 6, 7]);
-  strip("doorStrip", "../assets/doors/water.webp", 22, 237, 253, [0, 4, 8, 12, 16, 21]);
+  strip("fireStrip", fireRun, 8, 205, 162, [0, 1, 2, 3, 4, 5, 6, 7]);
+  strip("waterStrip", waterRun, 8, 225, 186, [0, 1, 2, 3, 4, 5, 6, 7]);
+  strip("doorStrip", waterDoor, 22, 237, 253, [0, 4, 8, 12, 16, 21]);
 
-  const waves = await fetch("../assets/waveforms.json").then((r) => r.json());
   document.getElementById("waves").innerHTML = Object.entries(waves).map(([name, { peaks, seconds }]) => {
     const w = 240, h = 30, bw = w / peaks.length;
     const d = peaks.map((p, i) => { const ph = Math.max(1, p * h); return `M${(i * bw).toFixed(2)} ${((h - ph) / 2).toFixed(2)}h${(bw * .7).toFixed(2)}v${ph.toFixed(2)}h-${(bw * .7).toFixed(2)}Z`; }).join("");

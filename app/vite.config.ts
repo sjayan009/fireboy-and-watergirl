@@ -119,7 +119,11 @@ export default defineConfig(({ command }) => ({
   resolve: {
     // The compiled engine, so the app gets its types as well as its code.
     // `npm run build` at the repo root builds the engine first.
-    alias: { "@engine": resolve(ROOT, "engine/dist") },
+    alias: {
+      "@engine": resolve(ROOT, "engine/dist"),
+      // The landing page for signed-out visitors (screens/landing.ts).
+      "@landing": resolve(ROOT, "design/landing"),
+    },
   },
   build: {
     /**

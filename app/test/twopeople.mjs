@@ -117,7 +117,7 @@ const server = await startVite();
 
 /** Sign in and claim a username, exactly as a person would. */
 async function signIn(page, user) {
-  await page.goto(URL_, { waitUntil: "load" });
+  await page.goto(URL_ + "#/login", { waitUntil: "load" });
   await page.waitForSelector("input[type=email]", { timeout: 30000 });
   await page.fill("input[type=email]", user.email);
   await page.fill("input[type=password]", user.password);
