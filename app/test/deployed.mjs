@@ -76,7 +76,7 @@ check("supabase is reachable under the csp",
 check("X-Frame-Options", h(root, "x-frame-options"), "DENY");
 check("X-Content-Type-Options", h(root, "x-content-type-options"), "nosniff");
 check("Referrer-Policy", h(root, "referrer-policy"), "no-referrer");
-check("X-Robots-Tag", h(root, "x-robots-tag"), "noindex, nofollow");
+check("the landing page may be indexed", h(root, "x-robots-tag"), null);
 check("camera and mic are denied outright",
       (h(root, "permissions-policy") ?? "").includes("camera=()"), true);
 
@@ -86,12 +86,15 @@ check("the page itself revalidates",
       (h(root, "cache-control") ?? "").includes("max-age=0"), true);
 
 const robots = await fetch(`${SITE}/robots.txt`);
-check("robots.txt disallows everything",
-      (await robots.text()).includes("Disallow: /"), true);
+const robotsText = await robots.text();
+check("robots.txt keeps the extracted art out of search",
+      robotsText.includes("Disallow: /extracted/"), true);
+check("and nothing more", /Disallow:\s*\/\s*$/m.test(robotsText), false);
 
 const IMMUTABLE = "public, max-age=31536000, immutable";
 const manifest = await fetch(`${SITE}/extracted/assets/sprites.json`);
 check("the art is cached immutably", h(manifest, "cache-control"), IMMUTABLE);
+check("and kept out of search", h(manifest, "x-robots-tag"), "noindex, nofollow");
 
 const sprites = await manifest.json();
 check("the manifest says webp", sprites.raster, "webp");

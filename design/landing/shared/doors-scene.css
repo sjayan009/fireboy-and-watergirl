@@ -1,0 +1,98 @@
+/*
+ * The two-doors scene. Laid out on a 640 x 500 design grid and scaled by
+ * container width, so every sprite keeps its measured proportion at any size:
+ *   --u    one design pixel
+ *   k      .7 for doors and idle poses (4x rasters, so .7 of 4x = 2.8x game scale)
+ *   .9k    for run frames, from the eye-area match: idle 299 px^2, run 367 px^2
+ */
+.scene {
+  container-type: inline-size;
+  position: relative; aspect-ratio: 640 / 500; overflow: hidden; isolation: isolate;
+  background: var(--window); border-radius: var(--radius-l);
+  box-shadow: 0 0 0 1px var(--window-edge), var(--shadow-lift);
+  user-select: none;
+}
+.scene * { position: absolute; }
+.scene-wall { inset: -5%; width: 110%; height: 110%; max-width: none; object-fit: cover; object-position: 50% 70%; filter: saturate(.9) brightness(.62); }
+.scene-shade {
+  inset: 0;
+  background:
+    radial-gradient(60% 46% at 50% 88%, #ffe7a01f, transparent 70%),
+    linear-gradient(to bottom, #0d0b09d9 0%, #0d0b0940 38%, transparent 60%, #0d0b0999 100%);
+}
+.scene { --u: calc(100cqw / 640); }
+
+/* Sprite strips: one element per sheet, translated one frame at a time. */
+.sprite { overflow: hidden; }
+.strip { position: absolute; left: 0; top: 0; height: 100%; background-size: 100% 100%; background-repeat: no-repeat; will-change: transform; }
+
+.door { top: calc(263 * var(--u)); width: calc(166 * var(--u)); height: calc(177 * var(--u)); }
+.door .strip { width: 2200%; }
+.door-fire { left: calc(136 * var(--u)); }
+.door-water { left: calc(338 * var(--u)); }
+.door-fire .strip { background-image: url("../assets/doors/fire.webp"); }
+.door-water .strip { background-image: url("../assets/doors/water.webp"); }
+
+/* The glyph lights when its player arrives: acknowledgement, not completion. */
+.glow { width: calc(240 * var(--u)); height: calc(240 * var(--u)); border-radius: 50%; opacity: 0; mix-blend-mode: screen; }
+.glow-fire { left: calc(99 * var(--u)); top: calc(231 * var(--u)); background: radial-gradient(closest-side, #ff4a1f88, #ff4a1f22 55%, transparent); }
+.glow-water { left: calc(301 * var(--u)); top: calc(231 * var(--u)); background: radial-gradient(closest-side, #29c7ff88, #29c7ff22 55%, transparent); }
+
+.actor { top: 0; left: 0; }
+.pose { opacity: 0; }
+.run-fire { width: calc(129 * var(--u)); height: calc(102 * var(--u)); top: calc(338.6 * var(--u)); }
+.run-fire .strip { width: 800%; background-image: url("../assets/sprites/fire-run.webp"); }
+.run-water { width: calc(142 * var(--u)); height: calc(117 * var(--u)); top: calc(325 * var(--u)); }
+.run-water .strip { width: 800%; background-image: url("../assets/sprites/water-run.webp"); }
+/*
+ * The climb. Each stairs clip shares the door's registration point (the game
+ * places it at the door's x, y), so its box is the door's origin minus the
+ * clip's own, in 4x-raster pixels, scaled by k = .7:
+ *   door origin in the sheet     (122, 227.6)   = (30.5, 96.9) x 4, minus the 160 px crop
+ *   FireBoystairs origin         (130.6, 263)   = (32.65, 65.75) x 4, frame 197 x 289
+ *   WaterGirlStairs origin       (148, 239.8)   = (37, 59.95) x 4, frame 214 x 307
+ */
+.stairs-fire { left: calc(130 * var(--u)); top: calc(238.2 * var(--u)); width: calc(137.9 * var(--u)); height: calc(202.3 * var(--u)); }
+.stairs-fire .strip { width: 2500%; background-image: url("../assets/doors/fire-stairs.webp"); }
+.stairs-water { left: calc(319.8 * var(--u)); top: calc(254.5 * var(--u)); width: calc(149.8 * var(--u)); height: calc(214.9 * var(--u)); }
+.stairs-water .strip { width: 3500%; background-image: url("../assets/doors/water-stairs.webp"); }
+.run-water > .strip { transform-origin: center; }
+.run-water { transform: scaleX(-1); }
+.run-mover-water { left: 0; top: 0; }
+
+.scene-bar {
+  left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: .625rem; flex-wrap: wrap;
+  padding: calc(.75rem + 1cqw) calc(.875rem + 1.5cqw); position: absolute;
+  background: linear-gradient(to top, #0d0b09f2, #0d0b09b3 70%, transparent);
+  color: #d9d0bf; font: 550 clamp(.75rem, 2.2cqw, .9375rem)/1.35 var(--ui);
+}
+.scene-bar * { position: static; }
+.scene-rule { flex: 1 1 14em; min-width: 0; }
+.scene-rule strong { color: #f2ece0; font-weight: 650; }
+.scene-chips { display: flex; gap: .375rem; }
+.pchip {
+  position: relative; display: inline-flex; align-items: center; gap: .375rem; padding: .25rem .625rem .25rem .5rem; border-radius: 62.4375rem;
+  font: 650 clamp(.6875rem, 1.9cqw, .8125rem)/1.2 var(--ui); color: #a99e8d; box-shadow: inset 0 0 0 1px #4a4236;
+}
+.pchip i { width: .5rem; height: .5rem; border-radius: 50%; box-shadow: inset 0 0 0 1.5px currentColor; }
+.pchip b { position: absolute; inset: 0; border-radius: inherit; display: inline-flex; align-items: center; gap: .375rem; padding: .25rem .625rem .25rem .5rem; opacity: 0; font: inherit; }
+.pchip b i { box-shadow: none; background: currentColor; }
+.pchip-fire b { color: #24170e; background: #ff865b; }
+.pchip-water b { color: #0c2a33; background: #75d5eb; }
+
+.scene-done {
+  left: 50%; top: calc(58 * var(--u)); transform: translateX(-50%); opacity: 0; white-space: nowrap;
+  font: 600 calc(26 * var(--u))/1 var(--inscription); letter-spacing: .08em; color: #ffcb00;
+  text-shadow: 0 2px 0 #3d2c00, 0 0 1.5rem #ffcb0055;
+}
+.scene-replay {
+  top: calc(.75rem + 1cqw); right: calc(.75rem + 1cqw); z-index: 3; display: inline-flex; align-items: center; gap: .4375rem;
+  min-height: 2.25rem; padding: 0 .875rem 0 .75rem; border-radius: 62.4375rem; border: 0; cursor: pointer;
+  background: #f2ece0; color: #1d1a13; box-shadow: 0 2px 0 #00000059, 0 .375rem 1.25rem #00000080; font: 650 .875rem/1 var(--ui);
+  opacity: 0; transform: translateY(-4px); pointer-events: none;
+  transition: opacity var(--settle) var(--ease), transform var(--settle) var(--ease), background-color var(--press) var(--ease);
+}
+.scene-replay svg { position: static; width: .875rem; height: .875rem; }
+.scene[data-done] .scene-replay { opacity: 1; transform: none; pointer-events: auto; }
+@media (hover: hover) and (pointer: fine) { .scene-replay:hover { background: #ffffff; } }
+.scene-replay:focus-visible { outline: 2px solid #75d5eb; outline-offset: 2px; }

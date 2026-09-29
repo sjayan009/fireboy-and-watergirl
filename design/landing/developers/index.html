@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>For Developers</title>
+<meta name="description" content="How a 2009 Flash game with no source code became a two-player online game in the browser.">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="icon" href="../assets/icon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../assets/icon-180.png">
+<link rel="stylesheet" href="../shared/tokens.css">
+<link rel="stylesheet" href="../shared/base.css">
+<link rel="stylesheet" href="../shared/study.css">
+<link rel="stylesheet" href="../shared/rollback.css">
+<link rel="stylesheet" href="../shared/devsite.css">
+</head>
+<body>
+<header class="nav">
+  <div class="wrap nav-row">
+    <a class="brand" href="../" aria-label="Fireboy and Watergirl, home"><svg class="emblem" viewBox="0 0 48 48" aria-hidden="true"><path d="M23 4C24 15 9 17 9 29a14 14 0 0 0 14 14V30c-6-1-6-7-3-10 1 4 3 5 3 5V4Z"/><path d="M29 6c0 9 12 14 12 23a14 14 0 0 1-14 14V29c7-2 8-7 2-13V6Z"/></svg><span class="brand-text">Fireboy &amp; Watergirl</span></a>
+    <nav class="nav-links" aria-label="Site">
+      <a href="../#multiplayer">Online Multiplayer</a><a href="../#between">Watch &amp; Compete</a><a href="./" aria-current="page">For Developers</a>
+    </nav>
+    <div class="nav-end">
+      <div id="theme"></div>
+      <a class="btn btn-ghost btn-s" href="../#/login" data-signin>Sign In</a>
+    </div>
+  </div>
+</header>
+<nav class="devnav" aria-label="For Developers">
+  <div class="wrap devnav-row"><span class="devnav-label">For Developers</span><a href="./" aria-current="page">Overview</a><a href="netcode.html">Netcode</a><a href="recovery.html">Recovery</a><a href="architecture.html">Architecture</a></div>
+</nav>
+<main>
+
+  <div class="wrap dev-hero">
+    <p class="t-eyebrow">For Developers</p>
+    <h1 class="t-display" style="font-size:clamp(2.2rem,4.6vw,3.6rem)">How a 2009 Flash game became online co-op</h1>
+    <p class="t-lede">There was no source code: one compiled Flash file, 1,855,972 bytes. Everything here, from the 32 levels to the physics, was recovered from it, ported to TypeScript, and given rollback netcode so two people in two browsers play as if they shared a keyboard.</p>
+  </div>
+
+  <section class="band" style="padding-top:0" aria-label="Sections">
+    <div class="wrap cards3">
+      <a class="devcard" href="netcode.html"><p class="t-eyebrow">Netcode</p><h2 class="t-heading">One frame of input delay, online</h2><p>The real engine, running rollback in your browser: prediction, correction and re-simulation, frame by frame.</p><span class="go">See it run →</span></a>
+      <a class="devcard" href="recovery.html"><p class="t-eyebrow">Recovery</p><h2 class="t-heading">Rebuilt from the file, not remade</h2><p>What the SWF's first sixteen bytes say, what was inside it, and the tools that took it apart.</p><span class="go">Open the file →</span></a>
+      <a class="devcard" href="architecture.html"><p class="t-eyebrow">Architecture</p><h2 class="t-heading">Determinism, and what it buys</h2><p>The system, the four hazards that break lockstep physics, the security perimeter, and what is tested.</p><span class="go">Read the design →</span></a>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="n-h">
+    <div class="wrap">
+      <div class="band-head"><p class="t-eyebrow">Numbers</p><h2 class="t-title" id="n-h">The numbers this design rests on</h2><p class="t-lede">From the benchmarks and the test suite that ship with the code.</p></div>
+      <table class="sheet">
+        <caption class="sr-only">Design numbers</caption>
+        <tbody>
+          <tr><th scope="row">Levels</th><td>32</td><td>Adventure 17, puzzle 9, speed 6, each pinned by a digest in CI.</td></tr>
+          <tr><th scope="row">Tick</th><td>26 fps</td><td>A 38.5 ms frame, the SWF's own rate, on a fixed-step accumulator.</td></tr>
+          <tr><th scope="row">Input</th><td>3 bits</td><td>Per player per frame. Each packet repeats the last 16 frames.</td></tr>
+          <tr><th scope="row">Session cost</th><td>~700 B/s</td><td>Including that redundancy; about 34 bytes per input packet.</td></tr>
+          <tr><th scope="row">Input delay</th><td>1 frame</td><td>Measured, against lockstep's 5 on the same build.</td></tr>
+          <tr><th scope="row">Re-simulate a frame</th><td>~0.04 ms</td><td>So rewinding is always cheaper than the 38.5 ms a frame has.</td></tr>
+          <tr><th scope="row">Snapshot</th><td>~4.7 ms</td><td>One snapshot, refreshed every ~8 settled frames: 1.4 MB, not 17 MB.</td></tr>
+          <tr><th scope="row">Determinism</th><td>3 engines</td><td>V8, SpiderMonkey and JavaScriptCore agree on digest <code>aba863c1</code> after 600 frames.</td></tr>
+          <tr><th scope="row">Soak</th><td>640,000 frames</td><td>About seven hours of play, run twice and compared.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="band" aria-labelledby="r-h">
+    <div class="wrap">
+      <div class="band-head"><p class="t-eyebrow">The repository</p><h2 class="t-title" id="r-h">Four parts, one direction of dependency</h2></div>
+      <table class="sheet">
+        <caption class="sr-only">Repository layout</caption>
+        <tbody>
+          <tr><th scope="row"><code>engine/</code></th><td>TypeScript</td><td>The simulation, the renderer and the netcode. No network, no accounts; runs in Node.</td></tr>
+          <tr><th scope="row"><code>app/</code></th><td>Static SPA</td><td>Sign-up, friends, invitations and the game, served from a CDN.</td></tr>
+          <tr><th scope="row"><code>supabase/</code></th><td>Postgres</td><td>Migrations, row level security and its tests, and the authenticated TURN credential broker.</td></tr>
+          <tr><th scope="row"><code>tools/</code></th><td>Python</td><td>What turned the SWF into everything else. Run once; nothing in a build needs it.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="wrap next-page"><span></span><a href="netcode.html">Netcode →</a></div>
+</main>
+<footer class="footer">
+  <div class="wrap footer-row">
+    <p style="max-width:34rem;margin:0">Fireboy &amp; Watergirl: The Forest Temple, rebuilt for online co-op. The original game, its art and its audio are by Oslo Albet, 2009. <a href="../">Back to the game</a></p>
+    <p style="margin:0">Online multiplayer implemented by Jayan Sirikonda</p>
+  </div>
+</footer>
+<script type="module">
+  import { still, reduceMotion } from "../shared/site.js";
+</script>
+</body>
+</html>

@@ -17,6 +17,31 @@
         "serve.mjs"
       ],
       "port": 5173
+    },
+    {
+      "name": "design",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "vite",
+        "design/landing",
+        "--port",
+        "5180",
+        "--strictPort"
+      ],
+      "port": 5180
+    },
+    {
+      "name": "design-prod",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "vite",
+        "preview",
+        "design/landing",
+        "--port",
+        "5181",
+        "--strictPort"
+      ],
+      "port": 5181
     }
   ]
 }

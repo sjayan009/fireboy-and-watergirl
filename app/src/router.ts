@@ -46,7 +46,11 @@ let cleanup: (() => void) | null = null;
  * from one game to another was a hash change the router answered by doing
  * nothing, because it was already "showing /watch".
  */
-let showing = "";
+/**
+ * Null, not "", for "nothing on screen yet": the bare address (the landing
+ * page) is the empty hash, and "" here would read as already showing it.
+ */
+let showing: string | null = null;
 
 export function go(path: string): void {
   if (current() === path) render();
@@ -92,7 +96,7 @@ export function startRouter(mount: HTMLElement, table: Route[]): void {
   onAuth(() => {
     const route = routes.find((r) => r.path === current());
     if (!route || !route.stages.includes(auth().stage)) {
-      showing = "";
+      showing = null;
       go(HOME[auth().stage]);
     }
   });
@@ -101,6 +105,6 @@ export function startRouter(mount: HTMLElement, table: Route[]): void {
 
 /** Force the current screen to be built again, after something it reads changed. */
 export function rerender(): void {
-  showing = "";
+  showing = null;
   render();
 }

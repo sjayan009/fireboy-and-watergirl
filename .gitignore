@@ -35,3 +35,22 @@ __pycache__/
 
 CODEBASE_AUDIT.md
 docs/AI_BOT_FEASIBILITY.md
+
+# Landing-page design exploration: the board, the alternative directions, the
+# motion studies and their renders are for local review only and are never
+# published. The landing page itself (design/landing/index.html, shared/,
+# assets/, tools/) is tracked.
+design/landing/board.html
+design/landing/directions/
+design/landing/motion/
+design/landing/renders/
+# ...and the assets only those exploration pages use (regenerate with
+# design/landing/tools/levels.mjs and assets.mjs).
+design/landing/assets/levels/*
+# ...except the four the developer site's Recovery page shows.
+!design/landing/assets/levels/adventure-09.webp
+!design/landing/assets/levels/puzzle-04.webp
+!design/landing/assets/levels/speed-02.webp
+!design/landing/assets/levels/adventure-15.webp
+design/landing/assets/lever/
+design/landing/assets/title.webp

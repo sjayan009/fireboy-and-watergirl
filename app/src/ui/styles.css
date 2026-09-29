@@ -307,9 +307,28 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .screen { background:#000; overflow:hidden; aspect-ratio:4/3; border-radius:4px; }
 .play-shell .screen { flex:none; outline:none; border:0; }
 #stage { display:block; width:100%; height:100%; outline:none; touch-action:none; }
-.play-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px 16px; padding:6px 2px; min-height:32px; color:var(--dim); font-size:.75rem; }
+/*
+ * Three columns, the outer two equal, so the controls legend sits in the true
+ * centre of the footer whatever is either side of it: "Saved" on the left, the
+ * link state, sound and fullscreen on the right.
+ */
+.play-footer { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:center; gap:4px 16px; padding:6px 2px; min-height:32px; color:var(--dim); font-size:.75rem; }
+.play-footer > .save-status { justify-self:start; }
+.play-footer > .focus-hint { justify-self:center; text-align:center; }
 .play-footer .ghost { min-height:26px; padding:2px 8px; font-size:.75rem; background:transparent; border-color:transparent; box-shadow:none; }
 .save-status::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--dim); }
+/* Bottom right: link state, sound, fullscreen. 30px targets, above WCAG's 24. */
+.footer-controls { display:flex; align-items:center; gap:6px; justify-self:end; }
+.play-footer .footer-controls .tool { min-height:30px; padding:4px 10px; gap:6px; color:var(--ink); background:#24201a; border-color:var(--edge); box-shadow:inset 0 1px 0 #ffffff09; }
+.play-footer .footer-controls .tool:hover:not(:disabled) { background:#322c23; border-color:#6b6151; }
+.play-footer .footer-controls .tool::before { width:14px; height:14px; }
+.link-state { display:inline-flex; align-items:center; gap:7px; min-height:30px; padding:0 11px; border-radius:999px; font-weight:650; font-size:.75rem; border:1px solid var(--edge); color:var(--dim); }
+.link-state::before { content:''; width:8px; height:8px; border-radius:50%; background:currentColor; }
+.link-state[data-state='connected'] { color:#9fdc7c; background:#1c2b15; border-color:#3f6b26; }
+.link-state[data-state='waiting'] { color:var(--gold); background:#2d2512; border-color:#6b5520; }
+.link-state[data-state='connecting']::before { animation:link-pulse 1.2s ease-in-out infinite; }
+@keyframes link-pulse { 50% { opacity:.3; } }
+@media (prefers-reduced-motion: reduce) { .link-state[data-state='connecting']::before { animation:none; } }
 /*
  * The controls line is always lit, whatever has focus.
  *
@@ -528,13 +547,13 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
   .play.play-shell { padding:0 8px; }
   .play-toolbar { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:5px; }
   .play-identity { grid-column:1/-1; }
-  .tool-friends,.tool-leaderboard { grid-column:span 3; }
-  .tool-mute,.tool-fullscreen,.tool-menu { grid-column:span 2; }
+  .tool-friends,.tool-leaderboard,.tool-menu { grid-column:span 2; }
   .stop-watching { grid-column:1/-1; }
   .play-toolbar > .tool { font-size:.75rem; padding:7px 8px; gap:5px; min-height:40px; }
   .tool::before { width:13px; height:13px; }
   .identity-detail .status { max-width:190px; }
-  .play-footer { padding-block:5px; }
+  .play-footer { padding-block:5px; grid-template-columns:auto minmax(0,1fr); }
+  .play-footer > .focus-hint { grid-column:1/-1; grid-row:2; }
   .focus-hint { font-size:.6875rem; }
   .card { padding:26px 22px; }
   .drawer-content { padding:14px; }

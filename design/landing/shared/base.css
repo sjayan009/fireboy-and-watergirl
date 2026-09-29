@@ -1,0 +1,169 @@
+/*
+ * Shared base for every concept page: reset, type roles, controls, the nav,
+ * the theme control, and the window game art sits in.
+ *
+ * Type has seven roles and no others (the report: "a small number of explicit
+ * roles ... not dozens of arbitrary combinations invented screen by screen"):
+ *   display   the hero line, once per page
+ *   title     a section's heading
+ *   heading   a card or step heading
+ *   lede      the paragraph that follows a title
+ *   body      everything read
+ *   label     control text, eyebrows, table heads
+ *   data      numbers, frames, bytes: tabular mono
+ */
+
+/*
+ * Cinzel, self-hosted: the deployment's CSP allows fonts from this origin
+ * only. 15 KB, Latin, one weight, and fetched only when text set in it is
+ * actually on screen ("Level complete", the Recovery catalogue).
+ */
+@font-face { font-family: "Cinzel"; font-style: normal; font-weight: 600; font-display: swap; src: url("../assets/fonts/cinzel-600-latin.woff2") format("woff2"); }
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 5.5rem; }
+/*
+ * The site's size is set here, once, relative to the reader's own text size.
+ *
+ * Every length on these pages is in rem, so everything scales from this one
+ * value -- and it is a percentage, so a reader who has raised their browser's
+ * default text size gets a proportionally larger page instead of a fixed one.
+ * 90% on anything wider than a phone: Jayan found the pages fit his screen
+ * exactly at 90% browser zoom. (It used to be CSS zoom on <body>, which drew
+ * the right picture but ignored the reader's text setting.)
+ *
+ * Height media queries see the real window, not the text size, so the height
+ * breakpoints in index.html and journey.css are written at 0.9x the values
+ * they were tuned at (899px becomes 809px, and so on).
+ * Phones keep 100%: their text is already at its smallest comfortable size.
+ */
+@media (min-width: 760px) { html { font-size: 90%; } }
+body {
+  margin: 0; min-height: 100dvh; background: var(--bg); color: var(--ink);
+  font: 1.0625rem/1.55 var(--ui); font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+}
+img, svg, canvas, video { display: block; max-width: 100%; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--water-text); text-underline-offset: .1875rem; text-decoration-thickness: 1px; }
+a:hover { text-decoration-thickness: 2px; }
+h1, h2, h3, h4, p { margin: 0; }
+:where(a, button, input, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--water-text); outline-offset: .1875rem; border-radius: .375rem;
+}
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.t-display { font: 750 clamp(2.5rem, 5.6vw, 4.6rem)/1.02 var(--heading); letter-spacing: -.034em; text-wrap: balance; }
+.t-title { font: 700 clamp(1.75rem, 3.1vw, 2.5rem)/1.1 var(--heading); letter-spacing: -.024em; text-wrap: balance; }
+.t-heading { font: 650 1.1875rem/1.3 var(--heading); letter-spacing: -.01em; }
+.t-lede { font-size: clamp(1.125rem, 1.6vw, 1.3125rem); line-height: 1.5; color: var(--dim); text-wrap: pretty; max-width: var(--measure); }
+.t-body { color: var(--dim); text-wrap: pretty; max-width: var(--measure); }
+.t-label { font: 600 .8125rem/1.3 var(--ui); letter-spacing: .012em; }
+.t-eyebrow { font: 650 .75rem/1.2 var(--ui); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+.t-data { font-family: var(--mono); font-variant-numeric: tabular-nums; letter-spacing: 0; }
+
+.wrap { width: min(75rem, 100% - 2 * var(--gutter)); margin-inline: auto; }
+
+/* ---------- Controls: one state vocabulary, rest > hover > focus > pressed > busy ---------- */
+.btn {
+  --h: 2.75rem;
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: .625rem;
+  min-height: var(--h); padding: 0 1.25rem; border-radius: .625rem; border: 1px solid transparent;
+  font: 650 1rem/1 var(--ui); text-decoration: none; white-space: nowrap;
+  transition: background-color var(--press) var(--ease), border-color var(--press) var(--ease),
+              color var(--press) var(--ease), box-shadow var(--press) var(--ease), transform var(--press) var(--ease);
+}
+.btn-primary {
+  background: var(--fire); color: var(--fire-ink);
+  box-shadow: inset 0 1px 0 #ffffff59, 0 2px 0 #9a4a2b, 0 .5rem 1.5rem -8px var(--glow-fire);
+}
+.btn-primary:active { box-shadow: inset 0 1px 0 #ffffff40, 0 1px 0 #9a4a2b; }
+.btn-ghost { background: var(--surface); color: var(--ink); border-color: var(--edge-strong); }
+.btn-quiet { background: transparent; color: var(--ink); padding-inline: .75rem; }
+@media (hover: hover) and (pointer: fine) {
+  .btn-primary:hover { background: #ff9c78; }
+  .btn-ghost:hover { background: var(--raised); border-color: var(--ink); }
+  .btn-quiet:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+}
+.btn svg { width: 1.125rem; height: 1.125rem; flex: none; }
+/*
+ * Press: one response for everything that can be pressed, on the press itself
+ * (not on release), so every control feels like the same material. A 3% shrink
+ * in 100 ms: feedback, not travel, so it stays under reduced motion too.
+ * The journey demo's simulated presses (.is-pressed) wear the same response.
+ */
+:where(.btn, .vg-btn, .icon-btn, .seg button, .theme button, .scene-replay, .watch-replay, a.devcard, .nav-links a, .devnav a):active,
+.vg-btn.is-pressed { transform: scale(.97); }
+:where(.icon-btn, .seg button, .watch-replay, .nav-links a, .devnav a) { transition: transform 100ms var(--ease-out), background-color var(--press) var(--ease), color var(--press) var(--ease); }
+.btn-s { --h: 2.25rem; padding: 0 .875rem; font-size: .9375rem; border-radius: .5rem; }
+
+/* ---------- Nav ---------- */
+.nav {
+  position: sticky; top: 0; z-index: 20;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: saturate(1.4) blur(.875rem); -webkit-backdrop-filter: saturate(1.4) blur(.875rem);
+  border-bottom: 1px solid color-mix(in srgb, var(--edge) 70%, transparent);
+}
+.nav-row { display: flex; align-items: center; gap: 1.25rem; min-height: 4rem; }
+.brand { display: inline-flex; align-items: center; gap: .625rem; color: var(--ink); text-decoration: none; font: 700 1rem/1 var(--heading); letter-spacing: -.01em; }
+.brand svg { width: 1.75rem; height: 1.75rem; }
+.nav-links { display: flex; gap: .25rem; margin-left: .75rem; }
+.nav-links a { padding: .5rem .75rem; border-radius: .5rem; color: var(--dim); text-decoration: none; font-size: .9375rem; font-weight: 550; }
+.nav-links a:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.nav-end { margin-left: auto; display: flex; align-items: center; gap: .75rem; }
+@media (max-width: 860px) { .nav-links { display: none; } }
+@media (max-width: 480px) { .brand-text { display: none; } }
+
+/* ---------- Theme control ---------- */
+.theme {
+  --cell: 2rem;
+  position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: var(--cell);
+  padding: .1875rem; border-radius: 62.4375rem; background: var(--sunken);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+.theme button {
+  position: relative; z-index: 1; width: var(--cell); height: var(--cell); padding: 0; border: 0; border-radius: 62.4375rem;
+  background: none; color: var(--faint); display: grid; place-items: center;
+  transition: color var(--settle) var(--ease), transform 100ms var(--ease-out);
+}
+.theme button svg { width: 1.0625rem; height: 1.0625rem; }
+.theme button[aria-checked="true"] { color: var(--ink); }
+@media (hover: hover) and (pointer: fine) { .theme button:hover { color: var(--ink); } }
+.theme-thumb {
+  position: absolute; top: .1875rem; left: .1875rem; width: var(--cell); height: var(--cell); border-radius: 62.4375rem;
+  background: var(--raised); box-shadow: 0 1px 2px #0000002e, 0 0 0 1px var(--edge);
+}
+:root[data-theme="dark"] .theme-thumb { background: #3a3329; box-shadow: 0 1px 2px #00000080, inset 0 1px 0 #ffffff12; }
+
+/* The reveal. Circle: the new snapshot is clipped from the control outward, the
+   old one holds still underneath. Fade: the browser's cross-fade, shortened. */
+::view-transition-old(root), ::view-transition-new(root) { mix-blend-mode: normal; }
+:root[data-revealing="circle"]::view-transition-old(root),
+:root[data-revealing="circle"]::view-transition-new(root) { animation: none; }
+:root[data-revealing="fade"]::view-transition-old(root),
+:root[data-revealing="fade"]::view-transition-new(root) { animation-duration: 220ms; animation-timing-function: ease; }
+@media (prefers-reduced-motion: reduce) { :root[data-revealing="fade"]::view-transition-old(root), :root[data-revealing="fade"]::view-transition-new(root) { animation-duration: 150ms; } }
+
+/* ---------- The window game art sits in ---------- */
+.window {
+  position: relative; overflow: hidden; background: var(--window); border-radius: var(--radius-m);
+  box-shadow: 0 0 0 1px var(--window-edge), var(--shadow-lift);
+}
+.window img { width: 100%; height: auto; }
+
+/* The emblem from app/src/ui/brand.ts: an ember and a pool around a doorway. */
+.emblem path:first-child { fill: var(--fire); }
+.emblem path:last-child { fill: var(--water); }
+
+.chip { display: inline-flex; align-items: center; gap: .375rem; padding: .25rem .625rem; border-radius: 62.4375rem; font: 600 .8125rem/1.2 var(--ui); background: var(--surface); box-shadow: inset 0 0 0 1px var(--edge); color: var(--dim); }
+.dot { width: .5rem; height: .5rem; border-radius: 50%; background: currentColor; flex: none; }
+
+.footer { border-top: 1px solid var(--edge); padding: 2.5rem 0 3.5rem; color: var(--faint); font-size: .875rem; }
+.footer-row { display: flex; flex-wrap: wrap; gap: 1rem 2rem; justify-content: space-between; align-items: flex-start; }
+.footer a { color: var(--dim); }
+
+/* Reduced motion keeps colour and opacity changes and removes travel. */
+@media (prefers-reduced-motion: reduce) {
+}

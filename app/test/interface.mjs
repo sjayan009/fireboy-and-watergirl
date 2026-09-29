@@ -166,7 +166,7 @@ try {
       const problems = [];
       page.on("pageerror", (err) => problems.push(err.message));
 
-      await page.goto(URL_, { waitUntil: "load" });
+      await page.goto(URL_ + "#/login", { waitUntil: "load" });
       await page.waitForSelector("input[type=email]", { timeout: 40000 });
       await page.fill("input[type=email]", user.email);
       await page.fill("input[type=password]", user.password);

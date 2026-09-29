@@ -146,8 +146,10 @@ export default tseslint.config(
   {
     // The .mjs tooling: Node scripts, and no TypeScript project behind them --
     // so the type-aware rules have nothing to be aware of and are turned off
-    // rather than left to fail on every file with a parse error.
-    files: ["**/*.mjs"],
+    // rather than left to fail on every file with a parse error. The landing
+    // page's modules (design/landing/**/*.js) are the same case in a browser:
+    // plain ES modules served as-is, with no build and no project.
+    files: ["**/*.mjs", "design/landing/**/*.js"],
     languageOptions: {
       parserOptions: { projectService: false, project: false },
     },

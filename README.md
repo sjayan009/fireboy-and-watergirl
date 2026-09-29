@@ -187,9 +187,11 @@ to stand in front of that is gone by choice, not by accident.
 It never limited exposure as much as it looked like it did. It decided who could
 have an ACCOUNT, never who could fetch a file, and the bundle, the sprites and
 the audio were always public static objects to anyone who knew the URL. Removing
-it changes how many people are likely to arrive, not what is reachable. The
-deployment still asks not to be indexed, which is a request to crawlers rather
-than a control.
+it changes how many people are likely to arrive, not what is reachable. Search
+engines may now index the landing page at the bare address and the For
+Developers pages; `robots.txt` and an `X-Robots-Tag` header ask them to leave
+`/extracted/`, the art itself, alone. Both are requests to crawlers rather
+than controls.
 
 Production source maps are off, so the source is no longer served alongside
 them. Restricting the assets themselves needs a deployment-level control that
