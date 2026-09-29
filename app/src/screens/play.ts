@@ -168,6 +168,15 @@ export function playScreen(host: HTMLElement): () => void {
     class: "status", role: "status", "aria-live": "polite",
   }, "solo");
   const mute = el("button", { class: "ghost" }, muted ? "Unmute" : "Mute");
+  /*
+   * Whether the two of you are actually linked, in one glance: green
+   * "Connected" while a session is running and input is arriving, amber while
+   * it waits on the friend, neutral while it (re)connects, and absent when
+   * playing locally. A status, not a button -- it looks like a label so it
+   * does not promise a click. The live region above says the same in words.
+   */
+  const connection = el("span", { class: "link-state", "data-state": "local", "aria-hidden": "true" });
+  connection.hidden = true;
   const leave = el("button", { class: "ghost leave" }, "Leave game");
   leave.hidden = true;
   const hand = el("button", { class: "ghost" }, "Let them pick");
@@ -557,6 +566,13 @@ export function playScreen(host: HTMLElement): () => void {
   function refreshStatus(): void {
     const next = describe();
     if (next !== lastStatus) { status.textContent = next; lastStatus = next; }
+    const s = view.session;
+    const state = s ? (stalling ? "waiting" : "connected") : match ? "connecting" : "local";
+    if (connection.dataset.state !== state) {
+      connection.dataset.state = state;
+      connection.hidden = state === "local";
+      connection.textContent = { connected: "Connected", waiting: "Waiting for friend", connecting: "Connecting", local: "" }[state];
+    }
   }
 
   /** When the development readout last changed, so a counter cannot redraw at frame rate. */
@@ -821,7 +837,7 @@ export function playScreen(host: HTMLElement): () => void {
     () => view.game.Translation as string[] | undefined,
     () => match?.friend.id ?? lastPartner);
   const shell = new PlayShell(host, {
-    canvas, name, status, mute, banner, friends: panel, times, board,
+    canvas, name, status, mute, banner, friends: panel, times, board, connection,
     input: (enabled) => view.setInputEnabled(enabled),
     onPanel: (panel, changed) => {
       if (panel === "leaderboard") leaderboard.open(view.session?.selection ?? loadSelection(auth().user!.id, lastPartner ?? ""), changed);

@@ -1,0 +1,168 @@
+/* Rollback diagram. Received input is solid, predicted input is outlined, and
+   a correction is outlined in gold for six frames after it happens. Shape and
+   fill carry the meaning; colour only repeats it. */
+.rb { --lab: 7.5rem; display: grid; gap: 1rem; }
+.rb-world {
+  container-type: inline-size; position: relative; height: 6rem; border-radius: var(--radius-m); overflow: hidden;
+  background: linear-gradient(to bottom, #0d0b09, #1a160f); box-shadow: 0 0 0 1px var(--window-edge);
+}
+.rb-floor { position: absolute; left: 0; right: 0; bottom: 1.375rem; height: 2px; background: #3a3328; }
+.rb-dot, .rb-ghost { position: absolute; left: 4%; bottom: 1.5rem; width: 1.125rem; height: 1.125rem; border-radius: 50%; }
+.rb-dot { background: #75d5eb; box-shadow: 0 0 1rem #75d5eb88; }
+.rb-ghost { box-shadow: inset 0 0 0 2px #75d5eb; opacity: 0; transition: opacity 120ms ease; background: repeating-linear-gradient(45deg, #75d5eb33 0 .1875rem, transparent .1875rem .375rem); }
+.rb-legend { position: absolute; left: .75rem; right: .75rem; top: .625rem; display: flex; flex-wrap: wrap; gap: .25rem .875rem; font: 550 .75rem/1 var(--ui); color: #a99e8d; }
+.rb-legend span { display: inline-flex; gap: .375rem; align-items: center; }
+.rb-legend i { width: .625rem; height: .625rem; border-radius: 50%; }
+.k-dot { background: #75d5eb; } .k-ghost { box-shadow: inset 0 0 0 1.5px #75d5eb; }
+
+.rb-grid { position: relative; display: grid; grid-template-columns: var(--lab) repeat(var(--cols), minmax(0, 1fr)); row-gap: .375rem; align-items: center; }
+.rb-lab { font: 650 .875rem/1.15 var(--ui); padding-right: .75rem; position: sticky; left: 0; z-index: 2; background: var(--surface); align-self: stretch; display: flex; flex-direction: column; justify-content: center; }
+.rb-lab small { display: block; font-weight: 500; font-size: .75rem; color: var(--faint); }
+.rb-lab .fire { color: var(--fire-text); } .rb-lab .water { color: var(--water-text); }
+.rb-fn { font: 500 .6875rem/1 var(--mono); color: var(--faint); text-align: left; height: 1rem; }
+.rb-c { height: 2.125rem; margin: 0 1px; border-radius: .3125rem; display: grid; place-items: center; font: 700 .875rem/1 var(--mono); color: transparent; background: var(--sunken); box-shadow: inset 0 0 0 1px var(--edge); }
+.rb-you.on { background: var(--fire); color: var(--fire-ink); box-shadow: none; }
+.rb-fr.sure { background: var(--water); color: var(--water-ink); box-shadow: none; }
+.rb-fr.guess { background: transparent; color: var(--water-text); box-shadow: inset 0 0 0 1.5px var(--water-text); background-image: repeating-linear-gradient(45deg, color-mix(in srgb, var(--water) 16%, transparent) 0 .1875rem, transparent .1875rem .375rem); }
+.rb-fr.fix { box-shadow: inset 0 0 0 2px var(--gold-text), 0 0 0 2px color-mix(in srgb, var(--gold-text) 30%, transparent); }
+
+.rb-overlay { position: absolute; inset: 0; pointer-events: none; }
+.rb-now { position: absolute; top: 1.125rem; bottom: -6px; border-radius: .375rem; box-shadow: 0 0 0 2px var(--ink); }
+.rb-now::after { content: "now"; position: absolute; left: 50%; bottom: -18px; transform: translateX(-50%); font: 700 .6875rem/1 var(--mono); color: var(--ink); }
+.rb-front { position: absolute; top: 1.125rem; bottom: -6px; width: 0; border-left: 2px dashed var(--water-text); transition: opacity 120ms; }
+.rb-snap { position: absolute; top: -26px; height: 1.25rem; display: grid; place-items: center; }
+.rb-snap span { font: 700 .625rem/1 var(--mono); letter-spacing: .04em; color: var(--gold-text); white-space: nowrap; }
+.rb-snap::after { content: ""; position: absolute; left: 50%; top: 1.125rem; width: .5rem; height: .5rem; transform: translateX(-50%) rotate(45deg); background: var(--gold-text); }
+.rb-bracket { position: absolute; top: -48px; height: 1.125rem; border: 2px solid var(--gold-text); border-bottom: 0; border-radius: .375rem .375rem 0 0; transition: opacity 160ms ease; }
+.rb-bracket span { position: absolute; left: 0; bottom: 100%; margin-bottom: .25rem; white-space: nowrap; font: 700 .75rem/1 var(--mono); color: var(--gold-text); }
+/*
+ * Room above the grid for the rollback brace and its label (top -64px), and
+ * below it for the "now" tag (bottom -24px). The wrapper only scrolls where it
+ * has to, on a phone; a scroll container clips both axes, which is what used to
+ * cut the brace off on desktop.
+ */
+.rb-scroll { padding: 4.875rem 2px .375rem; }
+.rb-grid { padding-bottom: 1.875rem; }
+@media (max-width: 760px) {
+  .rb-scroll { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; }
+  .rb-grid { min-width: calc(var(--lab) + var(--cols) * 1.375rem); }
+}
+
+.rb-keys { display: flex; flex-wrap: wrap; gap: .5rem 1.125rem; font-size: .8125rem; color: var(--dim); margin-top: .875rem; }
+.rb-keys span { display: inline-flex; align-items: center; gap: .5rem; }
+.rb-keys i { width: 1.125rem; height: .875rem; border-radius: .25rem; }
+.k-sure { background: var(--water); }
+.k-guess { box-shadow: inset 0 0 0 1.5px var(--water-text); background-image: repeating-linear-gradient(45deg, color-mix(in srgb, var(--water) 16%, transparent) 0 .1875rem, transparent .1875rem .375rem); }
+.k-fix { box-shadow: inset 0 0 0 2px var(--gold-text); }
+
+.rb-bar { display: grid; grid-template-columns: auto 1fr auto; gap: .875rem; align-items: center; }
+.rb-btns { display: flex; gap: .375rem; }
+.rb-range { width: 100%; accent-color: var(--fire); }
+.rb-log { margin: 0; padding: 0; list-style: none; display: grid; gap: .375rem; font-size: .875rem; color: var(--dim); min-height: 5.5em; }
+.rb-log li { padding: .5rem .75rem; border-radius: .5rem; background: var(--sunken); }
+.rb-log li.ev { box-shadow: inset .1875rem 0 0 var(--gold-text); color: var(--ink); }
+.rb-log .t-data { color: var(--faint); margin-right: .375rem; }
+
+@media (max-width: 760px) {
+  .rb { --lab: 4.5rem; }
+  .rb-c { height: 1.875rem; font-size: .75rem; margin: 0 1px; border-radius: .25rem; }
+  .rb-fn { font-size: .5625rem; }
+  .rb-bar { grid-template-columns: auto 1fr; }
+  .rb-speed { grid-column: 1 / -1; justify-self: start; }
+  .rb-bracket span { font-size: .6875rem; }
+}
+
+/* ---- Restart: the play button's end state ---- */
+.rb-play.rb-restart { background: var(--fire); color: var(--fire-ink); border-color: transparent; }
+
+/* ---- The engine-backed netcode stage (shared/netdemo.js) ---- */
+.net { display: grid; gap: 1.375rem; }
+.net-stage { position: relative; aspect-ratio: 16 / 9; border-radius: var(--radius-m); overflow: hidden; background: #000; box-shadow: 0 0 0 1px var(--window-edge), var(--shadow-lift); }
+.net-stage canvas { display: block; width: 100%; height: 100%; }
+.net-hud { position: absolute; left: .875rem; top: .875rem; right: .875rem; display: flex; flex-wrap: wrap; gap: .375rem; pointer-events: none; }
+.net-hud span { padding: .375rem .625rem; border-radius: .5rem; background: #0d0b09d9; color: #d9d0bf; font: 600 .8125rem/1 var(--ui); box-shadow: inset 0 0 0 1px #3a3328; }
+.net-hud .t-data { font-family: var(--mono); }
+.net-hud .hud-you { color: #ff865b; }
+.net-hud .guess { color: #75d5eb; box-shadow: inset 0 0 0 1px #75d5eb88; }
+.net-hud .hud-r { color: #f0ce7b; box-shadow: inset 0 0 0 1px #f0ce7b99; }
+.net-ring { position: absolute; width: 11%; aspect-ratio: 1; transform: translate(-50%, -50%); border-radius: 50%; border: 2px dashed #75d5eb; pointer-events: none; }
+.net-ring span { position: absolute; left: 50%; bottom: calc(100% + .375rem); transform: translateX(-50%); white-space: nowrap; padding: .25rem .5rem; border-radius: .375rem; background: #0d0b09e6; color: #75d5eb; font: 650 .75rem/1 var(--ui); }
+.net-loading { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: #a99e8d; font-size: .9375rem; }
+@media (max-width: 640px) { .net-hud span { font-size: .6875rem; padding: .25rem .4375rem; } .net-ring span { font-size: .625rem; } }
+
+/* ---- "Starting engine" (shared/boot.js) ---- */
+.boot { position: absolute; inset: 0; z-index: 4; display: grid; place-content: center; justify-items: center; gap: .875rem; background: radial-gradient(60% 60% at 50% 50%, #1a160f, #0d0b09); color: #d9d0bf; transition: opacity 240ms var(--ease-out); }
+.boot-label { margin: 0; font: 650 clamp(.875rem, 1.6vw, 1.0625rem)/1.2 var(--ui); letter-spacing: .02em; }
+.boot-ring { position: relative; width: clamp(5.5rem, 13vw, 8.25rem); aspect-ratio: 1; }
+.boot-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.boot-ring circle { fill: none; stroke-width: 9; stroke-linecap: round; }
+.boot-track { stroke: #2a251d; }
+.boot-fire { stroke: #ff865b; filter: drop-shadow(0 0 .375rem #ff865b88); }
+.boot-water { stroke: #75d5eb; filter: drop-shadow(0 0 .375rem #75d5eb88); }
+.boot-n { position: absolute; inset: 0; display: grid; place-items: center; font: 700 clamp(1rem, 2vw, 1.375rem)/1 var(--mono); color: #f2ece0; }
+.boot-out { opacity: 0; pointer-events: none; }
+.boot-failed .boot-ring { opacity: .35; }
+@media (prefers-reduced-motion: reduce) { .boot { transition: none; } }
+
+/* ---- The netcode instrument: one dark object, like a video player ----
+ *
+ * The report's grouping rules, applied: the picture, its timeline and its
+ * controls are ONE thing, so they share one common region and one width, and
+ * the smallest gaps on the page sit between them, not the largest. The outer
+ * light card that used to wrap this was a container used as ornament, and it
+ * is gone. The controls sit directly under the picture they drive, where a
+ * video player's always are.
+ *
+ * It spans the content column. The view's height is set by netdemo.js so
+ * that the whole Netcode section fills the window under the nav exactly; the
+ * camera widens to the view's shape. Dark in both themes, like the game art.
+ */
+.net-instrument {
+  --bg: #14110E; --surface: #1E1A15; --raised: #262119; --sunken: #100E0B;
+  --ink: #F2ECE0; --dim: #A99E8D; --faint: #8F8573; --edge: #342E24; --edge-strong: #776D5C;
+  --fire-text: #FF865B; --water-text: #75D5EB; --gold-text: #F0CE7B; --moss-text: #8DBF6A;
+  width: 100%; color: var(--ink);
+  background: #1a1612; border-radius: 1.125rem; overflow: hidden;
+  box-shadow: 0 0 0 1px #3a3328, var(--shadow-lift);
+}
+.net-instrument .net-stage { width: 100%; height: 26.25rem; aspect-ratio: auto; border-radius: 0; box-shadow: none; }
+.net-instrument .net-stage { container-type: inline-size; }
+.net-instrument .net-hud { flex-wrap: nowrap; }
+.net-instrument .net-hud span { font-size: clamp(.625rem, 1.35cqw, .8125rem); padding: .45em .75em; white-space: nowrap; }
+.net-instrument .rb { gap: 0; padding: 0 clamp(.875rem, 2.2vw, 1.5rem) 1.125rem; border-top: 1px solid #3a3328; }
+.rb-inst .rb-scroll { padding: 2rem 0 .375rem; }
+.rb-inst .rb-grid { padding-bottom: .5rem; row-gap: .3125rem; }
+.rb-inst .rb-c { height: 1.875rem; }
+.rb-inst .rb-lab { background: #1a1612; }
+.rb-inst .rb-now { top: 1.375rem; bottom: 2px; }
+.rb-inst .rb-now::after { content: none; }
+.rb-inst .rb-front { top: 1.375rem; bottom: 2px; }
+.rb-inst .rb-fn { position: relative; overflow: visible; white-space: nowrap; }
+.rb-inst .rb-fn.now b { position: absolute; left: 50%; top: -1px; transform: translateX(-50%); z-index: 1; padding: 0 .3125rem; border-radius: .25rem; background: var(--ink); color: #1a1612; font-weight: 700; line-height: 1.0625rem; }
+.rb-inst { container-type: inline-size; --lab: 5.5rem; }
+@container (max-width: 760px) {
+  .rb-inst .rb-c { margin: 0 .5px; border-radius: .1875rem; font-size: .6875rem; }
+  .rb-inst .rb-lab small { display: none; }
+}
+.rb-inst .rb-snap { top: -22px; height: 1rem; justify-content: start; place-items: center start; }
+.rb-inst .rb-snap span { padding-left: 1.0625rem; white-space: nowrap; }
+.rb-inst .rb-snap::after { top: .25rem; left: .3125rem; transform: rotate(45deg); }
+.rb-inst .rb-snap.quiet span { opacity: 0; }
+.rb-inst .rb-bracket { top: -18px; height: .75rem; }
+.rb-inst .rb-bracket span { bottom: auto; top: -8px; left: .875rem; margin: 0; padding: 0 .375rem; background: #1a1612; font-size: .6875rem; }
+.rb-inst .rb-bar { order: 2; padding-top: .75rem; }
+.rb-inst .rb-keys { order: 3; margin-top: .875rem; font-size: .8125rem; }
+.rb-inst .rb-log { order: 4; min-height: 0; margin-top: .75rem; }
+.rb-inst .rb-log li { padding: .5625rem .75rem; background: #100E0B; font-size: .875rem; }
+.rb-inst .rb-scroll { order: 1; }
+@media (max-width: 760px) {
+  .net-instrument { border-radius: .875rem; }
+  .rb-inst .rb-bracket span { font-size: .625rem; }
+}
+
+
+/* Keyboard legend for the player (shared/rollback.js). */
+.rb-shortcuts { margin-left: auto; color: var(--faint); }
+.rb-shortcuts kbd { display: inline-block; min-width: 1.4em; padding: 0 .3em; margin: 0 .1em; border-radius: .25rem; font: 600 .6875rem/1.5 var(--mono); text-align: center; color: var(--dim); background: var(--sunken); box-shadow: inset 0 -1px 0 var(--edge-strong), inset 0 0 0 1px var(--edge); }
+.net-instrument:focus-visible { outline: 2px solid var(--water-text); outline-offset: 3px; }
+@media (max-width: 760px) { .rb-shortcuts { display: none; } }
