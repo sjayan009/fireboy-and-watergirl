@@ -446,7 +446,7 @@ export function playScreen(host: HTMLElement): () => void {
     localDescendantInterpolation: networkFlags.descendantInterpolation,
     onRenderTiming: sample => qoe.rendered(sample),
     save: progress.store,
-    onPrepareRun: async v => {
+    onPrepareRun: v => {
       // Said once per prepared scene, so a level that starts with holes in it
       // says so rather than looking like a rendering bug somebody should
       // report. Preparation retries what failed last time, so this clears
@@ -454,6 +454,8 @@ export function playScreen(host: HTMLElement): () => void {
       if (!v.artComplete) {
         notice("art", "Some game art did not load. The level still plays.");
       }
+      // Nothing left to wait for since the ranking registration went.
+      return Promise.resolve();
     },
     onState: () => {
       refreshStatus();
