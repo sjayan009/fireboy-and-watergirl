@@ -40,7 +40,6 @@ import { Leaderboard } from "../ui/leaderboard.js";
 import { ProgressPanel } from "../ui/progress.js";
 import { leaderboardCache } from "../ranking.js";
 import { PlayController, loadSelection, selectionKey } from "../playstate.js";
-import { Ranking } from "../ranking.js";
 import { MatchLease } from "../matchlease.js";
 import { MatchSharing, type SharingState } from "../sharing.js";
 import { QoeRecorder } from "../net/qoe.js";
@@ -427,26 +426,16 @@ export function playScreen(host: HTMLElement): () => void {
    * for as long as the tab stayed open.
    */
   let gone = false;
-  const rankedStatus = el("span", { class: "ranked-status", role: "status", "aria-live": "polite" });
-  const ranking = new Ranking(label => { rankedStatus.textContent = label; });
-
-  /**
-   * What identifies this run to the ranking, or null when there is nothing to
-   * rank.
+  /*
+   * No `Ranking` here.
    *
-   * One function rather than the same object literal in three places: the three
-   * were already identical, and `eligible` is exactly the kind of field that
-   * gets added to two of them.
+   * It drove the replay verifier, which has never been deployed:
+   * `play_private.engine_versions` is seeded empty, so every registration was
+   * refused and every finished level put "Not ranked · replay could not be
+   * queued" on a second footer line the player could do nothing about. The
+   * board reads `pair_progress` and never needed it (see `leaderboard.ts`).
+   * `ranking.ts` stays, for when the verifier comes back as a badge.
    */
-  function rankedContext() {
-    if (!match) return null;
-    return {
-      friend: match.friend.id,
-      connection: match.invite.attempt ?? match.invite.session,
-      uploader: match.iInvited,
-      eligible: view.artComplete,
-    };
-  }
 
   const qoe = new QoeRecorder();
   if (import.meta.env.DEV) (window as Window & { fbwgQoe?: () => unknown }).fbwgQoe = () => qoe.summary();
@@ -463,11 +452,8 @@ export function playScreen(host: HTMLElement): () => void {
       // report. Preparation retries what failed last time, so this clears
       // itself the moment the art actually arrives.
       if (!v.artComplete) {
-        notice("art", "Some game art did not load. The level still plays, but this " +
-               "run will not be ranked.");
+        notice("art", "Some game art did not load. The level still plays.");
       }
-      const context = rankedContext();
-      if (context && v.session) await ranking.prepare(context, v.session);
     },
     onState: () => {
       refreshStatus();
@@ -498,8 +484,6 @@ export function playScreen(host: HTMLElement): () => void {
       rememberSelection(playing);
       showHand();
       showShare();
-      const context = rankedContext();
-      if (context && view.session) ranking.observe(context, view.session, view.game);
     },
     onFrame: () => {
       qoe.tick(performance.now(), view.session);
@@ -520,8 +504,6 @@ export function playScreen(host: HTMLElement): () => void {
         // account once it settles.
         if (!progress.shared) solo.touched();
       }
-      const context = rankedContext();
-      if (context && v.session) ranking.observe(context, v.session, v.game, frame);
     },
     onRefused: (why) => {
       if (why === "preparation-failed") {
@@ -567,11 +549,11 @@ export function playScreen(host: HTMLElement): () => void {
     const next = describe();
     if (next !== lastStatus) { status.textContent = next; lastStatus = next; }
     const s = view.session;
-    const state = s ? (stalling ? "waiting" : "connected") : match ? "connecting" : "local";
+    const state = s ? (stalling ? "waiting" : "connected") : match ? (rebuilding ? "reconnecting" : "connecting") : "local";
     if (connection.dataset.state !== state) {
       connection.dataset.state = state;
       connection.hidden = state === "local";
-      connection.textContent = { connected: "Connected", waiting: "Waiting for friend", connecting: "Connecting", local: "" }[state];
+      connection.textContent = { connected: "Connected", waiting: "Waiting for friend", reconnecting: "Reconnecting", connecting: "Connecting", local: "" }[state];
     }
   }
 
@@ -883,7 +865,6 @@ export function playScreen(host: HTMLElement): () => void {
     }
     void progressPanel.refresh();
   });
-  shell.root.querySelector("footer")!.append(rankedStatus);
   const otherTab = el("span", { class: "other-tab" }, "Playing in another tab. ");
   otherTab.hidden = true;
   const takeover = el("button", { class: "ghost" }, "Take over here");
@@ -1129,6 +1110,7 @@ export function playScreen(host: HTMLElement): () => void {
     unsubscribe.push(l.onChange((friends) => {
       drawPanel(friends);
       if (match && !friends.some(f => f.id === match!.friend.id && f.status === "accepted")) endSession("This friendship is no longer available.");
+      watchDeparture();
     }));
     unsubscribe.push(l.onInvite((invite, from) => showInvite(invite, from)));
     unsubscribe.push(l.onResume((invite, from) => void showResume(invite, from)));
@@ -1503,6 +1485,7 @@ export function playScreen(host: HTMLElement): () => void {
     const abort = new AbortController();
     rebuilding = abort;
     flow.set("reconnecting");
+    refreshStatus();
     const them = match.friend.username;
 
     if (!match.iInvited) {
@@ -1511,13 +1494,24 @@ export function playScreen(host: HTMLElement): () => void {
       // that noticed has to be able to start something, or a one-sided failure
       // is a pair sitting and waiting for each other forever.
       notice("session", `Lost the connection to ${them}. Reconnecting…`);
-      for (const wait of [0, 1000, 2000, 4000, 8000, 16000]) {
+      // The last wait is the inviter's to use: it is their final attempt
+      // answering our final request, not another request of our own.
+      const waits = [0, 1000, 2000, 4000, 8000, 16000, 16000];
+      for (const [i, wait] of waits.entries()) {
         if (abort.signal.aborted || !match) return;
         await new Promise((r) => setTimeout(r, wait));
         if (abort.signal.aborted || !match) return;
         if (view.session) return;              // they got through to us
-        lobby?.askResume(match.friend.id, match.invite);
+        if (departed()) break;
+        if (i < waits.length - 1) lobby?.askResume(match.friend.id, match.invite);
       }
+      // This used to `return` here and leave the match in place, with no link
+      // and nobody retrying: the header said "Reconnecting with …" and the pill
+      // said "Connecting" for as long as the tab stayed open, while the friends
+      // list beside them had already said Offline.
+      if (abort.signal.aborted || !match || view.session) return;
+      rebuilding = null;
+      endSession(departed() ? `${them} left the game.` : `Could not get back to ${them}.`);
       return;
     }
 
@@ -1543,15 +1537,53 @@ export function playScreen(host: HTMLElement): () => void {
         if (abort.signal.aborted) return;
         console.info("reconnect attempt failed:", (e as Error).message);
       }
-      // A friend who has gone offline in presence has closed the tab. There is
-      // nobody to reconnect to and no point pretending otherwise.
-      const still = lobby?.list.find((f) => f.id === match?.friend.id);
-      if (!still || still.activity === null) break;
+      if (departed()) break;
       await new Promise((r) => setTimeout(r, wait));
     }
     if (abort.signal.aborted) return;
     rebuilding = null;
-    endSession(`Could not get back to ${them}.`);
+    endSession(departed() ? `${them} left the game.` : `Could not get back to ${them}.`);
+  }
+
+  /**
+   * Whether the partner has gone offline in presence -- closed the tab, most
+   * likely. There is nobody to reconnect to and no point pretending otherwise.
+   */
+  function departed(): boolean {
+    const still = lobby?.list.find((f) => f.id === match?.friend.id);
+    return !still || still.activity === null;
+  }
+
+  /**
+   * End a match whose link is gone once presence says the partner is too.
+   *
+   * `reconnect` only looks at presence between its own attempts, and an attempt
+   * can sit on a handshake for many seconds -- so a friend who closed their tab
+   * left this side on "Reconnecting with …" long after the friends list said
+   * Offline. This answers the presence change itself.
+   *
+   * Only while OUR presence is connected, because a lobby channel that has
+   * dropped shows every friend as absent at once, and only after a short grace,
+   * because presence can flap on a rejoin.
+   */
+  let departure: ReturnType<typeof setTimeout> | null = null;
+  function watchDeparture(): void {
+    const them = match && lobby?.list.find((f) => f.id === match!.friend.id);
+    const linkless = !view.session || view.session.linkDown;
+    const left = !!them && linkless && them.connection === "connected" && them.activity === null;
+    if (!left) {
+      if (departure !== null) { clearTimeout(departure); departure = null; }
+      return;
+    }
+    if (departure !== null) return;
+    departure = setTimeout(() => {
+      departure = null;
+      const still = match && lobby?.list.find((f) => f.id === match!.friend.id);
+      if (!match || !still || (view.session && !view.session.linkDown)) return;
+      if (still.connection === "connected" && still.activity === null) {
+        endSession(`${match.friend.username} left the game.`);
+      }
+    }, 3000);
   }
 
   /** The other side is rebuilding the link. Answer it, without asking anybody. */
@@ -1623,6 +1655,7 @@ export function playScreen(host: HTMLElement): () => void {
   function endSession(why: string): void {
     consent?.close(); consent = null; watchGeneration++;
     lease.release();
+    if (departure !== null) { clearTimeout(departure); departure = null; }
     if (!match) return;
     // Held, because the announcement below is addressed BY topic and the topic
     // is derived from who the two of us are. Reading `watchRoom?.topic` instead
@@ -1665,6 +1698,9 @@ export function playScreen(host: HTMLElement): () => void {
     drawPanel(lobby?.list ?? []);
     // The pair's map has just been handed back for this browser's own.
     drawTimes();
+    // Header and link pill, which otherwise wait for the engine's next state
+    // change to stop saying "Reconnecting".
+    refreshStatus();
   }
 
   // A tab that goes away without saying so leaves the other person waiting on
@@ -1695,7 +1731,7 @@ export function playScreen(host: HTMLElement): () => void {
       view.pauseForSuspension();
       if (consent?.consent) void consent.set(false);
     } else {
-      void consent?.refresh(); void ranking.flush();
+      void consent?.refresh();
       if (match) notice("suspend", "Press P when you are both ready to continue.");
     }
   };
@@ -1714,13 +1750,13 @@ export function playScreen(host: HTMLElement): () => void {
     flow.cancel();
     if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
     if (leaving !== null) { clearTimeout(leaving); leaving = null; }
+    if (departure !== null) { clearTimeout(departure); departure = null; }
     shell.destroy();
     friendsUI.destroy();
     leaderboard.destroy();
     progressPanel.destroy();
     consent?.close(); consent = null; watchGeneration++;
     lease.close();
-    ranking.close();
     // One last push, then stop. Leaving the screen is the most likely moment
     // for a level finished seconds ago to still be sitting in the settle timer.
     void solo.sync();
