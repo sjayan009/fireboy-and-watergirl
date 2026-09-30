@@ -322,13 +322,19 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .play-footer .footer-controls .tool { min-height:30px; padding:4px 10px; gap:6px; color:var(--ink); background:#24201a; border-color:var(--edge); box-shadow:inset 0 1px 0 #ffffff09; }
 .play-footer .footer-controls .tool:hover:not(:disabled) { background:#322c23; border-color:#6b6151; }
 .play-footer .footer-controls .tool::before { width:14px; height:14px; }
-.link-state { display:inline-flex; align-items:center; gap:7px; min-height:30px; padding:0 11px; border-radius:999px; font-weight:650; font-size:.75rem; border:1px solid var(--edge); color:var(--dim); }
-.link-state::before { content:''; width:8px; height:8px; border-radius:50%; background:currentColor; }
-.link-state[data-state='connected'] { color:#9fdc7c; background:#1c2b15; border-color:#3f6b26; }
-.link-state[data-state='waiting'] { color:var(--gold); background:#2d2512; border-color:#6b5520; }
-.link-state[data-state='connecting']::before { animation:link-pulse 1.2s ease-in-out infinite; }
-@keyframes link-pulse { 50% { opacity:.3; } }
-@media (prefers-reduced-motion: reduce) { .link-state[data-state='connecting']::before { animation:none; } }
+/*
+ * The link state wears the same chip as Unmute and Fullscreen beside it -- same
+ * radius, fill, edge and ink -- so the three read as one row of controls. Only
+ * the dot carries the state: green and breathing when connected, amber while
+ * waiting or reconnecting, grey while the first connection is made. It is a
+ * status, not a button, so it has no hover.
+ */
+.link-state { display:inline-flex; align-items:center; gap:7px; min-height:30px; padding:4px 10px; border:1px solid var(--edge); border-radius:8px; color:var(--ink); background:#24201a; box-shadow:inset 0 1px 0 #ffffff09; font-size:.75rem; font-weight:600; white-space:nowrap; }
+.link-state::before { content:''; flex:none; width:8px; height:8px; border-radius:50%; background:var(--dim); }
+.link-state[data-state='connected']::before { background:#6fd04a; animation:link-live 2s ease-out infinite; }
+.link-state[data-state='waiting']::before, .link-state[data-state='reconnecting']::before { background:var(--gold); }
+@keyframes link-live { 0% { box-shadow:0 0 0 0 #6fd04a99; } 70%, 100% { box-shadow:0 0 0 6px #6fd04a00; } }
+@media (prefers-reduced-motion: reduce) { .link-state[data-state='connected']::before { animation:none; } }
 /*
  * The controls line is always lit, whatever has focus.
  *
