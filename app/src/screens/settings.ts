@@ -97,14 +97,18 @@ export function settingsScreen(host: HTMLElement): void {
 
 function presentationSection(): HTMLElement {
   const preferences = presentationPreferences();
-  const fps = el("select", { "aria-label": "Frame rate" },
+  const fps = el("select", { class: "pick" },
     ...[0, 30, 60, 120, 144, 240].map(value => el("option", { value: String(value) }, value ? `${value} FPS` : "Auto · follow display")));
-  const scale = el("select", { "aria-label": "Output quality" },
+  const scale = el("select", { class: "pick" },
     ...[[1, "Standard"], [1.5, "Sharper"], [2, "High"]].map(([value, label]) => el("option", { value: String(value) }, String(label))));
   fps.value = String(preferences.fps); scale.value = String(preferences.scale);
   const change = () => savePresentationPreferences({ fps: Number(fps.value), scale: Number(scale.value) });
   on(fps, "change", change); on(scale, "change", change);
-  return el("div", {}, el("label", {}, "Frame rate", fps), el("label", {}, "Output quality", scale),
+  // The same labelled fields as every other row's form, so the two pickers do
+  // not arrive as the browser's bare selects with their labels run into them.
+  return el("div", { class: "settings-fields" },
+    el("label", { class: "field" }, el("span", {}, "Frame rate"), fps),
+    el("label", { class: "field" }, el("span", {}, "Output quality"), scale),
     note("Higher frame rates can make movement smoother when your display and computer support them. Lower settings use less power. These choices apply only to your screen; your friend can choose independently."));
 }
 

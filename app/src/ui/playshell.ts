@@ -13,7 +13,7 @@ export class PlayShell {
   readonly root = el("div", { class: "play play-shell" });
   readonly viewport = el("div", { class: "game-viewport" });
   readonly screen: HTMLElement;
-  readonly saveStatus = el("button", { class: "save-status ghost", "aria-live": "polite", "aria-controls": "play-drawer", "aria-expanded": "false" }, "Saved");
+  readonly saveStatus = el("button", { class: "save-status ghost", "aria-live": "polite", "aria-controls": "play-drawer", "aria-expanded": "false" }, "Saved to Cloud");
   readonly friendButton = control("Friends (0)", "friends");
   private boardButton = control("Leaderboard", "leaderboard");
   private menuButton = control("Menu", "menu");
