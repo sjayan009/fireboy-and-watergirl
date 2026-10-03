@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && vite build --config ../design/landing/vite.config.mjs --mode ship && node scripts/assets.mjs && node scripts/pages.mjs",
+    "build": "node scripts/level-assets.mjs && tsc --noEmit && vite build && vite build --config ../design/landing/vite.config.mjs --mode ship && node scripts/assets.mjs && node scripts/pages.mjs",
     "preview": "vite preview",
     "test": "node test/accounts.mjs && node test/interface.mjs && node test/production.mjs && node test/twopeople.mjs",
     "check": "node scripts/check.mjs",

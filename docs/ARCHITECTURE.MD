@@ -814,6 +814,14 @@ both will try to write it. Rather than electing a writer, the merge is made
 a faster one, and two peers racing converge on the same row whichever order they
 arrive in.
 
+Canonical solo data belongs to `solosave.ts`; the engine receives a separate
+projection from `pairsave.ts`. Shared canonical results are merged only at
+confirmed frontiers. Prediction/rollback can change the projection without
+rewinding durable data or publishing an achievement. The Progress panel reads
+canonical data, while solo cloud responses reach a live engine only at a safe
+menu/release boundary. See [the implementation record](IMPLEMENTATION_RESULTS_17.md)
+for the ownership, failure and lifecycle regression coverage.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -823,9 +831,10 @@ sequenceDiagram
     participant RPC as sync_progress()
     participant PP as pair_progress
 
-    G->>PS: level complete — stats/times/timesString (32 each)
-    PS->>PS: merge with the pair's known state, settle 1500 ms
+    G->>PS: confirmed results — stats/times/timesString (32 each)
+    PS->>PS: merge with canonical pair state
     PS->>OB: remember{owner, friendId, revision} (transactional)
+    PS->>PS: settle delivery 1500 ms; two independent bounded lanes
     PS->>RPC: POST /rest/v1/rpc/sync_progress (token re-checked first)
     alt HTTP success
         RPC->>PP: monotonic merge — medal max, time min
@@ -836,7 +845,7 @@ sequenceDiagram
     end
 ```
 
-Four details that are each a bug that happened:
+Five details that are each a bug that happened:
 
 * **The outbox is account-owned.** Every pending row carries `owner`, and
   `post()` re-reads the session immediately before the request — auth can change
@@ -850,6 +859,11 @@ Four details that are each a bug that happened:
   thrown error.
 * **The save status is a control.** "Saved" / "Saving…" / "Retry needed" is a
   button that flushes, so the retry is always one press away (§6).
+* **Failures are scoped to a pair and revision.** Transient failures retry with
+  bounded backoff; permanent refusals remain quarantined for explicit retry or
+  export. Storage failure retains canonical results in memory and retries them
+  even when the run stays paused or on results. A full quota is shown separately
+  from a cloud-delivery error.
 
 ---
 
@@ -991,7 +1005,7 @@ flowchart LR
         V1["vite build → dist/ at the REPO ROOT"]
         A1["app/scripts/assets.mjs"]
     end
-    DIST["dist/<br/>~739 kB JS+CSS · 27.0 MB art and audio<br/>version.txt = the commit"]
+    DIST["dist/<br/>~846 kB JS+CSS · 27.8 MB art and audio<br/>version.txt = the commit"]
     CHK["app/scripts/check.mjs"]
 
     EX --> A1
@@ -1014,24 +1028,29 @@ Both asset transforms were measured rather than assumed:
   to 0.34 MB with no encoder involved. Two sounds came from FLV and keep their
   decoded WAV, because no browser plays FLV.
 
-Nothing under `extracted/` is modified — the dev server keeps serving the
-originals (through a middleware, because copying 36 MB into `public/` would make
-every dev-server start miserable), and version control keeps one copy rather than
-two.
+Source art/audio under `extracted/` retain their original format. The build also
+generates `levels.json` there using an offline all-level dependency oracle;
+runtime preparation reads it without constructing another physics world.
+Critical common/level art forms the playable barrier and decorative work follows
+in the background. Resource owners, priorities, cancellation and bounded cold
+retention keep abandoned preparations from consuming unlimited work. A measured
+character atlas prototype stays opt-in because it increases transfer and decoded
+memory despite reducing request count.
 
 **Cache identity.** The deployment serves `/extracted/assets/*` with
 `max-age=31536000, immutable`, and the names under it are stable — `sprites.json`
 is `sprites.json` in every release. Those two facts are incompatible unless the
 URL changes when the assets do, so `app/scripts/release.mjs` derives
-`?v=<digest>` from the asset tree: file list and sizes (cheap, and sizes catch
-every change the pipeline can make), plus the *contents* of the four small
-manifests where a same-size edit is plausible. `engine/src/asseturl.ts` is what
-joins a path onto a base that may carry that marker.
+`?v=<digest>` from SHA-256 of every source asset's bytes, pipeline/encoder/layout
+settings, native codec versions, generator source and atlas rollout mode. Same-size edits therefore
+change release identity. Production sprite/dependency manifests agree on their
+content identity and include atlas source rectangles/fallbacks when enabled.
+`engine/src/asseturl.ts` joins paths onto the release-marked base.
 
 **`check.mjs` is the gate before anything ships**, and asks three questions no
 other test does: did a secret get into something the browser downloads; does
 every asset the manifests name exist in the format they now claim; and has the
-bundle quietly grown past its 800 kB budget.
+bundle quietly grown past its 860 kB budget (the 17-improvement release measured approximately 846 kB).
 
 ---
 
@@ -1258,7 +1277,7 @@ holds the full gate list and the evidence behind each claim.
 | Snapshots | One, refreshed every ~8 frames — 1.4 MB, not 17 MB |
 | Relay batching | `FLUSH_MS = 230`, leading edge then batched |
 | Presence | `PRESENCE_MS = 8000` — the sixth call in 30 s closes the channel |
-| Bundle | ~739 kB JS+CSS against an 800 kB budget; 27.0 MB of art and audio |
+| Bundle | ~846 kB JS+CSS against an 860 kB budget; ~27.4 MB of art and audio; see IMPLEMENTATION_RESULTS_17.md |
 | Sprite frames / sounds / button parts | 1865 WebP frames · 17 sounds · 45 of 75 button parts |
 | Leaderboard index (`0018`) | 0.10 ms index-only scan vs 39.8 ms sequential scan + sort, at 200k rows |
 | Replay limits | ≤ 1 MiB, ≤ 200,000 frames, 12-hour attempt expiry, 3 verification tries |
