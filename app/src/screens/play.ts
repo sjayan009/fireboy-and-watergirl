@@ -870,11 +870,17 @@ export function playScreen(host: HTMLElement): () => void {
   panel.append(watchList);
   /** How many results had reached the server last time we looked. */
   let sentResults = progress.saves;
-  const showSave = () => {
+  const labelSave = () => {
     const error = progress.shared ? progress.storageError ?? progress.lastError : solo.storageError ?? solo.lastError;
     const waiting = progress.shared ? progress.waiting : solo.pending;
-    shell.saveStatus.textContent = error ? "Retry needed" : waiting ? "Saving…" : solo.localOnly && !progress.shared ? "Saved on device" : "Saved to cloud";
+    shell.saveStatus.textContent = error ? "Retry needed" : waiting ? "Saving…" : solo.localOnly && !progress.shared ? "Saved on device" : "Saved to Cloud";
     shell.saveStatus.title = error ?? "Your progress";
+  };
+  // Labelled now, not on the first save: until something changed, the footer
+  // went on saying the bare "Saved" the shell is built with.
+  labelSave();
+  const showSave = () => {
+    labelSave();
     // A result that has actually landed is a leaderboard that has actually
     // changed, and the board holds a fifteen-second cache. `quit` has always
     // asked it to redraw, but it asked in the same breath as the save -- so the

@@ -222,6 +222,8 @@ a.secondary:active { transform: translateY(1px); }
 .settings-body { padding:0 2px 20px; animation:panel-arrive var(--settle) var(--ease); }
 .settings-body > *:first-child { margin-top:0; }
 .settings-body form { margin-top:12px; }
+/* Fields that save as they change, so no form: spaced as one all the same. */
+.settings-fields { display:grid; gap:14px; }
 .settings-list .settings-group:last-child .settings-name { color:var(--bad); }
 /* In the drawer the card's own title is hidden, so that title's air goes too. */
 .drawer-content .settings-list { margin-top:2px; }
