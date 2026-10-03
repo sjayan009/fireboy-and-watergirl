@@ -27,6 +27,7 @@ export class AudioPlayer {
   private ctx: AudioContext | null = null;
   private buffers = new Map<string, AudioBuffer>();
   private loading = new Set<string>();
+  private requests = new Set<AbortController>();
   private loops = new Map<string, Loop>();
   private gain: GainNode | null = null;
   /** Volumes set by the game, kept so a sound that starts later inherits it. */
@@ -61,10 +62,12 @@ export class AudioPlayer {
   private wake: (() => void) | null = null;
   private gone = false;
 
-  static async load(base: string): Promise<AudioPlayer> {
+  static async load(base: string, signal?: AbortSignal): Promise<AudioPlayer> {
+    signal?.throwIfAborted();
     const res = await fetch(assetUrl(base, "sounds.json"),
-                            { cache: "force-cache" });
+                            { cache: "force-cache", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000) });
     const player = new AudioPlayer(await res.json(), base);
+    if (signal?.aborted) { player.dispose(); signal.throwIfAborted(); }
     const wake = () => {
       player.removeWake();
       player.resume();
@@ -108,16 +111,19 @@ export class AudioPlayer {
     if (!file || !this.ctx) return null;
 
     this.loading.add(symbol);
+    const context = this.ctx;
+    const controller = new AbortController();
+    this.requests.add(controller);
     // A manifest entry is either a bare filename, meaning the decoded WAVs
     // `extracted/` ships, or a path, meaning a build picked a smaller original
     // for this sound. Reading it out of the value keeps the choice in the data.
     const where = file.includes("/") ? file : `sounds_wav/${file}`;
-    fetch(assetUrl(this.base, where))
+    fetch(assetUrl(this.base, where), { signal: controller.signal })
       .then((r) => r.arrayBuffer())
-      .then((b) => this.ctx!.decodeAudioData(b))
-      .then((buf) => { this.buffers.set(symbol, buf); })
+      .then((b) => { if (this.gone || this.ctx !== context) throw new Error("disposed"); return context.decodeAudioData(b); })
+      .then((buf) => { if (!this.gone && this.ctx === context) this.buffers.set(symbol, buf); })
       .catch(() => { /* a missing effect must never break the game */ })
-      .finally(() => this.loading.delete(symbol));
+      .finally(() => { this.requests.delete(controller); this.loading.delete(symbol); });
     return null;
   }
 
@@ -166,6 +172,7 @@ export class AudioPlayer {
       const loop = this.loops.get(c.symbol);
       if (loop) {
         try { loop.src.stop(); } catch { /* already finished */ }
+        loop.src.disconnect(); loop.gain.disconnect();
         this.loops.delete(c.symbol);
       }
       return;
@@ -207,6 +214,7 @@ export class AudioPlayer {
       this.loops.set(symbol, { src, gain: g });
       src.onended = () => {
         if (this.loops.get(symbol)?.src === src) this.loops.delete(symbol);
+        src.disconnect(); g.disconnect();
       };
     } else {
       src.connect(this.gain);
@@ -227,6 +235,7 @@ export class AudioPlayer {
   stopLoops(): void {
     for (const [, l] of this.loops) {
       try { l.src.stop(); } catch { /* already finished */ }
+      l.src.disconnect(); l.gain.disconnect();
     }
     this.loops.clear();
     this.pendingLoops.clear();
@@ -258,6 +267,8 @@ export class AudioPlayer {
    * context throws.
    */
   dispose(): void {
+    for (const request of this.requests) request.abort();
+    this.requests.clear();
     if (this.gone) return;
     this.gone = true;
     this.removeWake();

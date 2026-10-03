@@ -38,6 +38,7 @@ export class PlayShell {
     banner: HTMLElement; friends: HTMLElement; times: HTMLElement; board: HTMLElement;
     actions: HTMLElement[]; input: (enabled: boolean) => void;
     onPanel?: (panel: Panel, changed: boolean) => void; watching?: boolean;
+    onObstructed?: (obstructed: boolean) => void;
     primaryAction?: HTMLElement;
     /** The pair's link state, shown beside the sound and fullscreen controls. */
     connection?: HTMLElement;
@@ -157,6 +158,7 @@ export class PlayShell {
   }
   private syncModal(): void {
     const modal = !!this.active && !this.wide.matches;
+    this.options.onObstructed?.(modal);
     this.drawer.setAttribute("role", modal ? "dialog" : "complementary");
     if (modal) this.drawer.setAttribute("aria-modal", "true"); else this.drawer.removeAttribute("aria-modal");
     this.viewport.inert = modal;

@@ -1,0 +1,166 @@
+{
+  "label": "17-improvements-packaged-default",
+  "recordedAt": "2026-10-03T01:28:19.932Z",
+  "commit": "ece3f5dce1e1998b2609fcf8bd8fe4244366b7f7",
+  "environment": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "cpu": "Intel(R) Core(TM) Ultra 9 185H",
+    "logicalCpus": 22,
+    "node": "v22.17.1",
+    "browser": "151.0.7922.34",
+    "headless": true,
+    "engine": "C:\\Users\\jayan\\GeorgiaTech\\Research\\fireboy-and-watergirl\\engine\\dist",
+    "assets": "C:\\Users\\jayan\\GeorgiaTech\\Research\\fireboy-and-watergirl\\dist\\extracted\\assets"
+  },
+  "preparation": {
+    "prepareMs": 653.6999999880791,
+    "missing": 0
+  },
+  "elapsed": 20.01030000001192,
+  "frameMs": {
+    "n": 1178,
+    "p50": 16.69999999999891,
+    "p95": 16.799999999999272,
+    "p99": 33.29999999999927,
+    "max": 183.30000000000018
+  },
+  "renderMs": {
+    "n": 1179,
+    "p50": 4.800000011920929,
+    "p95": 7.800000011920929,
+    "p99": 9.399999976158142,
+    "max": 82.39999997615814
+  },
+  "inputToRenderMs": {
+    "n": 167,
+    "p50": 30.599999964237213,
+    "p95": 51.30000001192093,
+    "p99": 59.10000002384186,
+    "max": 128
+  },
+  "inputEvents": 167,
+  "inputUnresolved": 0,
+  "renderCallsPerSecond": 58.91965637693077,
+  "distinctVisualUpdatesPerSecond": 58.91965637693077,
+  "localPositionUpdatesPerSecond": 42.2282524499631,
+  "drawCalls": {
+    "n": 1179,
+    "p50": 58,
+    "p95": 58,
+    "p99": 62,
+    "max": 823
+  },
+  "traversalNodes": {
+    "n": 1179,
+    "p50": 74,
+    "p95": 74,
+    "p99": 80,
+    "max": 835
+  },
+  "mainThreadLongTasksMs": {
+    "n": 1,
+    "p50": 186,
+    "p95": 186,
+    "p99": 186,
+    "max": 186
+  },
+  "methodTimes": {
+    "childXform": {
+      "count": 26726,
+      "ms": 31.599999129772186
+    },
+    "drawFiltered": {
+      "count": 3538,
+      "ms": 271.10000079870224
+    },
+    "drawMasked": {
+      "count": 3537,
+      "ms": 4342.000000178814
+    },
+    "drawText": {
+      "count": 7074,
+      "ms": 97.99999886751175
+    }
+  },
+  "simFrames": 520,
+  "digest": "5b90ce82",
+  "levelEnded": false,
+  "session": null,
+  "heap": {
+    "used": 15021618,
+    "total": 42695970
+  },
+  "rendererBefore": {
+    "nodeVisits": 857,
+    "maskCalls": 3,
+    "selfMaskCalls": 0,
+    "maskPixels": 1843200,
+    "fullMaskPixels": 1843200,
+    "boundsFallbacks": 3,
+    "effectHits": 0,
+    "effectMisses": 4,
+    "groundHits": 0,
+    "groundMisses": 1,
+    "effectRasterMs": 6.399999976158142,
+    "staticHits": 0,
+    "staticMisses": 378,
+    "staticValidationVisits": 378,
+    "staticCommands": 0,
+    "cacheBytes": 3981312,
+    "cacheEntries": 5,
+    "cacheEvictions": 0,
+    "scratchPixels": 921600,
+    "scratchPeakPixels": 921600,
+    "scratchAllocations": 3,
+    "outputScale": 1,
+    "staticEntries": 0
+  },
+  "rendererAfter": {
+    "nodeVisits": 89115,
+    "maskCalls": 3540,
+    "selfMaskCalls": 0,
+    "maskPixels": 4168056,
+    "fullMaskPixels": 1451212800,
+    "boundsFallbacks": 3,
+    "effectHits": 3492,
+    "effectMisses": 50,
+    "groundHits": 1178,
+    "groundMisses": 2,
+    "effectRasterMs": 90.20000004768372,
+    "staticHits": 1178,
+    "staticMisses": 756,
+    "staticValidationVisits": 756,
+    "staticCommands": 1556,
+    "cacheBytes": 5632800,
+    "cacheEntries": 47,
+    "cacheEvictions": 0,
+    "scratchPixels": 921600,
+    "scratchPeakPixels": 921600,
+    "scratchAllocations": 3,
+    "outputScale": 1,
+    "staticEntries": 64
+  },
+  "taskCpuPercent": 76.59010017161249,
+  "gc": {
+    "count": 84,
+    "totalMs": 49.29999999999999,
+    "maxMs": 6.06
+  },
+  "errors": [],
+  "limitations": [
+    "Native headless rAF cadence, not a physical high-refresh monitor",
+    "Input-to-render callback proxy excludes OS input and display scanout",
+    "Unresolved inputs include events replaced before movement or blocked by collision; reported separately",
+    "Canvas instrumentation and trace overhead included equally in both variants",
+    "GC trace durations are collector activity, not necessarily all stop-the-world time",
+    "CPU is Chromium TaskDuration/wall time including measurement setup/teardown; no process RSS meter",
+    "Solo renderer workload; network results are separate"
+  ],
+  "steering": "position",
+  "presentation": {
+    "rollbackSmoothing": false,
+    "localDescendantInterpolation": false
+  },
+  "raster": "default"
+}

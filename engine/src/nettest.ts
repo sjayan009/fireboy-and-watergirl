@@ -38,6 +38,7 @@ class Link {
   private queue: { at: number; to: 0 | 1; data: Uint8Array }[] = [];
   private handlers: [((d: Uint8Array) => void)?, ((d: Uint8Array) => void)?] = [];
   private now = 0;
+  get nowMs(): number { return this.now; }
   private rng: Rng;
   /** Packets sent, and of those, dropped. */
   sent = 0;
@@ -105,7 +106,7 @@ function pair(link: Link, delay: number,
   const make = (slot: Slot): Peer => {
     const host = new LevelHost();
     const session = new NetSession({
-      slot, host, transport: link.endpoint(slot), delay,
+      slot, host, transport: link.endpoint(slot), now: () => link.nowMs, workNow: () => 0, delay,
       onDesync: () => onDesync?.(slot),
       onQuit: (by, forGood) => onQuit?.(slot, by, forGood),
     });
@@ -580,7 +581,7 @@ console.log("\na stall is not paid back as a fast-forward");
         // clamp on the backlog, and the window is a number that moves for
         // reasons of its own -- it went from ten to fourteen when the relay's
         // batching doubled. A test of one should not fail for the other.
-        slot, host, transport: link.endpoint(slot), rollback: true,
+        slot, host, transport: link.endpoint(slot), now: () => link.nowMs, workNow: () => 0, rollback: true,
         maxRollback: 10,
       }),
     };

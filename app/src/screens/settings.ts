@@ -14,6 +14,7 @@ import {
 } from "../auth.js";
 import { supabase } from "../supabase.js";
 import { card, el, field, form, inputOf, note, on } from "../ui/dom.js";
+import { presentationPreferences, savePresentationPreferences } from "../presentation.js";
 
 /**
  * One row per setting, and only one of them open.
@@ -85,12 +86,26 @@ export function settingsScreen(host: HTMLElement): void {
       group("Email", auth().user?.email ?? "Not set", emailSection()),
       group("Two-factor", twoFactorValue, factors),
       group("Leaderboard", boardValue, boardSection(boardValue)),
+      group("Game display", "On this device", presentationSection()),
       group("Delete This Account", "", dangerSection())),
     el("p", { class: "note" },
       el("a", { href: "#/play" }, "Back to the game"))));
 
   void drawFactors(factors, twoFactorValue);
   void drawPassword(password, passwordValue);
+}
+
+function presentationSection(): HTMLElement {
+  const preferences = presentationPreferences();
+  const fps = el("select", { "aria-label": "Frame rate" },
+    ...[0, 30, 60, 120, 144, 240].map(value => el("option", { value: String(value) }, value ? `${value} FPS` : "Auto · follow display")));
+  const scale = el("select", { "aria-label": "Output quality" },
+    ...[[1, "Standard"], [1.5, "Sharper"], [2, "High"]].map(([value, label]) => el("option", { value: String(value) }, String(label))));
+  fps.value = String(preferences.fps); scale.value = String(preferences.scale);
+  const change = () => savePresentationPreferences({ fps: Number(fps.value), scale: Number(scale.value) });
+  on(fps, "change", change); on(scale, "change", change);
+  return el("div", {}, el("label", {}, "Frame rate", fps), el("label", {}, "Output quality", scale),
+    note("Higher frame rates can make movement smoother when your display and computer support them. Lower settings use less power. These choices apply only to your screen; your friend can choose independently."));
 }
 
 /**
