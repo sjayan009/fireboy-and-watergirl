@@ -122,6 +122,9 @@ export function pair(link: Link, o: {
       // steps and never sleeps, so a session reading `performance.now` would
       // measure how fast the test ran rather than the link it is modelling.
       now: () => link.nowMs,
+      // The work budget too: on the wall clock, how much catch-up fits in a
+      // tick depended on the machine running the test, and results with it.
+      workNow: () => link.nowMs,
       onDesync: () => o.onDesync?.(slot),
     });
     return { session, host };
