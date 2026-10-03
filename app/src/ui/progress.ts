@@ -37,6 +37,7 @@ import { el, clear, note } from "./dom.js";
 import { auth } from "../auth.js";
 import type { FriendState } from "../lobby.js";
 import type { PairProgress } from "../pairsave.js";
+import type { SoloProgress } from "../solosave.js";
 import { readPairProgress } from "../pairsave.js";
 import type { ProgressArrays } from "../outbox.js";
 
@@ -66,6 +67,7 @@ export const LOCAL_OPTION = "On This Device";
 export interface ProgressSources {
   /** The store the game is writing through, and what it knows about saving. */
   progress: PairProgress;
+  solo: SoloProgress;
   /** Who the friends are, refreshed whenever the lobby changes. */
   friends: () => FriendState[];
   /** The partner of the match in progress, if there is one. */
@@ -77,6 +79,8 @@ export interface ProgressSources {
 export class ProgressPanel {
   private who = el("select", { class: "pick", "aria-label": "Whose progress" });
   private body = el("div", { class: "progress-results", "aria-live": "polite" });
+  private delivery = el("div", { class: "progress-delivery", "aria-live": "polite" });
+  private deliveryGeneration = 0;
   private generation = 0;
   private gone = false;
   private opened = false;
@@ -89,7 +93,7 @@ export class ProgressPanel {
     host.classList.add("progress-panel");
     host.append(
       el("div", { class: "progress-filters" }, el("label", {}, "Whose", this.who)),
-      this.body);
+      this.body, this.delivery);
     this.fill();
     this.who.addEventListener("change", () => {
       this.subject = this.who.value;
@@ -157,18 +161,19 @@ export class ProgressPanel {
 
   async refresh(): Promise<void> {
     if (!this.opened || this.gone) return;
+    void this.refreshDelivery();
     const generation = ++this.generation;
     const subject = this.subject;
     const table = this.sources.table();
     if (!table) { this.body.replaceChildren(note("Preparing the level list…")); return; }
 
     let data: ProgressArrays;
-    if (this.live()) {
-      // The store the game is writing through is fresher than anything the
-      // server could answer with, including the level that finished a second ago.
-      data = this.sources.progress.store.data as ProgressArrays;
-    } else if (!subject) {
+    if (!subject) {
       data = this.sources.progress.own;
+    } else if (this.live()) {
+      // Confirmed results are fresher than the server during an upload, while
+      // predicted results must not be presented as already saved achievements.
+      data = this.sources.progress.current;
     } else {
       this.body.replaceChildren(note("Loading your shared progress…"));
       try {
@@ -183,6 +188,36 @@ export class ProgressPanel {
       if (this.gone || generation !== this.generation) return;
     }
     this.draw(data, table, subject);
+  }
+
+  private async refreshDelivery(): Promise<void> {
+    const generation = ++this.deliveryGeneration;
+    try {
+      const pending = await this.sources.progress.pendingResults();
+      if (this.gone || generation !== this.deliveryGeneration) return;
+      this.delivery.replaceChildren();
+      if (!pending.length) return;
+      this.delivery.append(el("h3", {}, "Results waiting to save"));
+      for (const result of pending) {
+        const friend = this.sources.friends().find(f => f.id === result.friendId);
+        const name = friend?.username ?? "a previous friend";
+        const retry = el("button", { class: "ghost" }, `Retry saving with ${name}`);
+        retry.addEventListener("click", () => {
+          retry.disabled = true;
+          void this.sources.progress.retryPending(result.friendId).catch(() => {}).finally(() => { if (!this.gone) void this.refreshDelivery(); });
+        });
+        this.delivery.append(note(`With ${name}: ${result.quarantine ? "the cloud refused this save" : result.error ? "the connection failed" : "waiting for cloud confirmation"}. Your results remain on this device.`), retry);
+      }
+      const download = el("button", { class: "ghost" }, "Download unsent results");
+      download.addEventListener("click", () => {
+        const url = URL.createObjectURL(new Blob([JSON.stringify({ schema: 1, results: pending }, null, 2)], { type: "application/json" }));
+        const link = el("a", { href: url, download: "unsent-game-results.json" });
+        link.click(); setTimeout(() => URL.revokeObjectURL(url), 0);
+      });
+      this.delivery.append(download);
+    } catch {
+      if (!this.gone && generation === this.deliveryGeneration) this.delivery.replaceChildren(note("Unsent results could not be read. Retry after reopening this panel."));
+    }
   }
 
   private draw(data: ProgressArrays, table: string[], subject: string): void {
@@ -233,15 +268,18 @@ export class ProgressPanel {
     // read out of the database has no save of ours in flight to report on.
     if (this.live()) {
       const progress = this.sources.progress;
-      const trouble = progress.shared ? progress.lastError : progress.storageError;
+      const solo = this.sources.solo;
+      const trouble = progress.shared ? progress.storageError ?? progress.lastError : solo.storageError ?? solo.lastError;
       if (trouble) {
         this.body.append(el("p", { class: "error", role: "alert" },
-          progress.shared
-            ? `The last result could not be saved: ${trouble}. It will be sent ` +
-              "again when the connection comes back."
-            : `This browser is not storing progress: ${trouble}. A private ` +
-              "window or a full quota will do that."));
-      } else if (progress.waiting > 0) {
+          progress.storageError || (!progress.shared && solo.storageError)
+            ? `This browser could not store the latest results: ${trouble}. Keep this page open and free storage before retrying.`
+            : progress.shared
+            ? `The last result could not be saved: ${trouble}. Your results remain on this device; you can retry below.`
+            : `The cloud could not save your progress: ${trouble}. Your results remain on this device.`));
+      } else if (!progress.shared && solo.pending) {
+        this.body.append(note("Your account progress is on this device and waiting for cloud confirmation."));
+      } else if (progress.shared && progress.waiting > 0) {
         this.body.append(el("p", { class: "note" },
           `${progress.waiting} result${progress.waiting === 1 ? "" : "s"} still ` +
           "waiting to be sent. They will go when the connection allows."));

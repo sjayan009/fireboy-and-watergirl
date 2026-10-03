@@ -48,13 +48,17 @@
  * golden-render test is what says the swap changed nothing: it compares all 32
  * levels against signatures recorded before any of this existed.
  */
-import { readFile, writeFile, mkdir, readdir, stat, copyFile, rm } from
+import { readFile, writeFile, mkdir, readdir, stat, copyFile, rm, rename } from
   "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { availableParallelism } from "node:os";
 import sharp from "sharp";
+import { buildCharacterAtlases } from "./atlas.mjs";
+import { generateLevelAssets } from "./level-assets.mjs";
+import { ASSET_PIPELINE, assetRelease } from "./release.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "../..");
@@ -77,7 +81,30 @@ const RASTER_DIRS = new Set(["sprites", "images"]);
  * contention, and eight on a twenty-two core desktop is a quarter of the
  * machine idle.
  */
-const LANES = Math.max(1, availableParallelism());
+const LANES = Math.max(1, Math.min(8, availableParallelism()));
+const CACHE = resolve(ROOT, ".cache/asset-conversion-v2");
+const digest = bytes => createHash("sha256").update(bytes).digest("hex");
+const conversions = new Map();
+async function convertedBytes(source) {
+  const input = await readFile(source);
+  const key = digest(Buffer.concat([Buffer.from(`${ASSET_PIPELINE};sharp=${sharp.versions.sharp};webp=${sharp.versions.webp}`), input]));
+  if (conversions.has(key)) return conversions.get(key);
+  const work = (async () => {
+  const cached = join(CACHE, `${key}.webp`), marker = `${cached}.sha256`;
+  try {
+    const bytes = await readFile(cached);
+    if (digest(bytes) === await readFile(marker, "utf8")) return bytes;
+  } catch { /* An incomplete/corrupt cache entry is rebuilt, never served. */ }
+  const bytes = await sharp(input).webp({ quality: QUALITY, effort: EFFORT }).toBuffer();
+  await mkdir(CACHE, { recursive: true });
+  const temporary = `${cached}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(temporary, bytes); await rename(temporary, cached);
+  await writeFile(marker, digest(bytes));
+  return bytes;
+  })();
+  conversions.set(key, work);
+  try { return await work; } finally { conversions.delete(key); }
+}
 
 /** For each sound the game uses, the smallest file that will play. */
 async function audioPlan() {
@@ -113,6 +140,7 @@ async function walk(dir, base = dir, out = []) {
 
 const size = async (p) => (await stat(p)).size;
 
+if (!TO.startsWith(resolve(ROOT, "dist") + sep)) throw new Error("Asset output escaped dist");
 await rm(TO, { recursive: true, force: true });
 
 const plan = await audioPlan();
@@ -164,7 +192,7 @@ await Promise.all(Array.from({ length: LANES }, async () => {
     const was = await size(src);
     before += was;
     try {
-      await sharp(src).webp({ quality: QUALITY, effort: EFFORT }).toFile(dst);
+      await writeFile(dst, await convertedBytes(src));
       const now = await size(dst);
       after += now;
     } catch (e) {
@@ -192,10 +220,23 @@ for (const [where, source] of Object.values(plan)) {
 const spritesPath = join(TO, "sprites.json");
 const sprites = JSON.parse(await readFile(spritesPath, "utf8"));
 sprites.raster = "webp";
+const atlasPages = await buildCharacterAtlases(FROM, TO, sprites);
+await writeFile(spritesPath, JSON.stringify(sprites));
+const levels = await generateLevelAssets({ assets: TO, output: join(TO, "levels.json") });
+sprites.levelDependencies = levels.identity;
 await writeFile(spritesPath, JSON.stringify(sprites));
 
 await writeFile(join(TO, "sounds.json"), JSON.stringify(
   Object.fromEntries(Object.entries(plan).map(([k, v]) => [k, v[0]])), null, 1));
+
+// Written last: a release is complete only if every final resource has a verified content identity.
+const integrity = {};
+for (const rel of (await walk(TO)).sort()) {
+  integrity[rel.split(sep).join("/")] = digest(await readFile(join(TO, rel)));
+}
+await writeFile(join(TO, "asset-integrity.json"), JSON.stringify({ schema: 1, pipeline: ASSET_PIPELINE,
+  release: assetRelease(FROM), files: integrity }));
+console.log(`character atlases: ${atlasPages.reduce((n, page) => n + page.frames, 0)} frames in ${atlasPages.length} pages, ${atlasPages.reduce((n, page) => n + page.bytes, 0)} bytes`);
 
 /**
  * Which commit this build is, at the root of the output.

@@ -141,6 +141,16 @@ function fixture(options = {}) {
 }
 
 // Loss and reordering of ACCEPT/HELLO/ACK/READY/ACTIVE cannot create a handover hole.
+// Gameplay may arrive while the UI is still adopting the correct pair projection.
+{
+  const f = fixture({ rejectRTC: true }), received = [];
+  f.managers[0].send(new Uint8Array([2, 66])); await f.time.advance(100);
+  f.managers[1].onMessage(data => received.push([...data]));
+  assert.deepEqual(received, [[2, 66]], "early gameplay disappeared before receiver registration");
+  await f.close();
+}
+
+// Loss and reordering of ACCEPT/HELLO/ACK/READY/ACTIVE cannot create a handover hole.
 {
   let accepts = 0, ackDrops = 0, activeDrops = 0;
   const f = fixture({ configureRTC(pair) {
@@ -207,8 +217,40 @@ function fixture(options = {}) {
   f.rtc[0][0].fail(); await f.time.until(() => f.bothRTC() && f.rtc.length === 2);
   f.channel.forEach(c => c.status("CHANNEL_ERROR"));
   f.rtc[1].forEach(t => t.fail());
+  assert.deepEqual(f.closed, [0, 0], "recoverable all-path outage destroyed the logical transport");
+  assert.ok(f.managers.every(m => m.activePath === "offline" && m.recovering));
+  await f.time.advance(15250);
   assert.deepEqual(f.closed, [1, 1]); f.channel.forEach(c => c.status("CLOSED"));
   assert.deepEqual(f.closed, [1, 1]); await f.close();
+}
+
+// A silently broken one-way RTC is detected by bounded path-heartbeat timeouts.
+// A recoverable outage of every physical path keeps the game and command log.
+{
+  const f = fixture(); await f.time.until(f.bothRTC); await f.time.advance(700);
+  const peers = f.managers.map((transport, slot) => {
+    const host = new LevelHost();
+    return { host, session: new NetSession({ host, slot, transport, rollback: true, delay: 0,
+      now: () => f.time.now(), workNow: () => 0, onLinkDown: () => f.closed[slot]++ }) };
+  });
+  const step = async count => { for (let i = 0; i < count; i++) {
+    peers.forEach(p => p.session.tick(1 / 26)); await f.time.advance(1000 / 26);
+  } };
+  peers[0].session.requestStart("adventure", 1); await f.time.advance(40); await step(20);
+  const identity = peers.map(p => ({ session: p.session, host: p.host, level: p.host.lv }));
+  f.channel.forEach(c => c.status("CHANNEL_ERROR")); f.rtc[0].forEach(t => t.fail());
+  assert.ok(f.managers.every(m => m.activePath === "offline" && m.recovering));
+  peers[0].session.send(2, 1); // Forced pause requested while every path is absent.
+  await step(52);
+  assert.deepEqual(f.closed, [0, 0]);
+  f.channel.forEach(c => c.status("SUBSCRIBED")); await step(100);
+  peers.forEach(p => p.session.tick(0));
+  assert.ok(f.bothRTC()); assert.equal(peers[0].host.hash(), peers[1].host.hash());
+  assert.ok(peers.every((p, side) => p.session === identity[side].session &&
+    p.host === identity[side].host && p.host.lv === identity[side].level &&
+    p.session.generation === 1 && p.session.runSerial === 1 && p.session.desyncs === 0 && p.host.lv.pause));
+  assert.deepEqual(f.closed, [0, 0]);
+  await f.close();
 }
 
 // A silently broken one-way RTC is detected by bounded path-heartbeat timeouts.
@@ -331,8 +373,8 @@ async function game(migrate) {
   const f = fixture(); await f.time.until(f.bothRTC); await f.time.advance(700);
   const peers = f.managers.map((transport, slot) => {
     const host = new LevelHost();
-    const session = new NetSession({ host, slot, transport, rollback: true, delay: 0,
-      onLinkDown: () => f.closed[slot]++ });
+    const session = new NetSession({ host, slot, transport, rollback: true, delay: 0, workNow: () => 0,
+      now: () => f.time.now(), onLinkDown: () => f.closed[slot]++ });
     return { host, session };
   });
   peers[0].session.requestStart("adventure", 1); await f.time.advance(40);
@@ -368,8 +410,8 @@ async function repeatedGame(sequence) {
   await f.time.until(f.bothRTC); await f.time.advance(700);
   const peers = f.managers.map((transport, slot) => {
     const host = new LevelHost();
-    const session = new NetSession({ host, slot, transport, rollback: true, delay: 0,
-      onLinkDown: () => f.closed[slot]++ });
+    const session = new NetSession({ host, slot, transport, rollback: true, delay: 0, workNow: () => 0,
+      now: () => f.time.now(), onLinkDown: () => f.closed[slot]++ });
     return { host, session };
   });
   peers[0].session.requestStart("adventure", 1);
@@ -566,8 +608,8 @@ const repeatedSummary = {
       createRTC: async () => { throw new Error("no ICE route"); } })));
   const peers = managers.map((transport, slot) => {
     const host = new LevelHost();
-    return { host, session: new NetSession({ host, slot, transport, rollback: true, delay: 0,
-      onLinkDown: () => down[slot]++ }) };
+    return { host, session: new NetSession({ host, slot, transport, rollback: true, delay: 0, workNow: () => 0,
+      now: () => time.now(), onLinkDown: () => down[slot]++ }) };
   });
   peers[0].session.requestStart("adventure", 1); await time.advance(10);
   for (let i = 0; i < 20; i++) { peers.forEach(p => p.session.tick(1 / 26)); await time.advance(1000 / 26); }
@@ -594,6 +636,45 @@ const repeatedSummary = {
   assert.deepEqual(down, [0, 0]);
   managers.forEach(m => m.close()); await Promise.all(pairs.map(pair => pair.close())); await time.advance(10000);
   assert.equal(time.jobs.size, 0);
+}
+// A known loss of both physical paths retains the actual session/world for the grace window.
+// Rejoining the provider heals the same run; exceeding the window reports one terminal failure.
+{
+  const options = {}, f = fixture(options);
+  const peers = f.managers.map((transport, slot) => {
+    const host = new LevelHost();
+    return { host, session: new NetSession({ host, slot, transport, rollback: true, delay: 0,
+      workNow: () => 0, now: () => f.time.now(), onLinkDown: () => f.closed[slot]++ }) };
+  });
+  const step = async () => {
+    peers.forEach(p => p.session.tick(1 / 26));
+    await f.time.advance(1000 / 26);
+  };
+  peers[0].session.requestStart("adventure", 1);
+  await f.time.until(f.bothRTC);
+  for (let i = 0; i < 40; i++) await step();
+  const identities = peers.map(p => ({ session: p.session, world: p.host.lv }));
+  options.rejectRTC = true;
+  f.channel.forEach(c => c.status("CLOSED"));
+  f.relay.forEach(p => p.fail());
+  f.rtc[0].forEach(p => p.fail());
+  for (let i = 0; i < 130; i++) await step();
+  assert.ok(f.managers.every(m => m.recovering && m.activePath === "offline"));
+  assert.deepEqual(f.closed, [0, 0], "recoverable outage ended the logical match");
+  const stalledFrames = peers.map(p => p.session.frame);
+  f.relay.forEach(p => { p.open = true; });
+  f.channel.forEach(c => c.status("SUBSCRIBED"));
+  for (let i = 0; i < 130; i++) await step();
+  peers.forEach(p => p.session.tick(0));
+  assert.ok(peers.every((p, i) => p.session === identities[i].session && p.host.lv === identities[i].world &&
+    p.session.generation === 1 && p.session.runSerial === 1 && p.session.frame > stalledFrames[i] + 60 && p.session.desyncs === 0),
+  "provider recovery replaced or failed to resume the original run");
+  assert.equal(peers[0].host.hash(), peers[1].host.hash());
+  f.channel.forEach(c => c.status("CLOSED"));
+  f.relay.forEach(p => p.fail());
+  await f.time.advance(16000);
+  assert.deepEqual(f.closed, [1, 1], "outage expiry did not report exactly one failure per session");
+  await f.close();
 }
 console.log(JSON.stringify({ scope: "Deterministic physical-path simulator with real NetSession and LevelHost",
   baseline, migrated, silentGame, silentResults, repeatedSummary,

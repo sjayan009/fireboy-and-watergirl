@@ -1,193 +1,147 @@
-/**
- * Progress earned alone, kept against the account rather than the browser.
- *
- * The ported game saves through one `SaveStore`, and until now that store was
- * `localStorage` under the key `FBCookie` -- the shape the 2009 SharedObject
- * had, carried straight across. One key, with no account anywhere in it, so
- * progress belonged to a MACHINE: sign out, sign in as somebody else, and the
- * next account opened with the last person's map unlocked and their times on
- * it. Clearing site data threw it away, a second device never had it, and
- * deleting the account could not reach it.
- *
- * Two things change that, and both are needed.
- *
- * **The key carries the account.** `FBCookie:<user id>`, so two people on one
- * laptop no longer share a save even before anything reaches the network.
- *
- * **The server holds the truth.** `sync_solo_progress` merges what this browser
- * has into what the account has and hands the whole answer back, so a phone and
- * a laptop converge instead of overwriting each other.
- *
- * ## Local first, still
- *
- * The local save is not demoted to a cache that can be skipped. The game reads
- * and writes it mid-level, synchronously, through an interface that cannot wait
- * for a network call -- and somebody playing on a train has to keep their
- * medals. So the order is: the game writes locally as it always did, and this
- * pushes what accumulated up afterwards. A failed sync costs nothing; the next
- * one carries the same result, because the merge takes the best of both and
- * does not care how many times it is told.
- */
+/** Canonical account progress. The engine uses a separate projection. */
 import { supabase } from "./supabase.js";
 import { auth } from "./auth.js";
-import { LocalSave } from "@engine/game/save.js";
+import { LocalSave, normaliseSave } from "@engine/game/save.js";
 import type { SaveStore } from "@engine/game/save.js";
-import type { ProgressArrays } from "./outbox.js";
+import { mergeProgress, type ProgressArrays } from "./outbox.js";
 
-/** What the browser-wide save was called before accounts were part of the key. */
 const LEGACY_KEY = "FBCookie";
-const keyFor = (userId: string) => `${LEGACY_KEY}:${userId}`;
-/** Long enough that finishing a level does not send three of these. */
+const keyFor = (owner: string) => `${LEGACY_KEY}:${owner}`;
+const signature = (p: ProgressArrays) => JSON.stringify([p.stats, p.times]);
 const SETTLE_MS = 1200;
 
-interface SoloRow {
-  node: number;
-  medal: number;
-  best_time_s: number | null;
-  best_time_str: string | null;
-}
-
-/**
- * Take over the browser-wide save, once, for the first account that asks.
- *
- * The old key belongs to whoever was using this machine, and there is no way to
- * find out who that was -- nothing in it names an account, which is the whole
- * bug. So it is handed to the first account to sign in after this ships and
- * then REMOVED, rather than being left to seed every future account on the
- * machine with the same borrowed medals.
- *
- * Handing it over is safe in a way that keeping it was not, because the server
- * MERGES it. Nothing can be lost by adopting it and nothing can be overwritten
- * by it: a medal already earned stays, a better time already recorded stays.
- * The worst case is that one account absorbs progress somebody else earned on
- * the same laptop, which is exactly what was happening to every account before.
- */
-function adoptLegacy(target: string): ProgressArrays | null {
-  let raw: string;
+/** Copy and verify before deleting the only old copy, including quota failures. */
+function adoptLegacy(owner: string, local: LocalSave): void {
   try {
-    const found = localStorage.getItem(LEGACY_KEY);
-    if (!found) return null;
-    raw = found;
-    // Claimed before it is parsed. A save this browser cannot read is still a
-    // save that must not be offered to the next account that signs in.
-    localStorage.removeItem(LEGACY_KEY);
-    localStorage.setItem(keyFor(target), raw);
-  } catch {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<ProgressArrays>;
-    if (!Array.isArray(parsed?.stats) || !Array.isArray(parsed?.times)) return null;
-    return {
-      stats: parsed.stats, times: parsed.times,
-      timesString: parsed.timesString ?? [],
-    };
-  } catch {
-    return null;
-  }
+    const raw = localStorage.getItem(LEGACY_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed?.stats) || !Array.isArray(parsed?.times)) return;
+    Object.assign(local.data, mergeProgress(local.data, normaliseSave(parsed).data));
+    local.flush();
+    if (!local.lastError && localStorage.getItem(keyFor(owner)) === JSON.stringify(local.data)) {
+      localStorage.removeItem(LEGACY_KEY);
+    }
+  } catch { /* Unreadable or unclaimed progress remains recoverable at its original key. */ }
 }
 
 export interface SoloProgress {
-  /** The store handed to the game, exactly as `LocalSave` was before. */
+  /** Canonical data: never hand this store directly to a shared Game. */
   readonly store: SaveStore;
-  /** Push what the browser has, adopt what the account has. */
-  sync(): Promise<void>;
-  /** Note that the engine confirmed a change, and sync once it settles. */
-  touched(): void;
-  close(): void;
   readonly lastError: string | null;
+  readonly storageError: string | null;
+  readonly pending: boolean;
+  readonly localOnly: boolean;
+  readonly revision: number;
+  readonly acknowledgedRevision: number;
+  sync(): Promise<void>;
+  touched(): void;
+  onChange(fn: () => void): () => void;
+  close(): void;
 }
 
 export function soloProgress(): SoloProgress {
   const owner = auth().user?.id ?? "";
-  // Signed out there is no account to key on, and no server to sync with. The
-  // legacy key is deliberately NOT used as a fallback: an anonymous session
-  // writing into it is how the shared save came about.
-  const local = new LocalSave(owner ? keyFor(owner) : `${LEGACY_KEY}:anonymous`);
+  const local = new LocalSave(keyFor(owner || "anonymous"));
+  if (owner) adoptLegacy(owner, local);
   const data = local.data as ProgressArrays;
-  if (owner) {
-    const inherited = adoptLegacy(owner);
-    if (inherited) mergeInto(data, inherited);
-  }
-
+  const ackKey = keyFor(owner || "anonymous") + ".cloud";
+  let acknowledged = "";
+  try { acknowledged = localStorage.getItem(ackKey) ?? ""; } catch { /* local reports storage errors */ }
+  let current = signature(data), persisted = local.lastError ? "" : current;
+  let revision = 0, acknowledgedRevision = acknowledged === current ? 0 : -1;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let closed = false;
+  let flight: Promise<void> | null = null, queued = false, closed = false, failures = 0;
   let lastError: string | null = null;
+  const listeners = new Set<() => void>();
+  const announce = () => { for (const fn of listeners) fn(); };
+  const valid = () => !closed && !!owner && auth().user?.id === owner;
 
-  async function sync(): Promise<void> {
-    if (!owner || closed || auth().user?.id !== owner) return;
-    try {
-      const { data: rows, error } = await supabase.rpc("sync_solo_progress", {
-        p_stats: data.stats.slice(0, 32),
-        p_times: data.times.slice(0, 32),
-      });
-      if (error) throw new Error(error.message);
-      // The account's own answer, which may be better than this browser's.
-      const server = blank();
-      for (const r of (rows ?? []) as SoloRow[]) {
-        const i = r.node - 1;
-        if (i < 0 || i > 31) continue;
-        server.stats[i] = r.medal;
-        server.times[i] = r.best_time_s ?? 0;
-        server.timesString[i] = r.best_time_str ?? "";
-      }
-      mergeInto(data, server);
-      local.flush();
-      lastError = null;
-    } catch (e) {
-      // Deliberately quiet and deliberately not retried on a timer. The next
-      // level finished sends the same arrays, and the merge is indifferent to
-      // how often it is told the same thing.
-      lastError = (e as Error).message;
-    }
+  function persist(): void {
+    if (persisted === current && !local.lastError) return;
+    local.flush();
+    if (!local.lastError) persisted = current;
   }
-
+  function schedule(delay = SETTLE_MS): void {
+    if (!valid() || timer !== null || acknowledged === current) return;
+    timer = setTimeout(() => { timer = null; void sync(); }, delay);
+  }
+  function touched(): void {
+    if (closed || (owner && auth().user?.id !== owner)) return;
+    const next = signature(data);
+    if (next !== current) { current = next; revision++; queued = true; }
+    persist(); schedule(); announce();
+  }
+  function sync(): Promise<void> {
+    if (!valid()) return Promise.resolve();
+    touched();
+    if (timer !== null) { clearTimeout(timer); timer = null; }
+    if (flight) { queued = true; return flight; }
+    flight = (async () => {
+      do {
+        queued = false;
+        const sentRevision = revision, sentSignature = current;
+        const controller = new AbortController();
+        let deadline: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const expired = new Promise<never>((_, reject) => {
+            deadline = setTimeout(() => { controller.abort(); reject(new Error("Cloud save timed out. Your local result is preserved.")); }, 12000);
+          });
+          const request = supabase.rpc("sync_solo_progress", { p_stats: data.stats.slice(0, 32), p_times: data.times.slice(0, 32) });
+          // Pin the token to the canonical owner across the SDK's asynchronous fetch.
+          if (typeof request.setHeader === "function") {
+            const session = await Promise.race([supabase.auth.getSession(), expired]);
+            if (session.error || session.data.session?.user.id !== owner || !valid()) throw new Error("Sign in to the account that earned this result");
+            request.setHeader("Authorization", "Bearer " + session.data.session.access_token);
+          }
+          const bounded = typeof request.abortSignal === "function" ? request.abortSignal(controller.signal) : request;
+          const answer = await Promise.race([bounded, expired]);
+          if (!valid()) return;
+          if (answer.error) throw new Error(answer.error.message);
+          const server = normaliseSave(null).data as ProgressArrays;
+          for (const row of answer.data ?? []) {
+            const i = row.node - 1;
+            if (i < 0 || i >= 32) continue;
+            server.stats[i] = row.medal;
+            server.times[i] = row.best_time_s ?? 0;
+            server.timesString[i] = row.best_time_str ?? "";
+          }
+          Object.assign(data, mergeProgress(data, server));
+          const merged = signature(data);
+          if (merged !== current) { current = merged; revision++; }
+          persist();
+          // Acknowledgements cannot clear an improvement earned during this request.
+          if (sentRevision === revision || (sentRevision + 1 === revision && !queued)) {
+            acknowledged = current; acknowledgedRevision = revision;
+          } else { acknowledged = sentSignature; acknowledgedRevision = sentRevision; }
+          try { localStorage.setItem(ackKey, acknowledged); } catch { /* canonical result remains durable locally */ }
+          lastError = null; failures = 0; announce();
+        } catch (error) {
+          if (!valid()) return;
+          lastError = (error as Error).message; failures++; announce();
+          schedule(Math.min(30000, SETTLE_MS * 2 ** Math.min(failures, 5)));
+          break;
+        } finally { if (deadline !== undefined) clearTimeout(deadline); }
+      } while (queued && valid() && acknowledged !== current);
+    })().finally(() => { flight = null; if (valid() && acknowledged !== current) schedule(); });
+    return flight;
+  }
+  const wake = () => { if (document.visibilityState === "visible") void sync(); };
+  addEventListener("online", wake);
+  document.addEventListener("visibilitychange", wake);
+  const store: SaveStore = { data, lastError: null, flush: touched };
   return {
-    store: {
-      data,
-      flush: () => { local.flush(); },
-      get lastError() { return local.lastError; },
-      set lastError(v: string | null) { local.lastError = v; },
-    } as SaveStore,
-    get lastError() { return lastError; },
-    sync,
-    touched() {
-      if (closed || timer !== null) return;
-      timer = setTimeout(() => { timer = null; void sync(); }, SETTLE_MS);
-    },
+    store, sync, touched,
+    get lastError() { return lastError; }, get storageError() { return local.lastError; },
+    get pending() { return !!owner && acknowledged !== current; }, get localOnly() { return !owner; },
+    get revision() { return revision; }, get acknowledgedRevision() { return acknowledgedRevision; },
+    onChange(fn) { listeners.add(fn); fn(); return () => listeners.delete(fn); },
     close() {
-      closed = true;
-      if (timer !== null) { clearTimeout(timer); timer = null; }
+      if (closed) return;
+      touched(); closed = true;
+      if (timer !== null) clearTimeout(timer);
+      removeEventListener("online", wake); document.removeEventListener("visibilitychange", wake);
+      listeners.clear();
     },
   };
-}
-
-function blank(): ProgressArrays {
-  const stats = new Array<number>(32).fill(-1);
-  stats[0] = 0;
-  return {
-    stats,
-    times: new Array<number>(32).fill(0),
-    timesString: new Array<string>(32).fill(""),
-  };
-}
-
-/**
- * Best-of, in place.
- *
- * The same rule the database applies, for the same reason: whichever copy is
- * ahead on a node wins that node, so it does not matter which of a phone and a
- * laptop synced last. A locked node (-1) never closes an open one.
- */
-function mergeInto(into: ProgressArrays, from: ProgressArrays): void {
-  for (let i = 0; i < 32; i++) {
-    const medal = from.stats[i] ?? -1;
-    if (medal > (into.stats[i] ?? -1)) into.stats[i] = medal;
-    const t = from.times[i] ?? 0;
-    const mine = into.times[i] ?? 0;
-    if (t > 0 && (mine === 0 || t < mine)) {
-      into.times[i] = t;
-      into.timesString[i] = from.timesString[i] ?? "";
-    }
-  }
 }

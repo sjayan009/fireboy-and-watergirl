@@ -204,12 +204,53 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
       first.stats[0]=3; first.times[0]=50;
       const fresh=await outbox.remember(owner,peer,first);
       await outbox.acknowledge(old);
+      await outbox.deliveryFailed(old,"late refusal",true,0);
       const remaining=await outbox.pendingFor(owner);
       const foreign=await outbox.pendingFor("another-owner");
+      assertMetadata(remaining[0]);
+      function assertMetadata(record) { if (record.quarantine || record.error) throw new Error("Late failure quarantined a newer earned result"); }
+      await outbox.deliveryFailed(fresh,"HTTP 403",true,0);
+      const refused=(await outbox.pendingFor(owner))[0];
+      await outbox.retryDelivery(owner,peer);
+      const retry=(await outbox.pendingFor(owner))[0];
       await outbox.acknowledge(fresh);
-      return {count:remaining.length,medal:remaining[0].stats[0],time:remaining[0].times[0],foreign:foreign.length,final:(await outbox.pendingFor(owner)).length};
+      return {count:remaining.length,medal:remaining[0].stats[0],time:remaining[0].times[0],foreign:foreign.length,
+        quarantined:refused.quarantine,error:refused.error,retry:!retry.quarantine&&!retry.error&&retry.revision===fresh.revision,
+        final:(await outbox.pendingFor(owner)).length};
     });
-    assert.deepEqual(durable,{count:1,medal:3,time:50,foreign:0,final:0});
+    assert.deepEqual(durable,{count:1,medal:3,time:50,foreign:0,quarantined:true,error:"HTTP 403",retry:true,final:0});
+    // The actual panel exposes retained refusals, a scoped retry, and a data-only export.
+    await page.evaluate(async () => {
+      const outbox=await import("/src/outbox.ts"), {ProgressPanel}=await import("/src/ui/progress.ts");
+      const data={stats:Array(32).fill(0),times:Array(32).fill(0),timesString:Array(32).fill("")};
+      data.stats[0]=3; data.times[0]=50;
+      const record=await outbox.remember("fixture-owner","fixture-peer",data);
+      await outbox.deliveryFailed(record,"HTTP 403",true,0);
+      const host=document.createElement("section"); host.id="delivery-test"; document.body.append(host);
+      window.deliveryTest=new ProgressPanel(host,{progress:{own:data,shared:false,
+        pendingResults:()=>outbox.pendingFor("fixture-owner"),retryPending:()=>outbox.retryDelivery("fixture-owner","fixture-peer")},
+        solo:{pending:false},friends:()=>[{id:"fixture-peer",username:"FixtureFriend",status:"accepted"}],partner:()=>null,table:()=>Array(32).fill("1_1")});
+      window.deliveryTest.open();
+      const create=URL.createObjectURL, anchorClick=HTMLAnchorElement.prototype.click;
+      URL.createObjectURL=blob=>{window.exportData=blob.text();return create(blob);};
+      HTMLAnchorElement.prototype.click=function(){window.exportName=this.download;};
+      window.restoreExport=()=>{URL.createObjectURL=create;HTMLAnchorElement.prototype.click=anchorClick;};
+    });
+    const delivery=page.locator("#delivery-test");
+    await delivery.getByText(/the cloud refused this save/).waitFor();
+    await delivery.getByRole("button",{name:"Download unsent results"}).click();
+    const exported=await page.evaluate(async()=>({name:window.exportName,data:JSON.parse(await window.exportData)}));
+    assert.equal(exported.name,"unsent-game-results.json");
+    assert.equal(exported.data.schema,1);
+    assert.equal(exported.data.results[0].stats[0],3);
+    assert(!/access_token|authorization|password/i.test(JSON.stringify(exported)),"export contains only retained results");
+    await page.evaluate(()=>window.restoreExport());
+    await delivery.getByRole("button",{name:"Retry saving with FixtureFriend"}).click();
+    await delivery.getByText(/waiting for cloud confirmation/).waitFor();
+    await page.evaluate(async()=>{
+      window.deliveryTest.destroy();document.querySelector("#delivery-test").remove();
+      const outbox=await import("/src/outbox.ts");await outbox.acknowledge((await outbox.pendingFor("fixture-owner"))[0]);
+    });
     // Web Locks enforce ownership across tabs; a takeover releases the old lease.
     const other=await context.newPage();
     await other.goto(target);

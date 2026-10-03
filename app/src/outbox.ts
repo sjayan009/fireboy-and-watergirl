@@ -2,6 +2,7 @@
 export interface ProgressArrays { stats: number[]; times: number[]; timesString: string[] }
 export interface PendingProgress extends ProgressArrays {
   key: string; owner: string; friendId: string; revision: string; at: number;
+  attempts?: number; retryAt?: number; quarantine?: boolean; error?: string;
 }
 
 export function mergeProgress(a: ProgressArrays, b: ProgressArrays): ProgressArrays {
@@ -20,13 +21,15 @@ function open(): Promise<IDBDatabase> {
     database = new Promise((resolve, reject) => {
       let failed = false;
       const request = indexedDB.open("fbwg.progress", 1);
+      const timer = setTimeout(() => { failed = true; reject(new Error("Progress storage timed out. Keep the page open and retry.")); }, 6000);
       request.onupgradeneeded = () => {
         const store = request.result.createObjectStore("outbox", { keyPath: "key" });
         store.createIndex("owner", "owner");
       };
-      request.onerror = () => { failed = true; reject(request.error ?? new Error("Progress storage unavailable")); };
-      request.onblocked = () => { failed = true; reject(new Error("Close older game tabs to update progress storage")); };
+      request.onerror = () => { clearTimeout(timer); failed = true; reject(request.error ?? new Error("Progress storage unavailable")); };
+      request.onblocked = () => { clearTimeout(timer); failed = true; reject(new Error("Close older game tabs to update progress storage")); };
       request.onsuccess = () => {
+        clearTimeout(timer);
         const db = request.result;
         if (failed) { db.close(); return; }
         db.onversionchange = () => { db.close(); database = null; };
@@ -40,14 +43,22 @@ function open(): Promise<IDBDatabase> {
 
 function result<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("Progress request failed"));
+    const timer = setTimeout(() => {
+      try { request.transaction?.abort(); } catch { /* already complete */ }
+      reject(new Error("Progress storage request timed out"));
+    }, 6000);
+    request.onsuccess = () => { clearTimeout(timer); resolve(request.result); };
+    request.onerror = () => { clearTimeout(timer); reject(request.error ?? new Error("Progress request failed")); };
   });
 }
 function done(tx: IDBTransaction): Promise<void> {
   const completed = new Promise<void>((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onabort = tx.onerror = () => reject(tx.error ?? new Error("Progress transaction failed"));
+    const timer = setTimeout(() => {
+      try { tx.abort(); } catch { /* already complete */ }
+      reject(new Error("Progress storage transaction timed out"));
+    }, 6000);
+    tx.oncomplete = () => { clearTimeout(timer); resolve(); };
+    tx.onabort = tx.onerror = () => { clearTimeout(timer); reject(tx.error ?? new Error("Progress transaction failed")); };
   });
   // A failed request may reject before the caller can await transaction completion.
   void completed.catch(() => {});
@@ -79,5 +90,29 @@ export async function acknowledge(p: PendingProgress): Promise<void> {
   const store = tx.objectStore("outbox");
   const current = await result(store.get(p.key)) as PendingProgress | undefined;
   if (current?.revision === p.revision && current.owner === p.owner) store.delete(p.key);
+  await completed;
+}
+
+/** Delivery metadata belongs to a revision; an older failure cannot hide newer work. */
+export async function deliveryFailed(p: PendingProgress, error: string, quarantine: boolean, retryAt: number): Promise<void> {
+  const db = await open();
+  const tx = db.transaction("outbox", "readwrite"), completed = done(tx);
+  const store = tx.objectStore("outbox");
+  const current = await result(store.get(p.key)) as PendingProgress | undefined;
+  if (current?.revision === p.revision && current.owner === p.owner) {
+    store.put({ ...current, attempts: (current.attempts ?? 0) + 1, error, quarantine, retryAt });
+  }
+  await completed;
+}
+
+/** Explicit retry keeps the earned arrays intact, including refused records. */
+export async function retryDelivery(owner: string, friendId?: string): Promise<void> {
+  const db = await open();
+  const tx = db.transaction("outbox", "readwrite"), completed = done(tx);
+  const store = tx.objectStore("outbox");
+  const records = await result(store.index("owner").getAll(owner)) as PendingProgress[];
+  for (const p of records) if (!friendId || p.friendId === friendId) {
+    store.put({ ...p, retryAt: 0, quarantine: false, error: undefined });
+  }
   await completed;
 }

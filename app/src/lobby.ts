@@ -115,9 +115,15 @@ export class Lobby {
   lastError: string | null = null;
   private channels = new Map<string, PairChannel>();
   private opening = new Map<string, Promise<PairChannel>>();
+  private warmQueue: string[] = [];
+  private wanted = new Set<string>();
   private prioritized: string | null = null;
   prioritize(friendId: string): void {
     this.prioritized = friendId;
+    this.warmQueue.sort((a, b) => Number(b === friendId) - Number(a === friendId));
+    if (this.wanted.has(friendId) && !this.channels.has(friendId)) {
+      void this.ensureChannel(friendId).catch(() => {});
+    }
     if (this.refreshing) void this.refreshing.then(() => this.refresh());
     else void this.refresh();
   }
@@ -214,6 +220,7 @@ export class Lobby {
                    `the first ${MAX_CHANNELS}`);
     }
     const wanted = new Set(accepted.slice(0, MAX_CHANNELS).map((f) => f.id));
+    this.wanted = wanted;
     for (const friend of this.friends) {
       if (!wanted.has(friend.id)) friend.connection = "unavailable";
     }
@@ -239,40 +246,71 @@ export class Lobby {
      * limit of its own and answering an outage by opening forty sockets at once
      * is the response most likely to prolong it.
      */
-    const missing = [...wanted].filter((id) => !this.channels.has(id));
-    let next = 0;
-    await Promise.all(Array.from(
-      { length: Math.min(OPEN_LANES, missing.length) }, async () => {
-        for (;;) {
-          const i = next++;
-          if (i >= missing.length) return;
-          const id = missing[i];
-          if (this.closing) return;
-          try {
-            const channel = await this.openChannel(id);
-            if (this.closing || !wanted.has(id)) { await channel.close(); continue; }
-            this.channels.set(id, channel);
-            const friend = this.friends.find(f => f.id === id);
-            if (friend) friend.connection = "connected";
-            // Said as they arrive, so the list fills in rather than appearing
-            // all at once at the end.
-            this.announce();
-          } catch (e) {
-            const friend = this.friends.find(f => f.id === id);
-            if (friend) friend.connection = "unavailable";
-            // A channel that will not open is not a reason to have no lobby:
-            // the friend simply reads as offline until it does.
-            console.warn("could not open the channel for a friend:", e);
-          }
-        }
-      }));
+    this.warmQueue = [...wanted].filter(id => !this.channels.has(id) && !this.opening.has(id));
+    this.warmChannels();
     this.announce();
+  }
+
+  /** Reserve one join lane for the friend the user actually selected. */
+  private warmChannels(): void {
+    while (!this.closing && this.opening.size < OPEN_LANES - 1 && this.warmQueue.length) {
+      const id = this.warmQueue.shift()!;
+      if (!this.wanted.has(id) || this.channels.has(id) || this.opening.has(id)) continue;
+      void this.ensureChannel(id).catch(() => {
+        const friend = this.friends.find(f => f.id === id);
+        if (friend) friend.connection = "unavailable";
+        this.announce();
+      }).finally(() => this.warmChannels());
+    }
+  }
+
+  /** Wait only for the selected friendship, never the rest of lobby warmup. */
+  async ensureChannel(friendId: string, signal?: AbortSignal): Promise<PairChannel> {
+    signal?.throwIfAborted();
+    if (this.closing) throw new Error("Lobby closed");
+    if (!this.friends.some(f => f.id === friendId && f.status === "accepted")) await this.cancelWait(this.refresh(), signal);
+    signal?.throwIfAborted();
+    if (this.closing) throw new Error("Lobby closed");
+    if (!this.friends.some(f => f.id === friendId && f.status === "accepted")) throw new Error("that friend is not connected");
+    if (!this.wanted.has(friendId)) {
+      this.prioritized = friendId;
+      await this.cancelWait(this.refreshAfterChange(), signal);
+      signal?.throwIfAborted();
+      if (this.closing || !this.wanted.has(friendId)) throw new Error("that friend is not connected");
+    }
+    const connected = this.channels.get(friendId);
+    if (connected) return connected;
+    this.warmQueue = this.warmQueue.filter(id => id !== friendId);
+    while (this.opening.size >= OPEN_LANES && !this.opening.has(friendId)) {
+      await this.cancelWait(Promise.race([...this.opening.values()].map(p => p.catch(() => null))), signal);
+    }
+    const channel = await this.cancelWait(this.openChannel(friendId), signal);
+    if (this.closing || !this.wanted.has(friendId)) { await channel.close(); throw new Error("Lobby closed"); }
+    this.channels.set(friendId, channel);
+    const friend = this.friends.find(f => f.id === friendId);
+    if (friend) friend.connection = "connected";
+    this.announce();
+    return channel;
+  }
+
+  private cancelWait<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) return work;
+    signal.throwIfAborted();
+    return new Promise<T>((resolve, reject) => {
+      const aborted = () => reject(new Error("cancelled"));
+      signal.addEventListener("abort", aborted, { once: true });
+      work.then(resolve, reject).finally(() => signal.removeEventListener("abort", aborted));
+    });
   }
 
   private async openChannel(friendId: string): Promise<PairChannel> {
     const existing = this.opening.get(friendId);
     if (existing !== undefined) return existing;
-    const opening = this.initializeChannel(friendId).finally(() => this.opening.delete(friendId));
+    const opening = this.initializeChannel(friendId).then(async channel => {
+      if (this.closing || !this.wanted.has(friendId)) { await channel.close(); throw new Error("Lobby closed"); }
+      this.channels.set(friendId, channel);
+      return channel;
+    }).finally(() => this.opening.delete(friendId));
     this.opening.set(friendId,opening);
     return opening;
   }
@@ -492,6 +530,8 @@ export class Lobby {
     onProgress?: (what: string) => void;
     /** Abort and withdraw the invitation, at any point up to the first frame. */
     signal?: AbortSignal;
+    /** Pair ownership and critical art barrier, started alongside the handshake. */
+    beforeReady?: (signal: AbortSignal) => Promise<void>;
   }): Promise<Ready> {
     return this.offer(friendId, {
       session: crypto.randomUUID(),
@@ -542,8 +582,12 @@ export class Lobby {
   private async offer(friendId: string, invite: Invite, resuming: boolean, o: {
     onProgress?: (what: string) => void;
     signal?: AbortSignal;
+    beforeReady?: (signal: AbortSignal) => Promise<void>;
   }): Promise<Ready> {
-    const channel = this.channels.get(friendId);
+    // Credentials are shared cached reads; begin loading at intent, while only
+    // this friendship joins and the other player decides whether to accept.
+    const iceReady = runtimeIceServers(FALLBACK_ICE);
+    const channel = await this.ensureChannel(friendId, o.signal);
     const friend = this.friends.find((f) => f.id === friendId);
     if (!channel || !friend) throw new Error("that friend is not connected");
 
@@ -587,6 +631,8 @@ export class Lobby {
 
     try {
       if (o.signal?.aborted) throw new Error("cancelled");
+      const preparation = o.beforeReady?.(attempt.signal) ?? Promise.resolve();
+      void preparation.catch(error => fail(error instanceof Error ? error : new Error("preparation failed")));
       o.onProgress?.(resuming ? "reconnecting…" : "waiting for them to accept…");
       if (resuming) channel.resume(invite);
       else channel.invite(invite);
@@ -598,14 +644,14 @@ export class Lobby {
       // side is not yet listening to, and lose it.
       o.onProgress?.("connecting…");
       const link = await Promise.race([
-        this.link(channel, true, invite.attempt ?? invite.session, attempt.signal, invite.relay, managed).then(link => {
+        this.link(channel, true, invite.attempt ?? invite.session, attempt.signal, invite.relay, managed, iceReady).then(link => {
           if (attempt.signal.aborted) { link.transport.close(); throw new Error("cancelled"); }
           return link;
         }), refused,
       ]);
 
       try {
-        await Promise.race([ready, refused]);
+        await Promise.race([Promise.all([ready, preparation]), refused]);
       } catch (e) {
         // The connection came up and then the game did not happen. Nothing
         // else is going to close it.
@@ -649,8 +695,11 @@ export class Lobby {
     onProgress?: (what: string) => void;
     /** Back out again, at any point up to the first frame. */
     signal?: AbortSignal;
+    /** Do not announce playable readiness before pair projection and art exist. */
+    beforeReady?: (signal: AbortSignal) => Promise<void>;
   } = {}): Promise<Ready> {
-    const channel = this.channels.get(invite.from);
+    const iceReady = runtimeIceServers(FALLBACK_ICE);
+    const channel = await this.ensureChannel(invite.from, o.signal);
     const friend = this.friends.find((f) => f.id === invite.from);
     if (!channel || !friend) throw new Error("that friend is not connected");
     if (o.signal?.aborted) throw new Error("cancelled");
@@ -676,19 +725,21 @@ export class Lobby {
     });
 
     try {
+      const preparation = o.beforeReady?.(attempt.signal) ?? Promise.resolve();
+      void preparation.catch(error => fail(error instanceof Error ? error : new Error("preparation failed")));
       // Said FIRST, and listening started before the answer can arrive: the
       // inviter only offers once it has heard this.
       // Prefetch before acceptance, so a slow broker cannot leave the receiver
       // waiting for credentials while the caller sends its one-shot SDP.
-      await Promise.race([runtimeIceServers(FALLBACK_ICE), refused]);
       if (attempt.signal.aborted) throw new Error("cancelled");
       const managed = networkFlags.pathManager && invite.pathManager === true;
       invite.pathManager = managed || undefined;
-      channel.reply({ session: invite.session, attempt: invite.attempt, accepted: true, pathManager: managed || undefined });
-
       o.onProgress?.("connecting…");
+      // Install the incoming signaling listener synchronously before acceptance.
+      const connecting = this.link(channel, false, invite.attempt ?? invite.session, attempt.signal, invite.relay, managed, iceReady);
+      channel.reply({ session: invite.session, attempt: invite.attempt, accepted: true, pathManager: managed || undefined });
       const link = await Promise.race([
-        this.link(channel, false, invite.attempt ?? invite.session, attempt.signal, invite.relay, managed).then(link => {
+        connecting.then(link => {
           if (attempt.signal.aborted) { link.transport.close(); throw new Error("cancelled"); }
           return link;
         }), refused,
@@ -698,6 +749,9 @@ export class Lobby {
         link.transport.close();
         throw new Error("cancelled");
       }
+      try { await Promise.race([preparation, refused]); }
+      catch (error) { link.transport.close(); throw error; }
+      if (attempt.signal.aborted) { link.transport.close(); throw new Error("cancelled"); }
 
       // And only now the second half. The session is built from what this
       // returns, so telling them we are ready before it exists would invite a
@@ -719,8 +773,8 @@ export class Lobby {
 
   /** Load runtime ICE, then select the mutually agreed connection owner. */
   private async link(channel: PairChannel, caller: boolean,
-                     identity: string, signal?: AbortSignal, relayOnly?: boolean, managed = false) {
-    const iceServers = await runtimeIceServers(FALLBACK_ICE);
+                     identity: string, signal?: AbortSignal, relayOnly?: boolean, managed = false,
+                     iceReady = runtimeIceServers(FALLBACK_ICE)) {
     if (signal?.aborted) throw new Error("cancelled");
     const scoped = scopedChannel(channel, identity);
     // This query is compile-time excluded from production behavior.
@@ -728,7 +782,7 @@ export class Lobby {
       ? "relay" as const : undefined;
     if (managed) {
       const manager = createPathManager(scoped, caller, {
-        iceServers, iceTransportPolicy, legacyBatching: networkFlags.legacyBatching,
+        iceTransportPolicy, legacyBatching: networkFlags.legacyBatching,
         refreshIceServers: () => runtimeIceServers(FALLBACK_ICE),
       });
       // The attempt AbortSignal is released when setup completes. The stable
@@ -736,6 +790,8 @@ export class Lobby {
       return { transport: boundedTransport(manager), kind: manager.kind };
     }
     const rendezvous = new RealtimeTransport(scoped, { legacyBatching: networkFlags.legacyBatching });
+    const iceServers = await iceReady;
+    if (signal?.aborted) { rendezvous.close(); throw new Error("cancelled"); }
     const link = await connect(rendezvous, caller,
                                { iceServers, iceTransportPolicy, signal, relayOnly });
     if (link.reason) console.info("using the relay path:", link.reason);
@@ -748,6 +804,7 @@ export class Lobby {
     document.removeEventListener("visibilitychange", this.wake);
     window.removeEventListener("focus", this.wake);
     this.abort.abort();
+    this.warmQueue = []; this.wanted.clear();
     for (const pending of this.outbound.values()) pending.failed(new Error("signed out"));
     this.outbound.clear();
     const closing = [...this.channels.values()].map((c) => c.close());
@@ -762,7 +819,7 @@ export class Lobby {
     // Awaited, because leaving a topic is a message to the server and joining
     // the same topic again before it lands is a race the server resolves by
     // dropping one of them.
-    await Promise.all(closing);
+    await Promise.all([...closing, ...[...this.opening.values()].map(work => work.then(() => {}, () => {}))]);
   }
 }
 

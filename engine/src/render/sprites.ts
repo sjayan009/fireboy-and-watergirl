@@ -25,8 +25,9 @@ import { DisplayObject, TextField } from "../flash/flash.js";
 import { FontSet } from "./fonts.js";
 import { cssFilter, hasVisibleFilter } from "./filters.js";
 import { assetUrl } from "../asseturl.js";
-import { assetRevision, imageAsset, jsonAsset } from "./assets.js";
+import { assetRevision, assetContentRevision, createAssetOwner, imageAsset } from "./assets.js";
 import { VisualSnapshots, type VisualMode, type VisualTransform } from "./interpolation.js";
+import { ScratchPool, TileCache, intersect, union, transformed, type TileRect, type CachedTile } from "./tiles.js";
 
 export interface ChildPlacement {
   name: string;
@@ -38,6 +39,8 @@ export interface FrameGeom {
   children: ChildPlacement[];
   /** Filename of the composite with named children removed. */
   base?: string;
+  /** Optional atlas rectangle, in decoded source pixels; logical geometry stays unchanged. */
+  source?: { file: string; x: number; y: number; w: number; h: number };
 }
 export interface SpriteInfo {
   id: number; name?: string; frames: number; geom: FrameGeom[];
@@ -171,7 +174,7 @@ function placementFor(geom: FrameGeom | undefined,
  * resizing) and needs no re-export. An SVG's canvas already is the rect, so
  * the pad rounds to nothing and this is the identity on the base-art path.
  */
-function rasterOrigin(img: HTMLImageElement,
+function rasterOrigin(img: { naturalWidth: number; naturalHeight: number },
                       g: { w: number; h: number; ox: number; oy: number },
 ): { ox: number; oy: number } {
   const padX = (img.naturalWidth - g.w) / 2;
@@ -193,25 +196,33 @@ export class SpriteRenderer {
   private images = new Map<string, HTMLImageElement>();
   private pending = new Set<string>();
   private failed = new Set<string>();
+  private optionalFailures = new Set<string>();
   /** Sprite ids whose whole animation has been requested. */
   private prefetched = new Set<number>();
-  private layer: HTMLCanvasElement | null = null;
-  private maskLayer: HTMLCanvasElement | null = null;
-  private filterLayer: HTMLCanvasElement | null = null;
-  /**
-   * Filtered results, keyed by node. The terrain is a full-screen glow plus
-   * drop shadow and never changes after load, so re-blurring it every frame
-   * would be wasteful -- the original cached it into a BitmapData for the same
-   * reason. Entries are invalidated when the transform changes.
-   */
-  private filterCache = new WeakMap<object, { key: string; c: HTMLCanvasElement; raw: HTMLCanvasElement }>();
-  private groundCache = new WeakMap<object, { key: string; c: HTMLCanvasElement }>();
-  /**
-   * Bumped whenever an image finishes loading. It is part of the filter cache
-   * key, because a layer rendered before its art arrived would otherwise be
-   * cached blank forever -- which silently erased the whole terrain.
-   */
-  private generation = 0;
+  private owner = createAssetOwner({ priority: "near" });
+  private scratchPool = new ScratchPool();
+  private tiles = new TileCache();
+  private dependencies: Map<string, number>[] = [];
+  private ids = new WeakMap<object, number>();
+  private lastEffectKeys = new WeakMap<object, string>();
+  private capturedContent = new WeakMap<object, number>();
+  private contentDescriptors = new WeakMap<object, { signature: string; revision: number }>();
+  private capturedSnapshots: VisualSnapshots | null = null;
+  private nextId = 1;
+  private scale = 1;
+  private disposed = false;
+  private assetEpoch = 0;
+  private fontRevision = 0;
+  private fontsPending = false;
+  private fontFailed = false;
+  private fontTimer: ReturnType<typeof setTimeout> | undefined;
+  private cancelFonts: (() => void) | null = null;
+  private scene: object | null = null;
+  private commands = new Map<string, { dependencies: Map<string, number>; parts: { image: HTMLImageElement; matrix: DOMMatrix; alpha: number; x: number; y: number; source?: FrameGeom["source"] }[] }>();
+  private optimizations = { boundedMasks: true, recurringEffects: true, staticCommands: true };
+  private stats = { nodeVisits: 0, maskCalls: 0, selfMaskCalls: 0, maskPixels: 0, fullMaskPixels: 0,
+    boundsFallbacks: 0, effectHits: 0, effectMisses: 0, groundHits: 0, groundMisses: 0,
+    effectRasterMs: 0, staticHits: 0, staticMisses: 0, staticValidationVisits: 0, staticCommands: 0 };
 
   /** "png" from `extracted/`, "webp" from a build. See Manifest.raster. */
   private readonly raster: string;
@@ -225,20 +236,43 @@ export class SpriteRenderer {
 
   static async load(base: string, stageW = 640,
                     stageH = 480): Promise<SpriteRenderer> {
-    const [manifest, fonts, buttons] = await Promise.all([
-      jsonAsset<Manifest>(assetUrl(base, "sprites.json")),
-      FontSet.load(base).catch(() => null),
-      jsonAsset<ButtonSet>(assetUrl(base, "buttons.json")),
-    ]);
-    // A missing font must not cost us the art: the fields fall back to a serif
-    // stack and everything else still renders.
-    // Button art: the up-state characters JPEXS does not export as sprites.
-    return new SpriteRenderer(manifest, base, stageW, stageH, fonts, buttons);
+    const metadata = createAssetOwner({ priority: "critical" });
+    try {
+      const [manifest, buttons] = await Promise.all([
+        metadata.json<Manifest>(assetUrl(base, "sprites.json")),
+        metadata.json<ButtonSet>(assetUrl(base, "buttons.json")),
+      ]);
+      const renderer = new SpriteRenderer(manifest, base, stageW, stageH, null, buttons);
+      renderer.loadFonts();
+      return renderer;
+    } finally { metadata.release(); }
   }
 
-  get loading(): number { return this.pending.size; }
-  get missing(): number { return this.failed.size; }
-  get revision(): number { return assetRevision(); }
+  get loading(): number { return this.pending.size + (this.fontsPending ? 1 : 0); }
+  get missing(): number { return [...this.failed].filter(key => !this.optionalFailures.has(key)).length + (this.fontFailed ? 1 : 0); }
+  get revision(): number { return assetRevision() + this.fontRevision; }
+  get outputScale(): number { return this.scale; }
+  configureRasterOptimizations(options: Partial<typeof this.optimizations>): void {
+    Object.assign(this.optimizations, options); this.tiles.clear(); this.commands.clear();
+  }
+  /** Output pixels per logical stage pixel. Pointer coordinates remain logical. */
+  configureOutputScale(value: number): number {
+    const scale = Number.isFinite(value) ? Math.max(0.5, Math.min(3, value)) : 1;
+    if (scale !== this.scale) { this.scale = scale; this.tiles.clear(); this.commands.clear(); this.scratchPool.clear(); }
+    return scale;
+  }
+  diagnostics() { return { ...this.stats, cacheBytes: this.tiles.bytes, cacheEntries: this.tiles.size,
+    cacheEvictions: this.tiles.evictions, scratchPixels: this.scratchPool.pixels,
+    scratchPeakPixels: this.scratchPool.peakPixels, scratchAllocations: this.scratchPool.allocations,
+    outputScale: this.scale, staticEntries: this.commands.size }; }
+  dispose(): void {
+    if (this.disposed) return; this.disposed = true;
+    this.assetEpoch++; this.cancelFonts?.(); this.cancelFonts = null; clearTimeout(this.fontTimer);
+    this.owner.release(); this.images.clear(); this.tiles.clear(); this.commands.clear(); this.scratchPool.clear();
+    this.pending.clear(); this.failed.clear(); this.prefetched.clear(); this.loadingWork.clear(); this.scene = null;
+    this.presentedSnapshots = null; this.visualSnapshots = null; this.capturedSnapshots = null;
+    this.capturedContent = new WeakMap(); this.contentDescriptors = new WeakMap();
+  }
   private loadingWork = new Set<Promise<void>>();
 
   /**
@@ -253,27 +287,18 @@ export class SpriteRenderer {
    * deciding that a run must not be ranked: two peers cannot agree about a
    * frame they are not both drawing.
    */
-  async prepare(root: DisplayObject): Promise<void> {
+  async prepare(root: DisplayObject, waitForAll = true): Promise<void> {
+    if (this.disposed) return;
+    if (this.fontFailed && !this.fontsPending) this.loadFonts();
+    this.adoptScene(root);
     if (this.failed.size) this.prefetched.clear();
     for (const key of this.failed) this.images.delete(key);
     this.failed.clear();
     this.warm(root);
     const scratch = document.createElement("canvas");
-    scratch.width = this.stageW; scratch.height = this.stageH;
+    scratch.width = Math.round(this.stageW * this.scale); scratch.height = Math.round(this.stageH * this.scale);
     this.draw(scratch.getContext("2d")!, root);
-    await Promise.allSettled([...this.loadingWork]);
-  }
-
-  private scratch(which: "layer" | "maskLayer" | "filterLayer"):
-      HTMLCanvasElement {
-    let c = this[which];
-    if (!c) {
-      c = document.createElement("canvas");
-      c.width = this.stageW;
-      c.height = this.stageH;
-      this[which] = c;
-    }
-    return c;
+    if (waitForAll) await Promise.allSettled([...this.loadingWork]);
   }
 
   private spriteFor(node: any): SpriteInfo | null {
@@ -294,21 +319,28 @@ export class SpriteRenderer {
    * Cached <img> for an asset path under the base, kicking off the load on
    * first use; null until ready.
    */
-  private image(key: string): HTMLImageElement | null {
+  private image(key: string, dependency = true): HTMLImageElement | null {
+    if (this.disposed) return null;
+    const url = assetUrl(this.base, key);
+    if (dependency) for (const deps of this.dependencies) deps.set(url, assetContentRevision(url));
     const hit = this.images.get(key);
     if (hit) return hit.complete && hit.naturalWidth > 0 ? hit : null;
     if (this.failed.has(key)) return null;
 
-    const resource = imageAsset(assetUrl(this.base, key));
+    const resource = imageAsset(url, { owner: this.owner, priority: dependency ? "near" : "background" });
+    const epoch = this.assetEpoch;
     const img = resource.image;
     this.images.set(key, img);
     this.pending.add(key);
-    const work = resource.ready.then(() => { this.pending.delete(key); this.generation++; }, e => {
-      this.pending.delete(key); this.failed.add(key); throw e;
+    const work = resource.ready.then(() => { if (epoch === this.assetEpoch) this.pending.delete(key); }, e => {
+      if (epoch === this.assetEpoch) { this.pending.delete(key); this.failed.add(key); } throw e;
     });
     this.loadingWork.add(work);
     void work.finally(() => this.loadingWork.delete(work)).catch(() => { /* prepare exposes failures; lazy effects remain optional. */ });
-    return null;
+    // A different view/scene may already have decoded this shared resource.
+    // Its content revision is already ready, so caching a blank here would
+    // never receive a later revision change to invalidate that blank.
+    return img.complete && img.naturalWidth > 0 ? img : null;
   }
 
   /**
@@ -328,14 +360,16 @@ export class SpriteRenderer {
     for (let f = 1; f <= sprite.frames; f++) {
       const g = sprite.geom[f - 1];
       if (!g) continue;
-      this.image(`sprites/${sprite.id}/` + (g.children.length === 0
+      this.image(g.source && !this.failed.has(g.source.file) ? g.source.file : `sprites/${sprite.id}/` + (g.children.length === 0
         ? `${f}.${this.raster}`
-        : (g.base ?? `${f}_base.svg`)));
+        : (g.base ?? `${f}_base.svg`)), false);
     }
   }
 
   draw(ctx: CanvasRenderingContext2D, root: DisplayObject,
        snapshots: VisualSnapshots | null = null, alpha = 1, now = performance.now()): void {
+    if (this.disposed) return;
+    this.adoptScene(root);
     snapshots?.beginPresentation(now);
     this.visualSnapshots = snapshots;
     this.visualAlpha = alpha;
@@ -343,13 +377,16 @@ export class SpriteRenderer {
     this.presentedSnapshots = snapshots;
     this.presentedAlpha = alpha;
     this.presentedNow = now;
+    ctx.save();
+    ctx.scale(this.scale, this.scale);
     try { this.drawNode(ctx, root); }
-    finally { this.visualSnapshots = null; }
+    finally { this.visualSnapshots = null; ctx.restore(); }
   }
 
   /** Resolve only transforms at simulation boundaries; retain no game references in the game itself. */
   captureTransforms(root: DisplayObject, snapshots: VisualSnapshots,
                     local: number, reconcile = false, now = performance.now()): void {
+    this.capturedContent = new WeakMap(); this.capturedSnapshots = snapshots;
     if (!reconcile) snapshots.begin();
     const scene = (root as any).m_level;
     // Death replaces/hides clips; rollback may restore them in the same capture
@@ -373,6 +410,14 @@ export class SpriteRenderer {
       const mode: VisualMode = controlled ? "predict" :
         localTree && (!snapshots.localDescendantInterpolation || discrete) ? "latest" : "interpolate";
       const transform = this.resolvedTransform(node, place);
+      // BitmapData source content is discrete. Derive structural identity at
+      // the existing simulation/correction boundary, avoiding hundreds of
+      // immutable terrain-child checks on every high-refresh presentation.
+      const source = node.bitmapData?.source;
+      if (source) {
+        this.observeContent(source);
+        if (source.mask) this.observeContent(source.mask);
+      }
       const snapped = snapshots.capture(node, transform, parent, mode, reconcile, {
         now, worldScale, snap: parentSnap, identity: sprite ?? node.symbol,
         revision: node.__visualRevision, state: life,
@@ -415,7 +460,7 @@ export class SpriteRenderer {
         seen.add(sprite.id);
         const geom = sprite.geom[0];
         if (geom) {
-          this.image(`sprites/${sprite.id}/` + (geom.children.length === 0
+          this.image(geom.source?.file ?? `sprites/${sprite.id}/` + (geom.children.length === 0
             ? `1.${this.raster}`
             : (geom.base ?? `1_base.svg`)));
         }
@@ -459,6 +504,7 @@ export class SpriteRenderer {
 
   private drawNode(ctx: CanvasRenderingContext2D, node: any,
                    xform?: Xform, flags = 0): void {
+    this.stats.nodeVisits++;
     if (!node || node.visible === false) return;
     // A mask is never painted, only used to clip (see DisplayObject.isMask).
     if (node.isMask && !(flags & 1)) return;
@@ -506,7 +552,7 @@ export class SpriteRenderer {
       ctx.restore();
       return;
     }
-
+    if (this.drawStatic(ctx, node)) { ctx.restore(); return; }
     this.drawContent(ctx, node, false);
     ctx.restore();
   }
@@ -565,13 +611,10 @@ export class SpriteRenderer {
       if (geom) {
         // no named children -> the PNG composite is the whole picture;
         // otherwise the stripped SVG base, with the children drawn on top
-        const file = geom.children.length === 0
-          ? `${frame}.${this.raster}`
-          : (geom.base ?? `${frame}_base.svg`);
-        const img = this.image(`sprites/${sprite.id}/${file}`);
-        if (img) {
-          const o = rasterOrigin(img, geom);
-          ctx.drawImage(img, -o.ox, -o.oy);
+        const art = this.frameImage(sprite, frame, geom);
+        if (art.img) {
+          const o = rasterOrigin(art.source ? { naturalWidth: art.source.w, naturalHeight: art.source.h } : art.img, geom);
+          this.drawImage(ctx, art.img, -o.ox, -o.oy, art.source);
         } else {
           basePending = true;
         }
@@ -765,6 +808,7 @@ export class SpriteRenderer {
    * rather than subtly so.
    */
   private drawText(ctx: CanvasRenderingContext2D, node: any): void {
+    for (const deps of this.dependencies) deps.set("@renderer-fonts", this.fontRevision);
     const text = String(node.text ?? "");
     if (!text) return;
     const b = node.bounds ?? { x: 0, y: 0, w: 0, h: 0 };
@@ -792,59 +836,68 @@ export class SpriteRenderer {
    */
   private drawFiltered(ctx: CanvasRenderingContext2D, node: any): void {
     const t = ctx.getTransform();
-    // A moving character's glow is local art. Translating it does not change
-    // that art, so use a small tile and cache its pose independently of x/y.
     const character = node.name === "pers1" || node.name === "pers2";
-    const size = character ? 192 : this.stageW;
-    const height = character ? 192 : this.stageH;
-    const ox = character ? size / 2 : t.e, oy = character ? height / 2 : t.f;
     const scale = Math.hypot(t.a, t.b) || 1;
     const filter = cssFilter(node.filters, scale);
-    const key = [t.a, t.b, t.c, t.d, ox, oy].join() + "|" + this.generation + "|" + filter +
-      (character ? "|" + this.poseKey(node) : "");
-    let hit = this.filterCache.get(node);
-
-    if (!hit || hit.key !== key) {
-      if (!hit) {
-        const c = document.createElement("canvas"), raw = document.createElement("canvas");
-        c.width = raw.width = size; c.height = raw.height = height;
-        hit = { key, c, raw };
-        this.filterCache.set(node, hit);
-      }
-      hit.key = key;
-      const lc = hit.raw.getContext("2d")!;
-      lc.setTransform(1, 0, 0, 1, 0, 0);
-      lc.clearRect(0, 0, size, height);
-      lc.setTransform(t.a, t.b, t.c, t.d, ox, oy);
-      // The context already contains this node's visual transform. Draw its
-      // contents directly: never temporarily modify filters on simulation state.
-      if (node.__clipMask) this.drawSelfMasked(lc, node);
-      else this.drawContent(lc, node, false);
-      const filtered = hit.c.getContext("2d")!;
-      filtered.clearRect(0, 0, size, height);
-      filtered.filter = filter;
-      filtered.drawImage(hit.raw, 0, 0);
-      filtered.filter = "none";
+    const local = new DOMMatrix([t.a, t.b, t.c, t.d, character ? 0 : t.e, character ? 0 : t.f]);
+    // Continuous descendant samples use one transient result instead of adding
+    // a unique floating-point pose to the recurring authored-pose LRU.
+    const continuous = character && !!(this.visualSnapshots?.localDescendantInterpolation || this.visualSnapshots?.rollbackSmoothing);
+    const key = `effect:${this.id(node)}:${[local.a, local.b, local.c, local.d, local.e, local.f].join()}:${this.scale}:${filter}:${this.structuralKey(node)}`;
+    if (!this.optimizations.recurringEffects) {
+      const previous = this.lastEffectKeys.get(node); if (previous && previous !== key) this.tiles.delete(previous);
+      this.lastEffectKeys.set(node, key);
     }
-
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(hit.c, character ? t.e - ox : 0, character ? t.f - oy : 0);
-    ctx.restore();
+    let hit = continuous ? undefined : this.cached(key);
+    if (hit) this.stats.effectHits++;
+    else {
+      this.stats.effectMisses++;
+      const start = performance.now();
+      const deps = new Map<string, number>(); this.dependencies.push(deps);
+      try {
+        let rect: TileRect;
+        if (character) {
+          const bounds = this.contentBounds(node, local, false);
+          const padded = bounds && this.padFilter(bounds, node.filters, scale);
+          // Unknown geometry retains the original generous character tile.
+          rect = this.roundRect(padded ?? { x: -96 * this.scale, y: -96 * this.scale, w: 192 * this.scale, h: 192 * this.scale });
+        } else rect = { x: 0, y: 0, w: ctx.canvas.width, h: ctx.canvas.height };
+        if (!rect.w || !rect.h) return;
+        const raw = this.scratchPool.acquire(rect.w, rect.h);
+        try {
+          const lc = raw.canvas.getContext("2d")!;
+          this.clearSurface(lc); lc.setTransform(local.a, local.b, local.c, local.d, local.e - rect.x, local.f - rect.y);
+          if (node.__clipMask) this.drawSelfMasked(lc, node);
+          else this.drawContent(lc, node, false);
+          const c = document.createElement("canvas"); c.width = rect.w; c.height = rect.h;
+          const filtered = c.getContext("2d")!; filtered.filter = filter;
+          filtered.drawImage(raw.canvas, 0, 0, rect.w, rect.h, 0, 0, rect.w, rect.h);
+          hit = { canvas: c, rect, dependencies: deps };
+          if (!continuous) this.tiles.set(key, hit);
+        } finally { raw.release(); }
+      } finally { this.dependencies.pop(); this.stats.effectRasterMs += performance.now() - start; }
+    }
+    if (hit) this.blit(ctx, hit.canvas, hit.rect, character ? t.e : 0, character ? t.f : 0);
   }
 
-  private poseKey(node: any): string {
-    let key = `${node.currentFrame},${node.visible},${node.alpha}`;
+  private poseKey(node: any, includePresentation = false): string {
+    let key = `${node.currentFrame},${node.visible},${node.alpha},${node.symbol},${node.spriteId},${node.__btnState},${node.text ?? ""},${node.fontId},${node.size},${node.textColor},${node.align},${cssFilter(node.filters)}`;
     const sprite = this.spriteFor(node);
     const geom = sprite?.geom[Math.min(Math.max(node.currentFrame ?? 1, 1), sprite.frames) - 1];
     for (const child of node.children ?? []) {
       const place = placementFor(geom, child);
+      if (!child || child.visible === false || (child.alpha ?? 1) <= 0) continue;
+      if (geom && !place && (child.__place != null || !child.__seed)) continue;
       const base = this.resolvedTransform(child, place);
       // The cached glow must follow interpolated local animation too; otherwise
       // the new child samples are computed but the old 26 Hz tile is displayed.
-      const smoothPose = this.visualSnapshots?.localDescendantInterpolation || this.visualSnapshots?.rollbackSmoothing;
-      const t = smoothPose ? this.visualSnapshots!.sample(child, base, this.visualAlpha, this.visualNow) : base;
-      key += `|${t.x},${t.y},${t.sx},${t.sy},${t.rot},${this.poseKey(child)}`;
+      const smoothPose = includePresentation || this.visualSnapshots?.localDescendantInterpolation || this.visualSnapshots?.rollbackSmoothing;
+      const t = smoothPose && this.visualSnapshots ? this.visualSnapshots.sample(child, base, this.visualAlpha, this.visualNow) : base;
+      key += `|${this.id(child)},${t.x},${t.y},${t.sx},${t.sy},${t.rot},${this.poseKey(child, includePresentation)}`;
+    }
+    if (node.bitmapData?.source) {
+      const m = node.bitmapData.sourceMatrix;
+      key += `|bitmap:${m ? [m.a, m.b, m.c, m.d, m.tx, m.ty].join() : "identity"}:${this.poseKey(node.bitmapData.source, includePresentation)}`;
     }
     return key;
   }
@@ -875,31 +928,14 @@ export class SpriteRenderer {
    * same way drawMasked works.
    */
   private drawSelfMasked(ctx: CanvasRenderingContext2D, node: any): void {
-    const layer = this.scratch("layer");
-    const maskLayer = this.scratch("maskLayer");
-    const lc = layer.getContext("2d")!;
-    const mc = maskLayer.getContext("2d")!;
+    this.stats.selfMaskCalls++;
     const t = ctx.getTransform();
-    for (const c of [lc, mc]) {
-      c.setTransform(1, 0, 0, 1, 0, 0);
-      c.clearRect(0, 0, this.stageW, this.stageH);
-      c.setTransform(t);
-    }
-
     const mask = node.__clipMask;
-    // draw the clip's own art and every child except the mask
-    this.drawContent(lc, node, true);
-    this.drawNode(mc, mask, undefined, 1);
-
-    lc.setTransform(1, 0, 0, 1, 0, 0);
-    lc.globalCompositeOperation = "destination-in";
-    lc.drawImage(maskLayer, 0, 0);
-    lc.globalCompositeOperation = "source-over";
-
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(layer, 0, 0);
-    ctx.restore();
+    const content = this.contentBounds(node, t, true);
+    const maskBounds = this.nodeBounds(mask, t, undefined, 1);
+    const rect = this.maskRect(ctx, content, maskBounds);
+    this.maskTile(ctx, rect, t,
+      lc => this.drawContent(lc, node, true), mc => this.drawNode(mc, mask, undefined, 1));
   }
 
   /**
@@ -913,45 +949,256 @@ export class SpriteRenderer {
     // Its 300+ tile mask used to be traversed and composited every draw, even
     // when only a character moved. Cache the final terrain pixels after load.
     const terrain = node.symbol === "texture1" && node.mask?.name === "GroundMask";
+    this.stats.maskCalls++;
     const t = ctx.getTransform();
-    const cacheKey = terrain ? [t.a, t.b, t.c, t.d, t.e, t.f,
-      node.x, node.y, node.scaleX, node.scaleY, node.rotation, this.generation].join() : "";
-    const cached = terrain ? this.groundCache.get(node) : null;
-    if (cached?.key === cacheKey) {
-      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(cached.c, 0, 0); ctx.restore();
-      return;
-    }
-    const layer = this.scratch("layer");
-    const maskLayer = this.scratch("maskLayer");
-    const lc = layer.getContext("2d")!;
-    const mc = maskLayer.getContext("2d")!;
-    for (const c of [lc, mc]) {
-      c.setTransform(1, 0, 0, 1, 0, 0);
-      c.clearRect(0, 0, this.stageW, this.stageH);
-      c.setTransform(t);
-    }
+    const maskTransform = terrain ? this.resolvedTransform(node.mask) : null;
+    const cacheKey = terrain ? `ground:${this.id(node)}:${[t.a, t.b, t.c, t.d, t.e, t.f,
+      node.x, node.y, node.scaleX, node.scaleY, node.rotation, this.scale,
+      maskTransform.x, maskTransform.y, maskTransform.sx, maskTransform.sy, maskTransform.rot].join()}:${this.structuralKey(node.mask)}` : "";
+    const cached = terrain ? this.cached(cacheKey) : null;
+    if (cached) { this.stats.groundHits++; this.blit(ctx, cached.canvas, cached.rect); return; }
+    if (terrain) this.stats.groundMisses++;
     const mask = node.mask;
-    this.drawNode(lc, node, xform, 2);
-    this.drawNode(mc, mask, undefined, 1);
+    const deps = new Map<string, number>(); if (terrain) this.dependencies.push(deps);
+    try {
+      const rect = this.maskRect(ctx, this.nodeBounds(node, t, xform, 2), this.nodeBounds(mask, t, undefined, 1));
+      this.maskTile(ctx, rect, t, lc => this.drawNode(lc, node, xform, 2), mc => this.drawNode(mc, mask, undefined, 1),
+        terrain ? canvas => {
+          const c = document.createElement("canvas"); c.width = rect.w; c.height = rect.h;
+          c.getContext("2d")!.drawImage(canvas, 0, 0, rect.w, rect.h, 0, 0, rect.w, rect.h);
+          this.tiles.set(cacheKey, { canvas: c, rect, dependencies: deps });
+        } : undefined);
+    } finally { if (terrain) this.dependencies.pop(); }
+  }
 
-    lc.setTransform(1, 0, 0, 1, 0, 0);
-    lc.globalCompositeOperation = "destination-in";
-    lc.drawImage(maskLayer, 0, 0);
-    lc.globalCompositeOperation = "source-over";
-
-    if (terrain) {
-      const c = cached?.c ?? document.createElement("canvas");
-      if (!cached) { c.width = this.stageW; c.height = this.stageH; }
-      const cc = c.getContext("2d")!;
-      cc.clearRect(0, 0, this.stageW, this.stageH);
-      cc.drawImage(layer, 0, 0);
-      this.groundCache.set(node, { key: cacheKey, c });
+  private id(node: object): number { let id = this.ids.get(node); if (!id) { id = this.nextId++; this.ids.set(node, id); } return id; }
+  private structuralKey(node: any): string {
+    const revision = this.visualSnapshots === this.capturedSnapshots && this.visualSnapshots ? this.capturedContent.get(node) : undefined;
+    if (revision != null) return `observed:${this.id(node)}:${revision}`;
+    if (this.contentDescriptors.has(node) || node.name === "GroundMC" || node.name === "GroundMask" || node.symbol === "texture1") {
+      return `observed:${this.id(node)}:${this.observeContent(node)}`;
     }
+    return this.poseKey(node);
+  }
+  private observeContent(node: any): number {
+    const signature = this.poseKey(node), previous = this.contentDescriptors.get(node);
+    const revision = previous ? previous.revision + (signature === previous.signature ? 0 : 1) : 1;
+    this.contentDescriptors.set(node, { signature, revision }); this.capturedContent.set(node, revision);
+    return revision;
+  }
+  private adoptScene(root: DisplayObject): void {
+    const scene = (root as any).m_level ?? root;
+    if (scene === this.scene) return;
+    if (this.scene) {
+      this.assetEpoch++; this.owner.release(); this.owner = createAssetOwner({ priority: "near" });
+      this.images.clear(); this.pending.clear(); this.failed.clear(); this.prefetched.clear(); this.loadingWork.clear();
+      this.tiles.clear(); this.commands.clear();
+    }
+    this.scene = scene;
+  }
+  private loadFonts(): void {
+    this.fontsPending = true;
+    // Text has an immediate fallback. Late readiness requests a stationary
+    // redraw; the local deadline is cleared when this renderer is disposed.
+    void Promise.race([FontSet.load(this.base), new Promise<null>(resolve => {
+      this.cancelFonts = () => resolve(null); this.fontTimer = setTimeout(this.cancelFonts, 15000);
+    })]).then(fonts => {
+      if (!this.disposed) { this.fonts = fonts; this.fontFailed = !fonts || fonts.missing > 0; this.fontRevision++; }
+    }, () => {
+      if (!this.disposed) { this.fontFailed = true; this.fontRevision++; }
+    }).finally(() => { clearTimeout(this.fontTimer); this.cancelFonts = null; this.fontsPending = false; });
+  }
+  private cached(key: string): CachedTile | undefined {
+    const tile = this.tiles.get(key, url => url === "@renderer-fonts" ? this.fontRevision : assetContentRevision(url));
+    if (tile) for (const deps of this.dependencies) for (const [url, version] of tile.dependencies) deps.set(url, version);
+    return tile;
+  }
+  private frameImage(sprite: SpriteInfo, frame: number, geom: FrameGeom) {
+    const individual = `sprites/${sprite.id}/` + (geom.children.length === 0 ? `${frame}.${this.raster}` : geom.base ?? `${frame}_base.svg`);
+    if (geom.source) {
+      const img = this.image(geom.source.file);
+      if (!this.failed.has(geom.source.file)) return { img, source: geom.source };
+      this.optionalFailures.add(geom.source.file);
+    }
+    return { img: this.image(individual), source: undefined as FrameGeom["source"] };
+  }
+  private drawImage(ctx: CanvasRenderingContext2D, img: HTMLImageElement, x: number, y: number, source?: FrameGeom["source"]): void {
+    if (source) ctx.drawImage(img, source.x, source.y, source.w, source.h, x, y, source.w, source.h);
+    else ctx.drawImage(img, x, y);
+  }
+  private clearSurface(ctx: CanvasRenderingContext2D): void {
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.filter = "none";
+    ctx.globalCompositeOperation = "source-over"; ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  }
+  private blit(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, rect: TileRect, x = 0, y = 0): void {
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(canvas, 0, 0, rect.w, rect.h, rect.x + x, rect.y + y, rect.w, rect.h); ctx.restore();
+  }
+  private roundRect(rect: TileRect): TileRect {
+    const x = Math.floor(rect.x), y = Math.floor(rect.y);
+    return { x, y, w: Math.max(0, Math.ceil(rect.x + rect.w) - x), h: Math.max(0, Math.ceil(rect.y + rect.h) - y) };
+  }
+  private maskRect(ctx: CanvasRenderingContext2D, content: TileRect | null, mask: TileRect | null): TileRect {
+    const full = { x: 0, y: 0, w: ctx.canvas.width, h: ctx.canvas.height };
+    this.stats.fullMaskPixels += full.w * full.h * 2;
+    if (!this.optimizations.boundedMasks) return full;
+    if (!content || !mask) { this.stats.boundsFallbacks++; return full; }
+    // Expand one pixel before rounding to retain antialiasing at clipped edges.
+    const overlap = intersect(content, mask);
+    if (!overlap.w || !overlap.h) return { x: 0, y: 0, w: 0, h: 0 };
+    return intersect(this.roundRect({ x: overlap.x - 1, y: overlap.y - 1, w: overlap.w + 2, h: overlap.h + 2 }), full);
+  }
+  private maskTile(ctx: CanvasRenderingContext2D, rect: TileRect, t: DOMMatrix,
+    content: (ctx: CanvasRenderingContext2D) => void, mask: (ctx: CanvasRenderingContext2D) => void,
+    retain?: (canvas: HTMLCanvasElement) => void): void {
+    if (!rect.w || !rect.h) return;
+    this.stats.maskPixels += rect.w * rect.h * 2;
+    const layer = this.scratchPool.acquire(rect.w, rect.h), maskLayer = this.scratchPool.acquire(rect.w, rect.h);
+    try {
+      const lc = layer.canvas.getContext("2d")!, mc = maskLayer.canvas.getContext("2d")!;
+      for (const c of [lc, mc]) { this.clearSurface(c); c.setTransform(t.a, t.b, t.c, t.d, t.e - rect.x, t.f - rect.y); }
+      content(lc); mask(mc);
+      lc.setTransform(1, 0, 0, 1, 0, 0); lc.globalCompositeOperation = "destination-in";
+      lc.drawImage(maskLayer.canvas, 0, 0); lc.globalCompositeOperation = "source-over";
+      retain?.(layer.canvas); this.blit(ctx, layer.canvas, rect);
+    } finally { maskLayer.release(); layer.release(); }
+  }
 
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(layer, 0, 0);
-    ctx.restore();
+  private sampledMatrix(node: any, parent: DOMMatrix, xform?: Xform): DOMMatrix {
+    const base = xform ?? this.resolvedTransform(node);
+    const t = this.visualSnapshots?.sample(node, base, this.visualAlpha, this.visualNow) ?? base;
+    return parent.translate(t.x, t.y).rotate(t.rot).scale(t.sx, t.sy);
+  }
+  private padFilter(rect: TileRect, filters: any[], scale: number): TileRect {
+    let pad = 2;
+    for (const f of filters ?? []) {
+      if (!f || f.inner || f.knockout) continue;
+      const blur = Math.max(0, ((f.blurX ?? 0) + (f.blurY ?? 0)) / 4) * scale;
+      pad += (Math.abs(f.distance ?? 0) * scale + blur * 3) * Math.max(1, Math.min(3, Math.round(f.strength ?? 1)));
+    }
+    return { x: rect.x - pad, y: rect.y - pad, w: rect.w + 2 * pad, h: rect.h + 2 * pad };
+  }
+  private boundsDepth = 0;
+  private nodeBounds(node: any, parent: DOMMatrix, xform?: Xform, flags = 0): TileRect | null {
+    const empty = { x: 0, y: 0, w: 0, h: 0 };
+    if (!node || node.visible === false || (node.alpha ?? 1) <= 0 || (node.isMask && !(flags & 1))) return empty;
+    // Cyclic/unknown authoring falls back to a correct stage-sized surface.
+    if (++this.boundsDepth > 128) { this.boundsDepth--; return null; }
+    try {
+      const matrix = this.sampledMatrix(node, parent, xform);
+      let bounds = this.contentBounds(node, matrix, !!node.__clipMask);
+      if (!bounds) return null;
+      if (node.__clipMask) {
+        const mask = this.nodeBounds(node.__clipMask, matrix, undefined, 1); if (!mask) return null;
+        bounds = intersect(bounds, mask);
+      }
+      if (hasVisibleFilter(node.filters) && !(flags & 4)) bounds = this.padFilter(bounds, node.filters, Math.hypot(matrix.a, matrix.b) || 1);
+      if (node.mask && !(flags & 2)) {
+        const mask = this.nodeBounds(node.mask, parent, undefined, 1); if (!mask) return null;
+        bounds = intersect(bounds, mask);
+      }
+      return bounds;
+    } finally { this.boundsDepth--; }
+  }
+  private contentBounds(node: any, matrix: DOMMatrix, skipMask: boolean): TileRect | null {
+    // Canvas backends rasterize oblique image edges differently when a draw is
+    // clipped into a translated small surface. Keep exact stage-space output
+    // for those cases until a browser-independent equivalence is established.
+    const axisAligned = Math.abs(matrix.b) < 1e-9 && Math.abs(matrix.c) < 1e-9;
+    const quarterTurn = Math.abs(matrix.a) < 1e-9 && Math.abs(matrix.d) < 1e-9;
+    if (!axisAligned && !quarterTurn) return null;
+    let bounds: TileRect = { x: 0, y: 0, w: 0, h: 0 };
+    const bd = node.bitmapData;
+    if (bd?.source) {
+      const m = bd.sourceMatrix;
+      return this.nodeBounds(bd.source, m ? matrix.multiply(new DOMMatrix([m.a, m.b, m.c, m.d, m.tx, m.ty])) : matrix);
+    }
+    // Runtime text can overflow its authored rectangle; retain the fallback.
+    if (node instanceof TextField) return null;
+    const button = this.buttons?.buttons[String(node.spriteId)];
+    if (button) {
+      let parts = node.__btnState ? button[node.__btnState as ButtonState] : button.up;
+      if (!parts?.length) parts = button.up;
+      for (const p of parts) {
+        const g = this.buttons!.parts[String(p.id)]; if (!g) continue;
+        const img = this.image(g.from === "sprite" ? `sprites/${p.id}/1.${this.raster}` : `parts/${p.id}.svg`);
+        if (!img) return null;
+        const o = rasterOrigin(img, g);
+        const b = transformed({ x: -o.ox, y: -o.oy, w: img.naturalWidth, h: img.naturalHeight }, matrix.multiply(new DOMMatrix(p.m)));
+        if (!b) return null; bounds = union(bounds, b);
+      }
+      return bounds;
+    }
+    const sprite = this.spriteFor(node);
+    const frame = sprite ? Math.min(Math.max(node.currentFrame ?? 1, 1), sprite.frames) : 1;
+    const geom = sprite?.geom[frame - 1];
+    if (geom) {
+      const art = this.frameImage(sprite!, frame, geom), img = art.img; if (!img) return null;
+      const o = rasterOrigin(art.source ? { naturalWidth: art.source.w, naturalHeight: art.source.h } : img, geom);
+      const b = transformed({ x: -o.ox, y: -o.oy, w: art.source?.w ?? img.naturalWidth, h: art.source?.h ?? img.naturalHeight }, matrix);
+      if (!b) return null; bounds = union(bounds, b);
+    }
+    for (const child of node.children ?? []) {
+      if (skipMask && child === node.__clipMask) continue;
+      const place = placementFor(geom, child);
+      if (geom && !place && (child.__place != null || !child.__seed)) continue;
+      const childBounds = this.nodeBounds(child, matrix, place ? this.childXform(child, place) : undefined);
+      if (!childBounds) return null; bounds = union(bounds, childBounds);
+    }
+    return bounds;
+  }
+
+  /** Narrow allowlist of authored one-frame terrain/anchor art. Dynamic paths always use traversal. */
+  private drawStatic(ctx: CanvasRenderingContext2D, node: any): boolean {
+    if (!this.optimizations.staticCommands) return false;
+    const name = node.symbol ?? node.name ?? "";
+    if (!/^(GroundBox\w*|GroundTri\w*|GroundMask|LeverBase|PulleyAnchor2?)$/.test(name)) return false;
+    const key = `static:${this.id(node)}:${this.poseKey(node, true)}`;
+    let hit = this.commands.get(key);
+    if (hit && [...hit.dependencies].some(([url, revision]) => assetContentRevision(url) !== revision)) { this.commands.delete(key); hit = undefined; }
+    if (!hit) {
+      this.stats.staticMisses++;
+      const parts: { image: HTMLImageElement; matrix: DOMMatrix; alpha: number; x: number; y: number; source?: FrameGeom["source"] }[] = [];
+      const dependencies = new Map<string, number>(); this.dependencies.push(dependencies);
+      const compile = (n: any, matrix: DOMMatrix, alpha: number, root = false): boolean => {
+        this.stats.staticValidationVisits++;
+        if (!n || n.visible === false || (n.alpha ?? 1) <= 0 || (!root && n.isMask)) return true;
+        if (n.mask || n.__clipMask || n.bitmapData || n instanceof TextField || hasVisibleFilter(n.filters) || this.buttons?.buttons[String(n.spriteId)]) return false;
+        if (!root) { matrix = this.sampledMatrix(n, matrix); alpha *= Math.min(1, Math.max(0, n.alpha ?? 1)); }
+        const sprite = this.spriteFor(n); if (sprite && sprite.frames !== 1) return false;
+        const geom = sprite?.geom[0];
+        if (geom) {
+          const art = this.frameImage(sprite!, 1, geom), img = art.img; if (!img) return false;
+          const o = rasterOrigin(art.source ? { naturalWidth: art.source.w, naturalHeight: art.source.h } : img, geom);
+          parts.push({ image: img, matrix, alpha, x: -o.ox, y: -o.oy, source: art.source });
+        }
+        for (const child of n.children ?? []) {
+          if (child.isMask) continue;
+          const place = placementFor(geom, child);
+          if (geom && !place && (child.__place != null || !child.__seed)) continue;
+          if (place) {
+            // Compile with the exact authored placement used by drawContent.
+            const base = this.childXform(child, place), t = this.visualSnapshots?.sample(child, base, this.visualAlpha, this.visualNow) ?? base;
+            const m = matrix.translate(t.x, t.y).rotate(t.rot).scale(t.sx, t.sy);
+            // The root flag skips applying the child transform a second time.
+            if (!compile(child, m, alpha * Math.min(1, Math.max(0, child.alpha ?? 1)), true)) return false;
+          } else if (!compile(child, matrix, alpha)) return false;
+        }
+        return true;
+      };
+      let complete: boolean; try { complete = compile(node, new DOMMatrix(), 1, true); } finally { this.dependencies.pop(); }
+      if (!complete) return false;
+      hit = { dependencies, parts };
+      // Drop old variants for this node and bound command/image references.
+      for (const old of this.commands.keys()) if (old.startsWith(`static:${this.id(node)}:`)) this.commands.delete(old);
+      this.commands.set(key, hit); while (this.commands.size > 64) this.commands.delete(this.commands.keys().next().value!);
+    } else this.stats.staticHits++;
+    for (const deps of this.dependencies) for (const [url, revision] of hit.dependencies) deps.set(url, revision);
+    const base = ctx.getTransform(), alpha = ctx.globalAlpha;
+    for (const part of hit.parts) {
+      ctx.setTransform(base.multiply(part.matrix)); ctx.globalAlpha = alpha * part.alpha;
+      this.drawImage(ctx, part.image, part.x, part.y, part.source); this.stats.staticCommands++;
+    }
+    ctx.setTransform(base); ctx.globalAlpha = alpha; return true;
   }
 }

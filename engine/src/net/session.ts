@@ -198,6 +198,10 @@ export interface SessionOptions {
    * nothing left to predict from -- and tells whoever owns the transport.
    */
   onLinkDown?: (why: string) => void;
+  /** Local replay/catch-up CPU budget; never changes fixed simulation arithmetic. */
+  workBudgetMs?: number;
+  /** Separate from the network clock so deterministic tests can measure CPU work. */
+  workNow?: () => number;
 }
 
 /**
@@ -244,7 +248,10 @@ export function startsSomething(modeIndex: number, num: number): boolean {
  * on at all; the packets are seven bytes, so the cost of being generous is
  * nothing.
  */
-const COMMAND_RESENDS = 12;
+const COMMAND_RESENDS = 40;
+const COMMAND_RETRY_MS = 50;
+const COMMAND_LIFETIME_MS = 2000;
+const START_LIFETIME_MS = 15000;
 
 /**
  * The most commands the outbox will carry at once.
@@ -278,15 +285,15 @@ const CATCHUP_FRAMES = 8;
  * Retry and every Quit take 1154 ms instead of 538 -- a second and a sixth
  * between pressing R and the level rebuilding, which is very much noticed.
  *
- * Fourteen frames, 538 ms, which is what shipped and what the shell tests are
- * written against. It is safe at any window because a command arriving late is
+ * Four frames, 154 ms. Late/lost-command and mixed-display-cadence tests keep
+ * this independent from the rollback window. A command arriving late is
  * not a problem under rollback -- it forces a correction exactly as a
  * mispredicted input does, and the only frame that truly cannot be reached is
  * one behind the snapshot, which sits `snapLag` frames back rather than
- * `maxRollback`. Under lockstep a peer runs at most `delay + 1` frames ahead,
- * so fourteen is generous there too.
+ * `maxRollback`. Under lockstep a peer runs at most `delay + 1` frames ahead;
+ * the explicit delay added to scheduling leaves four more frames of margin.
  */
-const COMMAND_LEAD = 14;
+const COMMAND_LEAD = 4;
 
 /**
  * How many advantage samples are averaged before anything is done about them.
@@ -364,6 +371,8 @@ export class NetSession {
   private readonly onDesync?: SessionOptions["onDesync"];
   private readonly onQuit?: SessionOptions["onQuit"];
   private readonly onLinkDown?: SessionOptions["onLinkDown"];
+  private readonly workBudgetMs: number;
+  private readonly workNow: () => number;
 
   /** Per-slot input, indexed by absolute frame. undefined = not yet known. */
   private input: [(number | undefined)[], (number | undefined)[]] = [[], []];
@@ -396,6 +405,7 @@ export class NetSession {
    */
   private outbox: {
     packet: Uint8Array; left: number; untilHeard?: boolean;
+    next: number; expires: number;
     /** The generation this was minted on; see `drainOutbox`. */
     epoch: number;
   }[] = [];
@@ -457,6 +467,23 @@ export class NetSession {
   private acc = 0;
 
   private started = false;
+  private stalledAt: number | null = null;
+  private healthyAt: number | null = null;
+  private stallEndedMs = 0;
+  private recovery: { target: number; from: number; serial: number; full: boolean; confirmedAt: number } | null = null;
+  private deferredPackets: Uint8Array[] = [];
+  private deferredBytes = 0;
+  private pending: { command: Command; frame: number; a: number; b: number; epoch: number } | null = null;
+  /** Freeze presentation while the world is between replay frontiers. */
+  get recovering(): boolean { return this.recovery !== null || this.bootstrapPackets !== null; }
+  get recoveryProgress(): number {
+    const job = this.recovery;
+    return job ? Math.max(0, Math.min(1, (this.frame - job.from) / Math.max(1, job.target - job.from))) : 1;
+  }
+  get pendingControl(): Readonly<{ command: Command; frame: number; a: number; b: number }> | null { return this.pending; }
+  get stalledMs(): number { return this.stalledAt === null ? 0 : Math.max(0, this.now() - this.stalledAt); }
+  get healthyMs(): number { return this.healthyAt === null ? 0 : Math.max(0, this.now() - this.healthyAt); }
+  get stallTotalMs(): number { return this.stallEndedMs + this.stalledMs; }
   /** True while waiting on the other peer's input. */
   stalled = false;
   /**
@@ -595,6 +622,8 @@ export class NetSession {
                          !this.fixedDelay && !this.observer;
     this.timeSyncOn = (o.timeSync ?? false) && this.rollbackOn && !this.observer;
     this.now = o.now ?? (() => performance.now());
+    this.workNow = o.workNow ?? (() => performance.now());
+    this.workBudgetMs = Math.max(1, Math.min(16, o.workBudgetMs ?? 8));
     // Thirty frames, 1154 ms. It has been ten and then fourteen, each chosen
     // against the redundancy of the day: a peer stalls once the other's input
     // is delayed by more than this window, and a relayed pair's delay is the
@@ -660,23 +689,34 @@ export class NetSession {
     signal?.throwIfAborted();
     const bits = Uint8Array.from(atob(replay.inputs), c => c.charCodeAt(0));
     if (bits.length !== replay.frames || bits.some(b => b > 63)) throw new Error("Invalid spectator input");
-    this.bootstrapPackets = [];
     this.begin(replay.mode,replay.num);
+    const serial = this.runSerial;
+    this.bootstrapPackets = [];
     this.epoch = epoch;
     this.input = [Array.from(bits,b => b & 7),Array.from(bits,b => b >> 3)];
     this.confirmed = bits.length;
+    this.ran = bits.length; // Historical bootstrap suppresses sounds and other effects.
     for (const c of replay.commands) this.queueCommand(c[0],c[1],c[2],c[3]);
     try {
+      let deadline = this.workNow() + this.workBudgetMs;
+      let chunk = 0;
       for (let f = 0; f < replay.frames; f++) {
         signal?.throwIfAborted();
+        if (this.runSerial !== serial || !this.started) return;
         this.runFrame(f);
-        if (f % 260 === 259) await new Promise(resolve => setTimeout(resolve,0));
+        if (++chunk >= 260 || this.workNow() >= deadline) {
+          await new Promise(resolve => setTimeout(resolve,0));
+          deadline = this.workNow() + this.workBudgetMs; chunk = 0;
+        }
       }
     } finally {
-      const pending = this.bootstrapPackets;
-      this.bootstrapPackets = null;
-      if (!signal?.aborted) for (const packet of pending ?? []) this.receive(packet);
-      this.acc = 0;
+      if (this.runSerial === serial) {
+        const pending = this.bootstrapPackets;
+        this.bootstrapPackets = null;
+        if (!signal?.aborted) for (const packet of pending ?? []) this.receive(packet);
+        else { this.host.quit(); this.started = false; }
+        this.acc = 0;
+      }
     }
   }
   replay(frame: number): Replay | null {
@@ -734,9 +774,18 @@ export class NetSession {
     this.lastRemote = 0;
     this.acc = 0;
     this.stalled = false;
+    this.stalledAt = null;
+    this.healthyAt = this.now();
+    this.stallEndedMs = 0;
     this.stalledFrames = 0;
     this.stalls = 0;
     this.owed = -1;
+    this.recovery = null;
+    this.replaying = false;
+    this.deferredPackets = [];
+    this.deferredBytes = 0;
+    this.pending = null;
+    this.bootstrapPackets = null;
     this.snapFrame = -1;
     // Frame-relative, so a level that restarts the count invalidates them.
     // The round trip and the jitter are NOT reset: those are properties of the
@@ -800,6 +849,7 @@ export class NetSession {
     // longer share.
     this.outbox.push({
       packet, left: COMMAND_RESENDS, untilHeard: true, epoch: this.epoch,
+      next: this.now() + COMMAND_RETRY_MS, expires: this.now() + START_LIFETIME_MS,
     });
     this.begin(mode, num);
   }
@@ -822,6 +872,13 @@ export class NetSession {
    * the resends ride on input packets that are not coming either.
    */
   depart(): void {
+    this.recovery = null;
+    this.deferredPackets = [];
+    this.deferredBytes = 0;
+    this.pending = null;
+    this.bootstrapPackets = null;
+    this.runSerial++;
+    this.outbox = [];
     // Nothing to announce: a watcher was never part of the game it was
     // watching, and telling the pair that somebody stopped looking is not this
     // channel's business.
@@ -1027,11 +1084,21 @@ export class NetSession {
    * missed something, and it was the one peer whose commands stopped being
    * repeated. It is also why a departure could not be scheduled at all.
    */
+  /** Transport maintenance independent from graphics readiness and display FPS. */
+  pump(): void { this.drainOutbox(); }
+
   private drainOutbox(): void {
     if (this.solo || this.outbox.length === 0) return;
+    const now = this.now();
+    const expiredStart = this.outbox.some(c => c.untilHeard && this.sameEpochRun(c.epoch) && now >= c.expires);
+    if (expiredStart && !this.heard && !this.linkDown) {
+      this.linkDown = true;
+      this.onLinkDown?.("the other player did not confirm the level start");
+    }
     for (const c of this.outbox) {
-      if (c.untilHeard) { this.transport.send(c.packet); continue; }
-      if (c.left-- > 0) this.transport.send(c.packet);
+      if (now >= c.expires || now < c.next) continue;
+      c.next = now + COMMAND_RETRY_MS;
+      if (c.untilHeard || c.left-- > 0) this.transport.send(c.packet);
     }
     // "Until heard" is until heard on the generation it was sent for. A Start
     // the peer never answered -- they closed the tab during the handshake -- is
@@ -1039,7 +1106,7 @@ export class NetSession {
     // every tick for the rest of the session, one stale entry per unanswered
     // Start, each of them filtered by the epoch at the far end anyway.
     this.outbox = this.outbox.filter((c) =>
-      (c.untilHeard && this.sameEpochRun(c.epoch)) || c.left > 0);
+      now < c.expires && ((c.untilHeard && this.sameEpochRun(c.epoch)) || c.left > 0));
     // And a hard ceiling, oldest first. `untilHeard` entries are held back from
     // the eviction: they are the level the pair is trying to agree on, and
     // dropping one strands them on different generations -- which is the exact
@@ -1074,28 +1141,27 @@ export class NetSession {
    * Under rollback a command that arrives for a frame already simulated is not
    * a problem: it forces a correction, exactly as a mispredicted input does.
    */
-  send(command: Command, a = 0, b = 0): void {
+  send(command: Command, a = 0, b = 0): boolean {
     // A watcher cannot change the game it is watching. Refused here rather than
     // only in the page, because "the netcode will not let you" is a stronger
     // guarantee than "no screen offers you the button".
-    if (this.observer) return;
-    // Far enough ahead that neither peer can already have simulated past it by
-    // the time the packet lands. Input is worth shaving frames off; a command
-    // is not -- nobody notices 400 ms on a pause, and a command that arrives
-    // for a frame already behind the snapshot cannot be applied at all.
-    //
-    // `COMMAND_LEAD`, not `maxRollback`: see the note on the constant for why
-    // those are different numbers even though this line held the second one
-    // for a long time.
-    const at = this.frame + this.delay + COMMAND_LEAD;
-    if (!this.queueCommand(at, command, a, b)) return;
-    if (this.solo) return;
+    if (this.observer || !this.started || this.recovering) return false;
+    // A repeated click during agreement must not queue a second pause toggle
+    // or a Quit belonging to the generation a pending Retry is about to end.
+    if (this.pending?.epoch === this.epoch) return false;
+    const at = this.frame + (this.solo ? 0 : this.delay + COMMAND_LEAD);
+    if (!this.queueCommand(at, command, a, b)) return false;
+    this.pending = { command, frame: at, a, b, epoch: this.epoch };
+    this.localBits = 0;
+    if (this.solo) return true;
     const packet = encodeCommand({
       kind: Kind.Command, slot: this.slot, epoch: this.epoch,
       frame: at, command, a, b,
     });
     this.transport.send(packet);
-    this.outbox.push({ packet, left: COMMAND_RESENDS, epoch: this.epoch });
+    this.outbox.push({ packet, left: COMMAND_RESENDS, epoch: this.epoch,
+      next: this.now() + COMMAND_RETRY_MS, expires: this.now() + COMMAND_LIFETIME_MS });
+    return true;
   }
 
   /**
@@ -1127,6 +1193,12 @@ export class NetSession {
   // ---- receiving --------------------------------------------------------
 
   private receive(data: Uint8Array): void {
+    if (this.recovery !== null) {
+      if (this.deferredPackets.length < 256 && data.length <= 64 && this.deferredBytes + data.length <= 16384) {
+        this.deferredPackets.push(data.slice()); this.deferredBytes += data.length;
+      }
+      return;
+    }
     if (this.bootstrapPackets !== null) {
       if (this.bootstrapPackets.length < 256 && data.length <= 64) this.bootstrapPackets.push(data.slice());
       return;
@@ -1306,14 +1378,35 @@ export class NetSession {
     // the dear operation: rewinding a few frames further costs 0.04 ms each,
     // where taking a snapshot costs a hundred times that.
     this.parkAt = stale && park > this.snapFrame ? park : -1;
-    for (let f = this.frame; f < target; f++) {
+    this.recovery = { target, from: this.frame, serial: this.runSerial, full: false,
+      confirmedAt: Math.min(target, this.confirmed) };
+  }
+
+  /** Replay only complete fixed steps, then yield with presentation frozen. */
+  private continueRecovery(deadline: number): void {
+    const job = this.recovery;
+    if (!job) return;
+    let count = 0;
+    while (this.recovery === job && this.frame < job.target && this.started) {
+      if (count > 0 && (this.workNow() >= deadline || count >= 260)) return;
+      if (this.host.ready?.() === false) return;
+      const f = this.frame;
+      if (this.input[this.slot][f] === undefined || (!this.rollbackOn && this.input[this.other][f] === undefined)) break;
       this.runFrame(f);
-      if (this.frame <= f) break;            // a command rebuilt the level
+      count++;
+      // Publish one completed authoritative frontier, before predicted frames
+      // can change its progress projection. Intermediate replay frames never save.
+      if (this.recovery === job && this.frame === job.confirmedAt) this.host.confirmed?.(this.frame);
+      if (this.frame <= f || this.runSerial !== job.serial) break;
     }
-    // A snapshot due on the frame we are about to run next is taken here,
-    // because the loop above never reaches it.
-    if (this.parkAt === target) this.takeSnapshot(target);
+    if (this.recovery !== job) return;
+    if (this.parkAt === this.frame) this.takeSnapshot(this.frame);
     this.parkAt = -1;
+    this.recovery = null;
+    this.replaying = false;
+    const pending = this.deferredPackets;
+    this.deferredPackets = []; this.deferredBytes = 0;
+    for (const data of pending) this.receive(data);
   }
 
   /** The frame the snapshot should be re-taken on, during a re-simulation. */
@@ -1340,10 +1433,15 @@ export class NetSession {
    * ahead of the peer that a correction could no longer reach back.
    */
   tick(dt: number): void {
+    this.pump();
     if (!this.started || this.bootstrapPackets !== null) return;
     if (this.host.ready?.() === false) return;
-    this.drainOutbox();
-    this.settle();
+    const deadline = this.workNow() + this.workBudgetMs;
+    if (!this.recovery) this.settle();
+    if (this.recovery) {
+      this.continueRecovery(deadline);
+      if (this.recovery || !this.started) return;
+    }
     this.scheduleLocal();
     this.reckon();
     // Dilated, not stepped.
@@ -1364,12 +1462,15 @@ export class NetSession {
     // up quickly, and stepping is far cheaper than rendering.
     let budget = 60;
     while (this.acc >= this.timeStep && budget-- > 0) {
+      if (budget < 59 && this.workNow() >= deadline) break;
       // Deciding this frame's input HERE and not after the previous frame is
       // the difference between one frame of lag and two: committing ahead
       // freezes whatever the player was pressing a frame ago.
       this.scheduleLocal();
       if (!this.ready(this.frame)) {
         this.stalled = true;
+        if (this.stalledAt === null) this.stalledAt = this.now();
+        this.healthyAt = null;
         this.stalledFrames++;
         this.stalls++;
         // Time spent WAITING is not time the game owes.
@@ -1394,6 +1495,11 @@ export class NetSession {
         return;
       }
       this.stalled = false;
+      if (this.stalledAt !== null) {
+        this.stallEndedMs += Math.max(0, this.now() - this.stalledAt);
+        this.stalledAt = null;
+      }
+      if (this.healthyAt === null) this.healthyAt = this.now();
       this.stalledFrames = 0;
       const at = this.frame;
       this.runFrame(at);
@@ -1417,7 +1523,7 @@ export class NetSession {
   }
 
   private runFrame(frame: number): void {
-    const replaying = frame < this.ran;
+    const replaying = this.replaying || frame < this.ran;
 
     // Before the step, because a correction has to reach the state the frame
     // started from, not the one it produced.
@@ -1454,7 +1560,7 @@ export class NetSession {
     this.log[frame] = bits;
     this.host.step(bits, frame, replaying);
     this.frame = frame + 1;
-    if (this.solo || frame < this.confirmed) this.host.confirmed?.(this.frame);
+    if (!this.recovering && (this.solo || frame < this.confirmed)) this.host.confirmed?.(this.frame);
     if (this.frame > this.ran) this.ran = this.frame;
 
     // Only a frame both players' real input decided is worth a digest. One
@@ -1475,12 +1581,11 @@ export class NetSession {
   }
 
   private applyCommand(command: Command, a: number, b: number): void {
-    // See `replaying`: rebuilding the level a second time would bump the epoch
-    // a second time, and only on this side.
-    if (this.replaying &&
-        (command === Command.Start || command === Command.Retry)) {
-      return;
-    }
+    if (this.pending?.epoch === this.epoch && this.pending.command === command &&
+        this.pending.frame === this.frame && this.pending.a === a && this.pending.b === b) this.pending = null;
+    // Applied Start/Retry commands cannot survive resetLog. A Retry present
+    // during a full repair is therefore a newly arrived late command, and must
+    // advance the generation even when its scheduled frame predates the snapshot.
     switch (command) {
       case Command.Pause: this.host.pause(a === 1); break;
       case Command.Retry: this.retryLevel(); break;
@@ -1529,25 +1634,20 @@ export class NetSession {
    * of times realtime. The same path serves late join and reconnect.
    */
   resync(): void {
+    if (this.recovery) return;
     const upto = this.frame;
     this.host.start(this.mode, this.num);
     this.hashes.clear();
     this.frame = 0;
-    this.ran = 0;
+    this.ran = upto;
     this.owed = -1;
     this.snapFrame = -1;
     if (this.rollbackOn && !this.solo) this.takeSnapshot(0);
     this.replaying = true;
-    try {
-      for (let f = 0; f < upto; f++) {
-        if (this.input[this.slot][f] === undefined) break;
-        if (!this.rollbackOn && this.input[this.other][f] === undefined) break;
-        this.runFrame(f);
-        if (this.frame <= f) break;          // a command rebuilt the level
-      }
-    } finally {
-      this.replaying = false;
-    }
+    this.recovery = { target: upto, from: 0, serial: this.runSerial, full: true,
+      confirmedAt: this.solo ? upto : Math.min(upto, this.confirmed) };
+    // A small repair often finishes here; expensive replay resumes on tick.
+    if (this.host.ready?.() !== false) this.continueRecovery(this.workNow() + this.workBudgetMs);
   }
 
   /**

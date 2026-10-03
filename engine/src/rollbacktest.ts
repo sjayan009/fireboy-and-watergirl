@@ -42,6 +42,7 @@ class Link {
   private queue: { at: number; to: 0 | 1; data: Uint8Array }[] = [];
   private handlers: [((d: Uint8Array) => void)?, ((d: Uint8Array) => void)?] = [];
   private now = 0;
+  get nowMs(): number { return this.now; }
   private rng: Rng;
   sent = 0;
   dropped = 0;
@@ -85,7 +86,7 @@ function pair(link: Link, rollback: boolean): [Peer, Peer] {
   const make = (slot: Slot): Peer => {
     const host = new LevelHost();
     const session = new NetSession({
-      slot, host, transport: link.endpoint(slot), rollback,
+      slot, host, transport: link.endpoint(slot), now: () => link.nowMs, workNow: () => 0, rollback,
     });
     return { session, host };
   };

@@ -44,6 +44,7 @@ import { MatchLease } from "../matchlease.js";
 import { MatchSharing, type SharingState } from "../sharing.js";
 import { QoeRecorder } from "../net/qoe.js";
 import { networkFlags } from "../net/flags.js";
+import { presentationPreferences, PRESENTATION_CHANGED } from "../presentation.js";
 
 const MUTE_KEY = "fbwg.muted";
 
@@ -157,7 +158,7 @@ export function playScreen(host: HTMLElement): () => void {
   const progress = pairProgress(solo.store);
   // Whatever this browser has, merged with whatever the account has, before the
   // first frame puts a map on screen.
-  void solo.sync();
+  void solo.sync().then(() => { if (!gone && !view.level && !progress.shared) progress.refreshSolo(); });
 
   // A live region: the connection state changes on the network's schedule
   // rather than on the reader's, so a stall, a reconnection or a friend leaving
@@ -438,21 +439,39 @@ export function playScreen(host: HTMLElement): () => void {
    */
 
   const qoe = new QoeRecorder();
+  let pendingControl = "";
+  let criticalArtFailed = false;
+  const presentation = presentationPreferences();
   if (import.meta.env.DEV) (window as Window & { fbwgQoe?: () => unknown }).fbwgQoe = () => qoe.summary();
   const view = new GameView({
     canvas,
     assets: __ASSETS__,
+    presentationFps: presentation.fps,
+    outputScale: presentation.scale,
     rollbackSmoothing: networkFlags.rollbackSmoothing,
     localDescendantInterpolation: networkFlags.descendantInterpolation,
     onRenderTiming: sample => qoe.rendered(sample),
     save: progress.store,
+    onPreparationProgress: (stage, counts) => {
+      if (gone) return;
+      if (stage === "metadata" && !counts.ready) {
+        criticalArtFailed = false;
+        shell.notify("Checking level artwork…");
+      } else if (stage === "critical") {
+        criticalArtFailed = counts.failed > 0;
+        shell.notify(counts.ready + counts.failed === counts.total ? "" : `Preparing level artwork: ${counts.ready} of ${counts.total}`);
+      } else if (stage === "background" && counts.ready + counts.failed === counts.total) {
+        if (!counts.failed && !criticalArtFailed) clearNotice("art");
+        else notice("art", "Some game art could not load.", el("button", { class: "ghost", onclick: () => { void view.prepare().catch(() => {}); } }, "Retry loading"));
+      }
+    },
     onPrepareRun: v => {
       // Said once per prepared scene, so a level that starts with holes in it
       // says so rather than looking like a rendering bug somebody should
       // report. Preparation retries what failed last time, so this clears
       // itself the moment the art actually arrives.
       if (!v.artComplete) {
-        notice("art", "Some game art did not load. The level still plays.");
+        notice("art", v.artStatus === "loading" ? "Additional artwork is loading. The level is ready to play." : "Some game art did not load. The level still plays.");
       }
       // Nothing left to wait for since the ranking registration went.
       return Promise.resolve();
@@ -488,6 +507,13 @@ export function playScreen(host: HTMLElement): () => void {
       showShare();
     },
     onFrame: () => {
+      const request = view.session?.pendingControl;
+      const next = request ? `${request.command}:${request.frame}` : "";
+      if (next !== pendingControl) {
+        pendingControl = next;
+        if (request) shell.notify("Applying your request…");
+        else if (next === "") shell.notify("");
+      }
       qoe.tick(performance.now(), view.session);
       const path = link?.activePath;
       if (path === "rtc" || path === "relay") {
@@ -498,17 +524,11 @@ export function playScreen(host: HTMLElement): () => void {
     },
     onConfirmed: (v, frame) => {
       if (v.session) mirror?.confirmed(v.session,frame);
-      if (frame % 26 === 0 || v.game.children.some((c: { Rboard?: unknown }) => c.Rboard)) {
-        progress.confirm(v.game.The_cookie.data);
-        // `confirm` is the pair path and returns early when there is no
-        // partner, so playing alone reached storage and stopped there. This is
-        // the other half: alone, the same confirmed state goes up to the
-        // account once it settles.
-        if (!progress.shared) solo.touched();
-      }
+      progress.confirm(v.game.The_cookie.data);
     },
     onRefused: (why) => {
       if (why === "preparation-failed") {
+        shell.notify("");
         notice("art", "Some game art could not load.",el("button", { class: "ghost", onclick: () => { void view.prepare().catch(() => {}); } },"Retry loading"));
         shell.open("setup");
       }
@@ -823,6 +843,7 @@ export function playScreen(host: HTMLElement): () => void {
   const shell = new PlayShell(host, {
     canvas, name, status, mute, banner, friends: panel, times, board, connection,
     input: (enabled) => view.setInputEnabled(enabled),
+    onObstructed: obstructed => { if (obstructed && view.level && !view.watching) view.pauseForSuspension(); },
     onPanel: (panel, changed) => {
       if (panel === "leaderboard") leaderboard.open(view.session?.selection ?? loadSelection(auth().user!.id, lastPartner ?? ""), changed);
       // `open`, not `refresh`: the panel has to be told it is visible before it
@@ -839,6 +860,7 @@ export function playScreen(host: HTMLElement): () => void {
   });
   const progressPanel = new ProgressPanel(times, {
     progress,
+    solo,
     friends: () => lobby?.list ?? [],
     partner: () => partner,
     table: () => view.game.Translation as string[] | undefined,
@@ -848,9 +870,10 @@ export function playScreen(host: HTMLElement): () => void {
   panel.append(watchList);
   /** How many results had reached the server last time we looked. */
   let sentResults = progress.saves;
-  const offSave = progress.onChange(() => {
-    const error = progress.lastError ?? progress.storageError;
-    shell.saveStatus.textContent = error ? "Retry needed" : progress.waiting ? "Saving…" : "Saved";
+  const showSave = () => {
+    const error = progress.shared ? progress.storageError ?? progress.lastError : solo.storageError ?? solo.lastError;
+    const waiting = progress.shared ? progress.waiting : solo.pending;
+    shell.saveStatus.textContent = error ? "Retry needed" : waiting ? "Saving…" : solo.localOnly && !progress.shared ? "Saved on device" : "Saved to cloud";
     shell.saveStatus.title = error ?? "Your progress";
     // A result that has actually landed is a leaderboard that has actually
     // changed, and the board holds a fifteen-second cache. `quit` has always
@@ -866,7 +889,14 @@ export function playScreen(host: HTMLElement): () => void {
       void drawBoard();
     }
     void progressPanel.refresh();
-  });
+  };
+  const offSave = progress.onChange(showSave);
+  const offSoloSave = solo.onChange(showSave);
+  const changePresentation = (event: Event) => {
+    const p = (event as CustomEvent<{ fps: number; scale: number }>).detail;
+    view.configurePresentation(p.fps, p.scale);
+  };
+  addEventListener(PRESENTATION_CHANGED, changePresentation);
   const otherTab = el("span", { class: "other-tab" }, "Playing in another tab. ");
   otherTab.hidden = true;
   const takeover = el("button", { class: "ghost" }, "Take over here");
@@ -888,7 +918,7 @@ export function playScreen(host: HTMLElement): () => void {
   // The flush is not conditional on which way it went -- when the label reads
   // "Retry needed" the press IS the retry, and it should still happen on the
   // press that closes the panel.
-  on(shell.saveStatus, "click", async () => { shell.toggle("progress"); await progress.flushNow(); drawTimes(); });
+  on(shell.saveStatus, "click", async () => { shell.toggle("progress"); if (progress.shared) await progress.flushNow(); else await solo.sync(); drawTimes(); });
   shell.notify("Preparing the game…");
   const prepare = () => {
     void view.prepare().then(() => { if (!gone) { shell.notify(""); void leaderboard.refresh(); } }).catch(() => {
@@ -1015,7 +1045,6 @@ export function playScreen(host: HTMLElement): () => void {
    */
   let stalling = false;
   /** Frames since the session last looked stalled, for the hysteresis above. */
-  let healthy = 0;
   /** How many separate stalls this match has suffered, for `hurry`. */
   let stallEpisodes = 0;
   /** Whether the link has been asked to spend messages on latency. */
@@ -1026,10 +1055,9 @@ export function playScreen(host: HTMLElement): () => void {
     // connection is gone" are the two things this whole change exists to tell
     // apart, and the weaker of the two must not overwrite the stronger.
     const live = !rebuilding && !!s && s.running && !s.linkDown;
-    healthy = live && s!.stalled ? 0 : healthy + 1;
     const bad = stalling
-      ? live && healthy < RECOVERED_FRAMES
-      : live && s!.stalled && s!.stalledFrames > STALL_FRAMES;
+      ? live && s!.healthyMs < RECOVERED_FRAMES * 1000 / 26
+      : live && s!.stalled && s!.stalledMs > STALL_FRAMES * 1000 / 26;
     if (bad === stalling) return;
     stalling = bad;
     if (bad) {
@@ -1261,15 +1289,16 @@ export function playScreen(host: HTMLElement): () => void {
         if (!await lease.acquire()) throw new Error("Playing in another tab. Use Take over here to continue.");
         if (!flow.owns(abort) || gone) { lease.release(); return; }
         say.textContent = "loading your progress…";
-        await progress.adopt(friend.id, abort.signal);
-        await view.prepareLevel(mode.value, Number(num.value), abort.signal);
-        if (!flow.owns(abort) || gone) return;
+        const preparation = Promise.all([progress.adopt(friend.id, abort.signal),
+          view.prepareLevel(mode.value, Number(num.value), abort.signal)]).then(() => {});
+        void preparation.catch(() => {});
         try { localStorage.setItem(selectionKey(auth().user!.id, friend.id), JSON.stringify({ mode: mode.value, num: Number(num.value), iAmFireboy: roles.value === "me" })); } catch { /* optional preference */ }
         const ready = await lobby!.invite(friend.id, {
           mode: mode.value,
           num: Number(num.value),
           iAmFireboy: roles.value === "me",
           signal: abort.signal,
+          beforeReady: () => preparation,
           onProgress: (what) => { if (flow.owns(abort)) say.textContent = what; },
         });
         if (!flow.finish(abort, "playing") || gone) { ready.transport.close(); return; }
@@ -1278,6 +1307,7 @@ export function playScreen(host: HTMLElement): () => void {
       } catch (e) {
         if (!flow.owns(abort) || gone) return;
         flow.finish(abort, "configuring");
+        abort.abort();
         lease.release();
         pending = null;
         void progress.release();
@@ -1307,7 +1337,7 @@ export function playScreen(host: HTMLElement): () => void {
     const yes = el("button", { class: "primary small" }, "Accept");
     const no = el("button", { class: "ghost" }, "Decline");
 
-    const abort = flow.start("accepting");
+    let abort = flow.start("accepting");
     pending = { session: invite.session, attempt: invite.attempt, friendId: from.id, abort };
     shell.invite(true);
 
@@ -1340,6 +1370,10 @@ export function playScreen(host: HTMLElement): () => void {
       yes, say, no);
 
     on(yes, "click", async () => {
+      if (abort.signal.aborted) {
+        abort = flow.start("accepting");
+        pending = { session: invite.session, attempt: invite.attempt, friendId: from.id, abort };
+      }
       yes.disabled = true;
       no.textContent = "Cancel";
       try {
@@ -1351,19 +1385,22 @@ export function playScreen(host: HTMLElement): () => void {
         // finished against what is stored to decide whether it was an
         // improvement, and it has to be the PAIR's best it compares against.
         say.textContent = "loading your progress…";
-        await progress.adopt(from.id, abort.signal);
-        await view.prepareLevel(invite.mode, invite.num, abort.signal);
-        if (!flow.owns(abort) || gone) return;
+        const preparation = Promise.all([progress.adopt(from.id, abort.signal),
+          view.prepareLevel(invite.mode, invite.num, abort.signal)]).then(() => {});
+        void preparation.catch(() => {});
         flow.set("connecting");
         const ready = await lobby!.join(invite, {
           signal: abort.signal,
-          onProgress: (what) => { say.textContent = what; },
+          beforeReady: () => preparation,
+          onProgress: (what) => { if (flow.owns(abort) && !gone) say.textContent = what; },
         });
         if (!flow.finish(abort, "playing") || gone) { ready.transport.close(); return; }
         pending = null;
         begin(ready, invite);
       } catch (e) {
         if (!flow.owns(abort) || gone) return;
+        flow.finish(abort, "idle");
+        abort.abort();
         lease.release();
         pending = null;
         void progress.release();
@@ -1715,15 +1752,23 @@ export function playScreen(host: HTMLElement): () => void {
   // `keepalive` request the browser is allowed to finish after this document
   // has gone. Neither is guaranteed, which is why the result is also written to
   // a durable outbox -- see `pairsave.ts`.
-  const onHide = () => {
+  const onHide = (event: PageTransitionEvent) => {
+    progress.beacon();
+    void solo.sync();
+    if (event.persisted) { view.pauseForSuspension(); view.setRunning(false); return; }
     lease.release();
     rebuilding?.abort();
-    progress.beacon();
     if (view.session) view.leave();
   };
   addEventListener("pagehide", onHide);
   const onShow = (event: PageTransitionEvent) => {
-    if (event.persisted && match) endSession("This tab was suspended. Invite your friend again to reconnect.");
+    if (!event.persisted) return;
+    if (!match) { view.setRunning(true); return; }
+    void lease.acquire().then(acquired => {
+      if (gone) return;
+      if (!acquired) endSession("Your match moved to another tab.");
+      view.setRunning(true);
+    });
   };
   addEventListener("pageshow", onShow);
   const visibility = () => {
@@ -1764,6 +1809,8 @@ export function playScreen(host: HTMLElement): () => void {
     void solo.sync();
     solo.close();
     offSave();
+    offSoloSave();
+    removeEventListener(PRESENTATION_CHANGED, changePresentation);
     removeEventListener("pagehide", onHide);
     removeEventListener("pageshow", onShow);
     document.removeEventListener("visibilitychange",visibility);

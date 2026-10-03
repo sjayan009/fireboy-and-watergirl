@@ -17,12 +17,13 @@
  * itself (`m_level.scaleX = 0.8; m_level.x += 16`), exactly as the original
  * did, and applying it a second time would shrink the level inside the menus.
  */
-import { Game, level, tickClock, resetClock } from "./game/game.js";
+import { Game, tickClock, resetClock } from "./game/game.js";
 import { hashLevel } from "./net/hash.js";
 import {
   SoundBus, Keyboard, advanceTree, enterFrameTree,
 } from "./flash/flash.js";
 import { SpriteRenderer } from "./render/sprites.js";
+import { prepareLevelAssets, type PreparedLevelAssets, type LevelPreparationOptions } from "./render/levelassets.js";
 import { VisualSnapshots } from "./render/interpolation.js";
 import { ShellInput } from "./game/shellinput.js";
 import { AudioPlayer } from "./audio/player.js";
@@ -58,6 +59,10 @@ export interface GameViewOptions {
   rollbackSmoothing?: boolean;
   /** Opt in to continuous local limb transforms; root input prediction stays immediate. */
   localDescendantInterpolation?: boolean;
+  /** Local drawing cap; zero follows the display. Simulation remains26Hz. */
+  presentationFps?: number;
+  /** Local output pixels per logical stage pixel. */
+  outputScale?: number;
   /**
    * Where this view's progress is kept.
    *
@@ -86,6 +91,8 @@ export interface GameViewOptions {
   onConfirmed?: (view: GameView, frame: number) => void;
   /** Runs after scene preparation and before the first simulation frame. */
   onPrepareRun?: (view: GameView) => Promise<void>;
+  /** Unique resource counts for the current level preparation, outside simulation state. */
+  onPreparationProgress?: LevelPreparationOptions["onProgress"];
   /**
    * A button that changes shared state was pressed and could not be honoured.
    * Today the only one is a map node clicked by the peer who does not choose
@@ -137,14 +144,22 @@ export class GameView {
   private assetBase: string;
   private preparation: Promise<void> | null = null;
   private preparationGeneration = 0;
+  private levelAssets: PreparedLevelAssets | null = null;
+  private levelPreparation: AbortController | null = null;
+  private levelPreparationGeneration = 0;
+  private readonly lifetime = new AbortController();
   private prepared = false;
   private lastAssetRevision = -1;
+  private presentationFps = 0;
+  private outputScale = 1;
+  private nextPresentation = 0;
   private readonly smoothing: boolean;
   private readonly visuals: VisualSnapshots;
   private visualAlpha = 1;
   private needsVisualReconcile = false;
   private readonly onRefused?: (reason: RefusedReason) => void;
   private readonly onPrepareRun?: (view: GameView) => Promise<void>;
+  private readonly onPreparationProgress?: LevelPreparationOptions["onProgress"];
 
   sprites: SpriteRenderer | null = null;
   audio: AudioPlayer | null = null;
@@ -162,6 +177,7 @@ export class GameView {
   private last = 0;
   private raf = 0;
   private running = true;
+  private suspensionPause = false;
   private muted = false;
   private frame = 0;
   private lastLevel: any = null;
@@ -180,9 +196,11 @@ export class GameView {
     this.onConfirmed = o.onConfirmed;
     this.onRefused = o.onRefused;
     this.onPrepareRun = o.onPrepareRun;
+    this.onPreparationProgress = o.onPreparationProgress;
     this.smoothing = o.smoothing !== false;
     this.visuals = new VisualSnapshots({ rollbackSmoothing: o.rollbackSmoothing,
       localDescendantInterpolation: o.localDescendantInterpolation });
+    this.configurePresentation(o.presentationFps, o.outputScale);
 
     resetClock();
     // Scoped, not installed: `Game`'s constructor calls `openSave` once and
@@ -209,7 +227,7 @@ export class GameView {
     // destroyed view, which for the audio player meant an AudioContext and two
     // global gesture listeners that nothing would ever take down again.
     void this.prepare().catch((e) => console.warn("sprite art unavailable:", e));
-    AudioPlayer.load(base).then((a) => {
+    AudioPlayer.load(base, this.lifetime.signal).then((a) => {
       if (this.destroyed) { a.dispose(); return; }
       this.audio = a;
     }).catch((e) => console.warn("audio unavailable:", e));
@@ -290,9 +308,9 @@ export class GameView {
       return intent.kind === "retry" || intent.kind === "quit";
     }
     switch (intent.kind) {
-      case "retry": s.send(Command.Retry); return true;
-      case "pause": s.send(Command.Pause); return true;
-      case "quit": s.send(Command.Quit, this.slot); return true;
+      case "retry": this.clearInput(); s.send(Command.Retry); return true;
+      case "pause": this.clearInput(); s.send(Command.Pause); return true;
+      case "quit": this.clearInput(); s.send(Command.Quit, this.slot); return true;
     }
     return false;
   }
@@ -477,7 +495,12 @@ export class GameView {
    * `onPrepareRun` is called from inside it, and the frame loop does not run
    * at all until `prepared`.
    */
-  get artComplete(): boolean { return (this.sprites?.missing ?? 0) === 0; }
+  get artComplete(): boolean { return (this.sprites?.missing ?? 0) === 0 && (!this.levelAssets || this.levelAssets.status === "complete"); }
+  get artStatus(): "preparing" | "loading" | "partial" | "complete" {
+    if (!this.sprites) return "preparing";
+    if (this.levelAssets?.status === "ready") return "loading";
+    return this.artComplete ? "complete" : "partial";
+  }
   private prepareScene(): void {
     this.visuals.clear();
     this.preparationGeneration++;
@@ -488,13 +511,16 @@ export class GameView {
   }
 
   prepare(): Promise<void> {
+    if (this.prepared && ((this.sprites?.missing ?? 0) > 0 || this.levelAssets?.status === "partial")) this.preparation = null;
     if (this.preparation === null) {
       const generation = this.preparationGeneration;
       this.preparation = (async () => {
         const sprites = this.sprites ?? await SpriteRenderer.load(this.assetBase);
-        if (this.destroyed || generation !== this.preparationGeneration) return;
+        if (this.destroyed || generation !== this.preparationGeneration) { if (sprites !== this.sprites) sprites.dispose(); return; }
         this.sprites = sprites;
-        await sprites.prepare(this.game);
+        this.sprites.configureOutputScale(this.outputScale);
+        if (this.levelAssets?.status === "partial") await this.levelAssets.retry();
+        await sprites.prepare(this.game, this.levelAssets === null);
         if (this.destroyed || generation !== this.preparationGeneration) return;
         await this.onPrepareRun?.(this);
         if (this.destroyed || generation !== this.preparationGeneration) return;
@@ -512,11 +538,25 @@ export class GameView {
 
   async prepareLevel(mode: string, num: number, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
-    await this.prepare();
-    signal?.throwIfAborted();
-    const scene = new (level as any)(mode, num);
-    await this.sprites!.prepare(scene);
-    signal?.throwIfAborted();
+    if (this.destroyed) throw new Error("View disposed");
+    const generation = ++this.levelPreparationGeneration;
+    this.levelPreparation?.abort();
+    const controller = new AbortController();
+    this.levelPreparation = controller;
+    const abort = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", abort, { once: true });
+    this.levelAssets?.release(); this.levelAssets = null;
+    try {
+      await this.prepare();
+      controller.signal.throwIfAborted();
+      const prepared = await prepareLevelAssets(this.assetBase, mode, num, { signal: controller.signal,
+        onProgress: (stage, counts) => {
+          if (!this.destroyed && generation === this.levelPreparationGeneration) this.onPreparationProgress?.(stage, counts);
+        } });
+      if (this.destroyed || generation !== this.levelPreparationGeneration) { prepared.release(); throw new Error("Preparation superseded"); }
+      this.levelAssets = prepared;
+      controller.signal.throwIfAborted();
+    } finally { signal?.removeEventListener("abort", abort); }
   }
 
   clearInput(): void {
@@ -528,8 +568,15 @@ export class GameView {
 
   pauseForSuspension(): void {
     this.clearInput();
-    if (this.session) this.session.send(Command.Pause, 1);
+    this.suspensionPause = this.session !== null;
+    if (this.session) this.pumpSuspensionPause();
     else new GameHost(this.game).pause(true);
+  }
+
+  private pumpSuspensionPause(): void {
+    // An in-flight control or correction can temporarily refuse a command.
+    // Keep the forced pause outside simulation state until it can be accepted.
+    if (this.suspensionPause && this.session?.running && this.session.send(Command.Pause, 1)) this.suspensionPause = false;
   }
 
   /**
@@ -637,6 +684,7 @@ export class GameView {
    * outlives it either way, because it is also their presence.
    */
   leave(): void {
+    this.suspensionPause = false;
     const going = this.session;
     if (!going) return;
     // Cleared FIRST. `depart` ends the session, and a page that reacts to that
@@ -698,12 +746,15 @@ export class GameView {
     enterFrameTree(this.game);
     this.frame++;
     this.captureVisuals();
+    if (!this.session && !this.watching) this.onConfirmed?.(this, this.frame);
   }
 
   private tick = (now: number): void => {
     this.raf = requestAnimationFrame(this.tick);
     const dt = Math.min((now - this.last) / 1000, 0.25);   // clamp a tab stall
     this.last = now;
+    this.session?.pump();
+    this.pumpSuspensionPause();
     if (!this.running || !this.prepared) return;
 
     // Held in a local, not re-read off `this`. A command applied inside `tick`
@@ -715,6 +766,7 @@ export class GameView {
       // the other player and corrects itself when the prediction was wrong.
       session.setLocalInput(this.bits());
       session.tick(dt);
+      if (session.recovering) { this.onFrame?.(this); return; }
       this.reconcileVisuals();
       this.frame = session.frame;
       this.visualAlpha = session.interpolationAlpha;
@@ -767,12 +819,17 @@ export class GameView {
       SoundBus.drain();
     }
 
-    if (document.visibilityState !== "hidden" &&
+    if (now + 0.01 >= this.nextPresentation && document.visibilityState !== "hidden" &&
         (this.lastDrawnFrame !== this.frame || this.lastAssetRevision !== this.sprites?.revision ||
           (this.smoothing && this.visuals.hasMotion) || this.visuals.presentationDirty)) {
       this.render();
       this.lastDrawnFrame = this.frame;
       this.lastAssetRevision = this.sprites?.revision ?? 0;
+      if (this.presentationFps > 0) {
+        const interval = 1000 / this.presentationFps;
+        this.nextPresentation = this.nextPresentation > 0 ? this.nextPresentation + interval : now + interval;
+        if (this.nextPresentation <= now) this.nextPresentation = now + interval;
+      }
     }
     const state = [this.session?.running, this.session?.generation, this.session?.stalled,
       this.session?.linkDown, this.session?.desyncs, this.muted, this.canChooseLevel,
@@ -802,11 +859,12 @@ export class GameView {
   }
 
   render(): void {
+    if (this.session?.recovering || this.destroyed) return;
     const start = this.onRenderTiming ? performance.now() : 0;
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, STAGE_W, STAGE_H);
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     if (this.sprites) {
       this.sprites.draw(ctx, this.game, this.smoothing ? this.visuals : null, this.visualAlpha);
       this.visuals.presented();
@@ -843,6 +901,17 @@ export class GameView {
   }
 
   setMuted(muted: boolean): void { this.muted = muted; }
+  /** Presentation preferences stay on the view, outside Game/replay/snapshot state. */
+  configurePresentation(fps = 0, scale = 1): void {
+    this.presentationFps = [0, 30, 60, 120, 144, 240].includes(fps) ? fps : 0;
+    this.outputScale = Math.max(0.5, Math.min(3, Number.isFinite(scale) ? scale : 1));
+    if (this.sprites) this.outputScale = this.sprites.configureOutputScale(this.outputScale);
+    this.canvas.width = Math.round(STAGE_W * this.outputScale);
+    this.canvas.height = Math.round(STAGE_H * this.outputScale);
+    this.nextPresentation = 0;
+    this.lastDrawnFrame = -1;
+    this.visuals.invalidate();
+  }
   /** This player's mute, which the game's own button now also drives. */
   get isMuted(): boolean { return this.muted; }
   setRunning(on: boolean): void {
@@ -873,12 +942,21 @@ export class GameView {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.lifetime?.abort();
+    this.running = false;
+    this.preparationGeneration++;
+    this.levelPreparationGeneration++;
+    this.levelPreparation?.abort();
+    this.levelAssets?.release(); this.levelAssets = null;
+    this.leave();
+    this.game.dispose();
     cancelAnimationFrame(this.raf);
     for (const off of this.listeners) off();
     this.listeners = [];
     this.game.The_cookie?.flush?.();
     this.audio?.dispose();
     this.audio = null;
+    this.sprites?.dispose();
     this.sprites = null;
   }
 }

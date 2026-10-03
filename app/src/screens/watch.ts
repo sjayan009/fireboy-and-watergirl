@@ -32,6 +32,7 @@ import { el } from "../ui/dom.js";
 import { PlayShell } from "../ui/playshell.js";
 import { Leaderboard } from "../ui/leaderboard.js";
 import { FriendsPanel } from "./friends.js";
+import { presentationPreferences, PRESENTATION_CHANGED } from "../presentation.js";
 
 const MUTE_KEY = "fbwg.muted";
 
@@ -66,9 +67,11 @@ export function watchScreen(host: HTMLElement): () => void {
 
   let lastStatus = "";
   let feedMessage = "Connecting to the game…";
+  const presentation = presentationPreferences();
   const view = new GameView({
     canvas,
     assets: __ASSETS__,
+    presentationFps: presentation.fps, outputScale: presentation.scale,
     // Watching writes nowhere. See the note at the top of this file.
     save: new MemorySave(),
     onFrame: () => {
@@ -78,6 +81,11 @@ export function watchScreen(host: HTMLElement): () => void {
   });
   view.setMuted(muted);
   view.setInputEnabled(false);
+  const changePresentation = (event: Event) => {
+    const p = (event as CustomEvent<{ fps: number; scale: number }>).detail;
+    view.configurePresentation(p.fps, p.scale);
+  };
+  addEventListener(PRESENTATION_CHANGED, changePresentation);
 
   function describe(): string {
     const s = view.session;
@@ -189,6 +197,7 @@ export function watchScreen(host: HTMLElement): () => void {
   }
 
   return () => {
+    removeEventListener(PRESENTATION_CHANGED, changePresentation);
     shell.destroy(); friendsUI.destroy(); leaderboard.destroy();
     leaving.abort();
     replaying?.abort();
