@@ -153,6 +153,17 @@ export class GameView {
   private presentationFps = 0;
   private outputScale = 1;
   private nextPresentation = 0;
+  /**
+   * The in-game counter's reading. The original `FPSCounter` counts its own
+   * ENTER_FRAME ticks, which here are simulation steps -- a constant 26 no
+   * matter what the player picked. The view measures presentation slots
+   * instead (a slot that needed no redraw still shows a frame) and writes the
+   * result over the counter's text just before drawing.
+   */
+  private fpsSlots = 0;
+  private fpsSince = 0;
+  private fpsNextSlot = 0;
+  private fpsText = "";
   private readonly smoothing: boolean;
   private readonly visuals: VisualSnapshots;
   private visualAlpha = 1;
@@ -831,6 +842,7 @@ export class GameView {
         if (this.nextPresentation <= now) this.nextPresentation = now + interval;
       }
     }
+    this.countPresentation(now);
     const state = [this.session?.running, this.session?.generation, this.session?.stalled,
       this.session?.linkDown, this.session?.desyncs, this.muted, this.canChooseLevel,
       this.game.cur_type, this.game.cur_lev].join(":");
@@ -858,9 +870,29 @@ export class GameView {
     if (muter.muteLines) muter.muteLines.visible = !this.muted;
   }
 
+  private countPresentation(now: number): void {
+    if (document.visibilityState === "hidden") { this.fpsSince = 0; return; }
+    if (this.presentationFps > 0) {
+      if (now + 0.01 < this.fpsNextSlot) return;
+      const interval = 1000 / this.presentationFps;
+      this.fpsNextSlot = this.fpsNextSlot > 0 ? this.fpsNextSlot + interval : now + interval;
+      if (this.fpsNextSlot <= now) this.fpsNextSlot = now + interval;
+    }
+    if (this.fpsSince === 0) { this.fpsSince = now; this.fpsSlots = 0; return; }
+    this.fpsSlots++;
+    const elapsed = now - this.fpsSince;
+    if (elapsed >= 1000) {
+      this.fpsText = (this.fpsSlots / elapsed * 1000).toFixed(1) + " fps";
+      this.fpsSlots = 0;
+      this.fpsSince = now;
+    }
+  }
+
   render(): void {
     if (this.session?.recovering || this.destroyed) return;
     const start = this.onRenderTiming ? performance.now() : 0;
+    const counter = this.game.m_fps?.tf;
+    if (counter && this.fpsText) counter.text = this.fpsText;
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = "#000";
@@ -909,6 +941,9 @@ export class GameView {
     this.canvas.width = Math.round(STAGE_W * this.outputScale);
     this.canvas.height = Math.round(STAGE_H * this.outputScale);
     this.nextPresentation = 0;
+    this.fpsNextSlot = 0;
+    this.fpsSince = 0;
+    this.fpsText = "";
     this.lastDrawnFrame = -1;
     this.visuals.invalidate();
   }
