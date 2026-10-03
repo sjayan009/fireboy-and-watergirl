@@ -122,8 +122,10 @@ try {
       relayPublishes: counts, silentRelayPublishes: afterSilentRelay, initialStats, finalStats };
   }, moduleUrl);
   assert.deepEqual(errors, []);
-  await mkdir(resolve(ROOT, "docs/benchmarks"), { recursive: true });
-  await writeFile(resolve(ROOT, "docs/benchmarks/pathmanager-local.json"), JSON.stringify({
+  const label = process.env.FBWG_PATH_LABEL ?? new Date().toISOString().replace(/[^0-9]/g, "");
+  assert.match(label, /^[a-zA-Z0-9_-]+$/, "Invalid path benchmark label");
+  await mkdir(resolve(ROOT, "benchmarks"), { recursive: true });
+  await writeFile(resolve(ROOT, `benchmarks/pathmanager-local-${label}.json`), JSON.stringify({
     capturedAt: new Date().toISOString(), browser: browser.version(),
     scope: "Actual Chromium RTC with local byte-channel emergency relay. No hosted Supabase, WAN or TURN credentials used.", ...result,
   }, null, 2) + "\n");

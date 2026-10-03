@@ -47,7 +47,113 @@ visibility remain discrete simulation values.
 for comparisons. This does not disable the independent raster optimizations.
 Button hit testing uses the most recently presented visual transforms.
 
-## Measured raster bottlenecks and changes
+## October 2026 renderer implementation
+
+The logical stage remains 640x480. `GameView` accepts local `presentationFps`
+and `outputScale` preferences; the renderer scales only the canvas output.
+Masks, filters, vector text, and effect tiles use device pixels consistently,
+while button geometry and pointer input stay in logical stage coordinates.
+Output scale changes clear renderer caches and force a presentation without
+changing physics, inputs, replay hashes, or multiplayer packets.
+
+Ordinary and self masks now intersect conservative content/mask bounds and
+use exclusive scratch-surface leases. Nested masks cannot overwrite an outer
+operation's content. Surfaces use 32-pixel buckets, and released surface
+retention is capped at 2,097,152 pixels. Active nested operations can temporarily
+exceed that retention budget; `scratchPeakPixels` reports that separately.
+Missing geometry, text overflow, and oblique transformed raster edges retain
+the full-surface path. The latter is deliberate: same-browser pixel comparisons
+found changed edge antialiasing when oblique images moved to smaller surfaces.
+`configureRasterOptimizations({ boundedMasks: false })` provides a comparison
+and rollout fallback.
+
+Completed terrain and effect tiles share a 16 MiB LRU budget. Discrete character
+poses can reuse multiple results across an animation cycle; position translation
+does not enter their local-art key. Continuous descendant interpolation and
+rollback residuals use transient effect results rather than keeping a tile for
+every floating-point sample. Filter padding grows from authored filter radius,
+strength, scale, and offset. BitmapData structural descriptors are derived at
+simulation/correction capture boundaries instead of rewalking static terrain
+at every display callback.
+
+Cache entries record the resources actually painted or attempted, including
+dependencies inherited from nested cache hits. Readiness, failure, replacement,
+and retry change each resource's revision. Unrelated animation prefetch requests
+do not enter the dependency set. Atlas rectangles keep their authored origin and
+draw through every raster path; an unavailable atlas page falls back to the
+retained individual frame. Renderer-owned image references and resource owners
+are released on scene changes and disposal.
+
+Static command flattening has a narrow allowlist: one-frame ground tiles,
+GroundMask containers, lever bases, and pulley anchors. Animated/filter/mask/
+bitmap/text/button descendants fall back to ordinary traversal. Content,
+structure, alpha, visibility, sampled transforms, and source dependencies remain
+in the observed key. Flattening never removes nodes from simulation or hit-test
+traversal. It is available independently through the staticCommands comparison
+switch; this is not a general classifier for menus or interactive overlays.
+
+`SpriteRenderer.diagnostics()` exposes mask pixel area and fallback counts,
+node visits, effect hit/miss/raster time, terrain hit/miss, static commands and
+validation visits, cache bytes/evictions, scratch allocations, and retained/peak
+pixels. The browser benchmark accepts `FBWG_BENCH_RASTER=default|fallback` and
+records renderer counters before and after its workload. The fallback retains
+one last character pose, full-surface masks, and ordinary static traversal so
+comparisons isolate the new optimizations without overwriting audit artifacts.
+
+The new `renderer-tiles.mjs` fixture compares exact nested/mirrored/zero-scale/
+self-mask pixels at 0.5x/1x/2x/3x output, exercises scratch/LRU ownership,
+recurring and continuous effects, unrelated and deferred readiness, explicit
+failed-resource retry, atlas fallback, static alpha/order/visibility, and logical
+hit geometry. `render-schedule.mjs` additionally checks all local caps
+(display/30/60/120/144/240 FPS) on virtual 240 Hz callbacks: every simulation
+digest and fixed-step count is unchanged. These are correctness tests, not
+physical high-refresh measurements or a decoded/GPU memory plateau claim.
+
+Two serial 20-second source-asset comparisons used the same current engine,
+adventure 1, position steering, Chromium 151, and the audit laptop. The second
+pair used compact observed terrain revisions and reversed the run order. Raw
+results are retained in `benchmarks/17-improvements-source-*.json`.
+
+| Comparison | Fallback p50 / p95 | Default p50 / p95 |
+|---|---|---|
+| First pair | 4.3 / 6.2 ms | 3.8 / 7.1 ms |
+| Second pair, compact terrain keys | 4.6 / 9.1 ms | 3.7 / 6.1 ms |
+
+In the first pair, measured effect builds fell from 516 to 47 and processed
+mask pixel area from 1.447 billion to 2.30 million; p95 node visits fell from
+80 to 74 and draw calls from 62 to 58. The first pair's render tail became
+slower despite those reductions. The second pair improved both render
+quantiles and measured task CPU (72.8% fallback, 58.6% default). This supports
+the reduced compositing/raster work while showing why a universal tail-latency
+claim would be premature. These harness preparation figures are not a
+login/invite-to-play measurement, and the fallback is the current implementation
+with selected raster features disabled, not an archived original release.
+
+The final packaged WebP run is retained as
+`benchmarks/17-improvements-packaged-default.json`. It used the compiled engine
+harness with `dist/extracted/assets`, default smoothing, position steering,
+and the production atlas rollout disabled. Over 20.01 seconds it recorded
+4.8/7.8 ms render p50/p95, 16.7/16.8 ms callback interval p50/p95, a 51.3 ms
+input-to-render proxy p95, and 58.92 draws/second. All 167 input events resolved;
+the level remained active with no missing resources or browser errors.
+The effect cache recorded 3,492 hits and 46 builds during the workload.
+Processed mask area was 2.325 million device pixels versus 1.449 billion for
+the corresponding full-surface area. Final retained tiles used 5.63 MB across
+47 entries; retained/peak scratch area was 921,600 pixels with three allocations.
+The JS heap sample was 15.02 MB; it does not include all decoded-image/GPU
+memory. One 186 ms long task was observed. This is one packaged run, without a
+matched packaged fallback; do not compare its timings directly with the audit's
+different steering/workload or claim end-to-end startup or physical display
+performance from it.
+
+Font preparation is optional and reports a partial state when a face fails or
+reaches its overall metadata/face deadline. A retry keeps successful document
+registrations and requests only missing faces; late timed-out faces cannot
+register themselves afterward. Renderer disposal settles its local font wait
+and clears its deadline. `font-retry.mjs` verifies partial/deadline retry,
+successful-face reuse, and the renderer's missing status/revision transition.
+
+## Earlier raster implementation (historical)
 
 The initial real Chromium benchmark found `drawMasked` spent roughly six
 seconds in a 20-second adventure-1 sample. `CreateGround` makes an immutable
@@ -65,11 +171,11 @@ changes, so translating a character reuses the same raster. The stage's fixed
 character scale and original art bounds fit this tile; this is not a generic
 arbitrary-scale sprite cache. Static terrain retains a stage-sized cache.
 
-Manifest matrix decomposition is cached per immutable placement; per-node
-resolved transforms and sampled transforms are reused. Image download/decode
-concurrency remains bounded at the existing 12 lanes, and `prepare()` still
-waits for all requested art to settle before simulation starts. No atlas or
-new asset service is necessary for these improvements. Asset-count/build
+That release cached manifest matrix decomposition per immutable placement and
+reused per-node resolved/sampled transforms. Image download/decode
+concurrency remained bounded at 12 lanes, and `prepare()`
+waited for all requested art to settle before simulation started. No atlas or
+new asset service was necessary for those earlier improvements. Asset-count/build
 limits and packing decisions are covered in the free-tier budget.
 
 The old mask and filter recursion temporarily wrote `mask`, `isMask` and

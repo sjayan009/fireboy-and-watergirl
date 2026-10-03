@@ -12,7 +12,7 @@ try {
     contentType: "text/html", body: '<!doctype html><canvas tabindex="0"></canvas>',
   }));
   await page.goto("http://localhost:5192/virtual-display");
-  const { rows, rollback } = await page.evaluate(async () => {
+  const { rows, rollback, caps } = await page.evaluate(async () => {
     const [{ GameView }, { GameHost }, { MemorySave }] = await Promise.all([
       import("/dist/embed.js"), import("/dist/net/gamehost.js"), import("/dist/game/save.js"),
     ]);
@@ -74,6 +74,23 @@ try {
         view.destroy();
       }
     }
+    const caps = [];
+    for (const cap of [0, 30, 60, 120, 144, 240]) {
+      clock = 0;
+      const canvas = document.querySelector("canvas");
+      const view = new GameView({ canvas, assets: "/extracted/assets", save: new MemorySave(),
+        presentationFps: cap, outputScale: 2 });
+      view.setMuted(true); await view.prepare(); view.setRunning(false);
+      new GameHost(view.game).start("adventure", 1); await view.sprites.prepare(view.game);
+      let draws = 0;
+      view.sprites.draw = () => { draws++; };
+      view.setRunning(true); dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      const hashes = [];
+      for (let i = 0; i < 240; i++) { tick(1000 / 240); hashes.push(view.digest()); }
+      dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowRight", bubbles: true }));
+      caps.push({ cap, draws, hashes, frame: view.simFrame, width: canvas.width, height: canvas.height });
+      view.destroy();
+    }
     // Actual late-input rollback with no elapsed display time. A previous
     // frame with no motion must still publish a correction, even when the
     // session has no accumulator budget for a normal simulation step.
@@ -107,7 +124,7 @@ try {
     tick(0);
     rollback.extraDraws = correctionDraws - beforeCorrection.draws - rollback.drawDelta;
     corrected.destroy();
-    return { rows, rollback };
+    return { rows, rollback, caps };
   });
   for (const hz of [60, 120, 144, 240]) {
     const exact = rows.find(r => r.hz === hz && !r.smoothing), smooth = rows.find(r => r.hz === hz && r.smoothing);
@@ -133,4 +150,11 @@ try {
   assert.equal(rollback.dirtyAfterPresentation, false);
   assert.equal(rollback.extraDraws, 0, "correction invalidation is consumed after presentation");
   console.log("same-frame late-input rollback presented exactly once with zero accumulator");
+  for (const row of caps) {
+    assert.deepEqual(row.hashes, caps[0].hashes, `${row.cap} FPS cap leaves every simulation digest unchanged`);
+    assert.equal(row.frame, caps[0].frame, "cap never changes fixed-step count");
+    assert.equal(row.width, 1280); assert.equal(row.height, 960);
+    assert.ok(row.draws > 0 && row.draws <= (row.cap || 240) + 1, "local draw count respects configured cap");
+    console.log(`${row.cap || "display"} FPS cap: ${row.draws} local draws, ${row.frame} shared simulation frames, 1280x960 output`);
+  }
 } finally { await browser?.close(); server.kill(); }

@@ -39,6 +39,10 @@ try {
     assert(await page.locator(".play-drawer").isHidden(),"ready peers collapse the setup drawer");
     assert(await page.evaluate(()=>document.documentElement.scrollHeight <= innerHeight+1));
   }
+  await left.evaluate(()=>window.__fbwg.view.configurePresentation(30,1));
+  await right.evaluate(()=>window.__fbwg.view.configurePresentation(144,2));
+  assert.deepEqual(await left.locator("#stage").evaluate(c=>[c.width,c.height]),[640,480]);
+  assert.deepEqual(await right.locator("#stage").evaluate(c=>[c.width,c.height]),[1280,960]);
   /*
    * The link, measured rather than assumed.
    *

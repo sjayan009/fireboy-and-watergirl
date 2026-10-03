@@ -6,6 +6,7 @@
  */
 import { transportStats, type Transport, type TransportStats } from "@engine/net/transport.js";
 import { connectWebRTC } from "@engine/net/webrtc.js";
+import { decode as decodePacket } from "@engine/net/protocol.js";
 import { encode } from "./base64.js";
 import { RealtimeTransport, type ByteChannel } from "./realtime.js";
 import { scopedChannel } from "./scope.js";
@@ -37,6 +38,8 @@ export interface PathManagerOptions {
   retryDelaysMs?: readonly number[];
   maxAttempts?: number;
   handoverMs?: number;
+  /** Recoverable provider outages keep the same logical session for this long. */
+  outageGraceMs?: number;
 }
 
 const CONTROL = 0xfc;
@@ -135,6 +138,8 @@ export class PathManager implements Transport {
   private readonly createRTC: NonNullable<PathManagerOptions["createRTC"]>;
   private readonly makeNonce: () => string;
   private readonly timeoutMs: number;
+  private readonly outageGraceMs: number;
+  private outage: { since: number; why: string } | null = null;
   private attempt: Attempt | null = null;
   private generation = 0;
   private spent = 0;
@@ -145,6 +150,8 @@ export class PathManager implements Transport {
   private closed = false;
   private why: string | null = null;
   private receiver: ((data: Uint8Array) => void) | null = null;
+  private incoming: Uint8Array[] = [];
+  private incomingBytes = 0;
   private lost: ((why: string) => void) | null = null;
   private hurryOn = false;
   private readonly retired = transportStats();
@@ -153,6 +160,7 @@ export class PathManager implements Transport {
   private seenBytes = 0;
   private lastInput: Uint8Array | null = null;
   private readonly recentInputs: { data: Uint8Array; at: number }[] = [];
+  private readonly recentCommands: { data: Uint8Array; at: number; key: string }[] = [];
 
   constructor(private readonly channel: ByteChannel, private readonly caller: boolean,
               options: PathManagerOptions = {}) {
@@ -161,6 +169,7 @@ export class PathManager implements Transport {
     this.maxAttempts = Math.min(12, Math.max(1, options.maxAttempts ?? 6));
     this.handoverMs = Math.max(250, options.handoverMs ?? 1000);
     this.timeoutMs = options.timeoutMs ?? 8000;
+    this.outageGraceMs = Math.max(0, Math.min(30000, options.outageGraceMs ?? 15000));
     this.makeNonce = options.nonce ?? (() => crypto.randomUUID());
     this.relay = options.relay ?? new RealtimeTransport(scopedChannel(channel, "path-v1", "gameplay"),
       { legacyBatching: options.legacyBatching });
@@ -178,7 +187,12 @@ export class PathManager implements Transport {
     });
     this.offStatus = channel.onStatus(status => {
       if (this.closed) return;
-      if (status === "SUBSCRIBED") { this.relayUp = true; this.nextAttempt = this.time.now(); }
+      if (status === "SUBSCRIBED") {
+        const wasDown = !this.relayUp;
+        this.relayUp = true; this.outage = null; this.nextAttempt = this.time.now();
+        this.state = this.usableRTC() ? "RTC_ACTIVE" : this.attempt ? "RTC_PROBING" : "RELAY_ACTIVE";
+        if (wasDown) this.replayEmergency();
+      }
       else if (status === "CLOSED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "PROTOCOL_ERROR") {
         this.relayUnavailable("the emergency channel went " + status.toLowerCase());
       }
@@ -193,7 +207,9 @@ export class PathManager implements Transport {
   }
 
   get kind(): "webrtc" | "relay" { return this.usableRTC() ? "webrtc" : "relay"; }
-  get activePath(): "rtc" | "relay" | "offline" { return this.closed ? "offline" : this.kind === "webrtc" ? "rtc" : "relay"; }
+  get activePath(): "rtc" | "relay" | "offline" { return this.closed ? "offline" : this.usableRTC() ? "rtc" : this.relayUp ? "relay" : "offline"; }
+  get recovering(): boolean { return this.outage !== null; }
+  get recoveryMs(): number { return this.outage ? Math.max(0, this.time.now() - this.outage.since) : 0; }
   /** Walkable by existing diagnostics and the real-PC failure test. */
   get inner(): Transport { return this.usableRTC() ?? this.relay; }
   get rtc() { return this.usableRTC()?.rtc; }
@@ -220,14 +236,25 @@ export class PathManager implements Transport {
     return stats;
   }
   hurry(on: boolean): void { this.hurryOn = on; this.relay.hurry?.(on); this.attempt?.transport?.hurry?.(on); }
-  onMessage(fn: (data: Uint8Array) => void): void { if (!this.closed) this.receiver = fn; }
+  onMessage(fn: (data: Uint8Array) => void): void {
+    if (this.closed) return;
+    this.receiver = fn;
+    const pending = this.incoming; this.incoming = []; this.incomingBytes = 0;
+    for (const data of pending) { if (this.closed) break; fn(data); }
+  }
   onClosed(fn: (why: string) => void): void {
     this.lost = fn;
     if (this.why) { const why = this.why; this.why = null; this.lost = null; fn(why); }
   }
   send(data: Uint8Array): void {
     if (this.closed) return;
-    if (data[0] === 1 && data.length <= 256) {
+    const packet = decodePacket(data);
+    if (packet?.kind === 2 /* Kind.Command, frozen wire value */) {
+      const key = encode(data);
+      if (!this.recentCommands.some(item => item.key === key)) this.recentCommands.push({ data: data.slice(), at: this.time.now(), key });
+      while (this.recentCommands.length > 32) this.recentCommands.shift();
+    }
+    if (data[0] === 1 /* Kind.Input, frozen wire value */ && data.length <= 256) {
       this.lastInput = data.slice();
       const last = this.recentInputs.at(-1);
       if (!last || this.time.now() - last.at >= REPLAY_SAMPLE_MS) {
@@ -262,6 +289,9 @@ export class PathManager implements Transport {
   private tick(): void {
     if (this.closed) return;
     const now = this.time.now();
+    if (this.outage && !this.relayUp && !this.usableRTC() && now - this.outage.since >= this.outageGraceMs) {
+      this.endOffline(this.outage.why); return;
+    }
     const a = this.attempt;
     if (a) {
       if (!a.active && now - a.started >= this.timeoutMs + 4000) this.failAttempt(a);
@@ -410,8 +440,15 @@ export class PathManager implements Transport {
     // suspect a one-way failure. By then its newest 32-frame history may no
     // longer include the missing frame. Replay overlapping older snapshots in
     // order; a stalled session also keeps its last snapshot available.
-    const packets = this.recentInputs.map(item => item.data);
-    if (packets.at(-1) !== this.lastInput) packets.push(this.lastInput);
+    this.replayEmergency();
+  }
+
+  private replayEmergency(): void {
+    if (!this.relayUp) return;
+    const now = this.time.now();
+    while (this.recentCommands.length && now - this.recentCommands[0].at > 15000) this.recentCommands.shift();
+    const packets = [...this.recentCommands.map(item => item.data), ...this.recentInputs.map(item => item.data)];
+    if (this.lastInput && packets.at(-1) !== this.lastInput) packets.push(this.lastInput);
     const relay = this.relay as Transport & { sendUncoalesced?(packets: readonly Uint8Array[]): void };
     if (relay.sendUncoalesced) relay.sendUncoalesced(packets);
     else for (const data of packets) relay.send(data);
@@ -448,7 +485,7 @@ export class PathManager implements Transport {
     if (!this.usableRTC()) this.offline(why);
   }
   private deliver(data: Uint8Array, source: string): void {
-    if (this.closed || !this.receiver || data.length > MAX_PACKET || data[0] === CONTROL) return;
+    if (this.closed || data.length > MAX_PACKET || data[0] === CONTROL) return;
     const now = this.time.now();
     for (const [key, item] of this.seen) {
       if (now - item.at < DEDUP_MS) break;
@@ -466,9 +503,18 @@ export class PathManager implements Transport {
         this.seen.delete(first[0]); this.seenBytes -= first[1].data.length;
       }
     }
-    this.receiver(data);
+    if (this.receiver) this.receiver(data);
+    else if (this.incoming.length < MAX_PENDING && this.incomingBytes + data.length <= 128 * 1024) {
+      this.incoming.push(data.slice()); this.incomingBytes += data.length;
+    }
   }
   private offline(why: string): void {
+    if (this.closed) return;
+    this.state = "OFFLINE";
+    this.outage ??= { since: this.time.now(), why };
+    if (this.outageGraceMs === 0) this.endOffline(why);
+  }
+  private endOffline(why: string): void {
     if (this.closed) return;
     const fn = this.lost; this.lost = null;
     this.close();
@@ -482,6 +528,8 @@ export class PathManager implements Transport {
     if (this.attempt) this.disposeAttempt(this.attempt);
     this.relay.close(); this.retryRequest = null;
     this.seen.clear(); this.seenBytes = 0; this.lastInput = null; this.recentInputs.length = 0;
+    this.recentCommands.length = 0; this.outage = null;
+    this.incoming = []; this.incomingBytes = 0;
     this.receiver = null; this.lost = null;
   }
 }

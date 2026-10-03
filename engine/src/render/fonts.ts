@@ -14,13 +14,14 @@
  * glyphs.
  */
 import { assetUrl } from "../asseturl.js";
+import { createAssetOwner } from "./assets.js";
 
 export interface FontInfo { file: string; name: string; }
 
 const FALLBACK = 'Georgia, "Times New Roman", serif';
 
 export class FontSet {
-  private constructor(private index: Record<string, FontInfo>) {}
+  private constructor(private index: Record<string, FontInfo>, readonly missing = 0) {}
 
   /**
    * The set for a given asset base, loaded at most once per document.
@@ -36,12 +37,17 @@ export class FontSet {
    * same tick would otherwise both miss the cache and both load.
    */
   private static cache = new Map<string, Promise<FontSet>>();
+  /** Successful faces survive a partial retry without duplicate registration. */
+  private static faces = new Map<string, FontFace>();
 
   /** Injects @font-face rules and resolves once the faces are usable. */
-  static load(base: string): Promise<FontSet> {
+  static load(base: string, deadlineMs = 15000): Promise<FontSet> {
     const hit = FontSet.cache.get(base);
     if (hit !== undefined) return hit;
-    const loading = FontSet.fetchAndRegister(base).catch((e) => {
+    const loading = FontSet.fetchAndRegister(base, deadlineMs).then(set => {
+      if (set.missing) FontSet.cache.delete(base);
+      return set;
+    }).catch((e) => {
       // A failure must not be cached: the next view should try again rather
       // than inherit a network blip forever.
       FontSet.cache.delete(base);
@@ -51,23 +57,32 @@ export class FontSet {
     return loading;
   }
 
-  private static async fetchAndRegister(base: string): Promise<FontSet> {
-    const res = await fetch(assetUrl(base, "fonts/fonts.json"),
-                            { cache: "force-cache" });
-    const index: Record<string, FontInfo> = await res.json();
+  private static async fetchAndRegister(base: string, deadlineMs: number): Promise<FontSet> {
+    const started = Date.now(), deadline = Math.max(1, deadlineMs);
+    const owner = createAssetOwner({ priority: "background" });
+    let index: Record<string, FontInfo>;
+    try { index = await owner.json<Record<string, FontInfo>>(assetUrl(base, "fonts/fonts.json"), { deadlineMs: deadline }); }
+    finally { owner.release(); }
 
     // FontFace over a <style> tag: it reports load failure instead of quietly
     // falling back, which is the difference between "the timer looks wrong"
     // and a diagnosable error.
     const faces = Object.entries(index).map(async ([id, info]) => {
       const family = `swf-font-${id}`;
-      const face = new FontFace(family,
-                                `url("${assetUrl(base, `fonts/${info.file}`)}")`);
-      await face.load();
-      (document as any).fonts.add(face);
+      const url = assetUrl(base, `fonts/${info.file}`), identity = `${family}:${url}`;
+      if (FontSet.faces.has(identity)) return;
+      const face = new FontFace(family, `url("${url}")`);
+      let timer: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([face.load(), new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error("Font loading deadline exceeded")), Math.max(1, deadline - (Date.now() - started)));
+        })]);
+        (document.fonts as FontFaceSet & { add(face: FontFace): void }).add(face);
+        FontSet.faces.set(identity, face);
+      } finally { clearTimeout(timer!); }
     });
-    await Promise.allSettled(faces);
-    return new FontSet(index);
+    const results = await Promise.allSettled(faces);
+    return new FontSet(index, results.filter(result => result.status === "rejected").length);
   }
 
   /** A canvas `font` string for a DefineEditText field. */

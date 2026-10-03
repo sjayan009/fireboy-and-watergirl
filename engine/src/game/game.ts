@@ -4933,6 +4933,19 @@ export class Game extends MovieClip {
          // stubbed: dead 2009 ad / teaser / hiscore plumbing
       }
 
+      /** Release only this game's resources, without constructing a replacement menu. */
+      dispose(): void {
+         this.stage.removeEventListener(KeyboardEvent.KEY_DOWN,this.__bind(this.keyPressed));
+         this.stage.removeEventListener(KeyboardEvent.KEY_UP,this.__bind(this.keyReleased));
+         if(this.stage.focus === this) this.stage.focus = null;
+         this.MusicChannel?.stop();
+         for(const channel of this.m_level?.windChannels ?? []) channel.stop();
+         if(this.m_level) this.m_level.removeEventListener(Event.ENTER_FRAME,this.m_level.__bind(this.m_level.Update));
+         if(this.m_pauseMenu) this.m_pauseMenu.removeEventListener(Event.ENTER_FRAME,this.m_pauseMenu.__bind(this.m_pauseMenu.Update));
+         this.m_timer?.removeEventListener(Event.ENTER_FRAME,this.__bind(this.TimerUpdate));
+         for(const child of [...this.children]) this.removeChild(child);
+      }
+
       EndGame(): any {
          var _loc1_: any = undefined;
          this.PlayingMusic = false;

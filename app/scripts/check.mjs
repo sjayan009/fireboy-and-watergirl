@@ -199,8 +199,10 @@ console.log("\nthe download is the size it should be");
   const bytes = code.reduce((n, p) => n + statSync(p).size, 0);
   // Audited networking rollout adds the runtime broker client, path manager,
   // presentation options and local QoE (~805 kB total in the enabled build).
-  // Keep an explicit 820 kB ceiling; security/asset/provider guards are unchanged.
-  const BUDGET = 820_000;
+  // The 17-improvement implementation adds bounded renderer/resource caches,
+  // manifest preparation, coherent recovery and durable saving (~846 kB total).
+  // Preserve a measured ceiling with20 kB headroom; see IMPLEMENTATION_RESULTS_17.md.
+  const BUDGET = 860_000;
   console.log(`  ${(bytes / 1000).toFixed(0)} kB of javascript and css ` +
               `across ${code.length} files`);
   check(`under the ${BUDGET / 1000} kB budget`, bytes < BUDGET,

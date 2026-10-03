@@ -16,6 +16,8 @@ const seconds = Number(process.env.FBWG_BENCH_SECONDS ?? 20);
 // Position feedback keeps a slow baseline on the starting ledge. The legacy
 // time-based pattern remains available to reproduce the original audit.
 const steering = process.env.FBWG_BENCH_STEERING ?? "timed";
+const raster = process.env.FBWG_BENCH_RASTER ?? "default";
+if (!["default", "fallback"].includes(raster)) throw new Error("Unknown raster comparison mode");
 if (!["timed", "position"].includes(steering)) throw new Error("Unknown benchmark steering mode");
 const presentation = {
   rollbackSmoothing: presentationCode ? presentationCode[0] === "1" : process.env.FBWG_BENCH_ROLLBACK_SMOOTHING === "1",
@@ -39,7 +41,7 @@ try {
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Performance.enable");
-  const preparation = await page.evaluate(async presentation => {
+  const preparation = await page.evaluate(async ({ presentation, raster }) => {
     const { GameView } = await import("/dist/embed.js");
     const { GameHost } = await import("/dist/net/gamehost.js");
     const { MemorySave } = await import("/dist/game/save.js");
@@ -47,12 +49,13 @@ try {
     const view = new GameView({ canvas: document.querySelector("canvas"), assets: "/assets", save: new MemorySave(), ...presentation });
     view.setMuted(true);
     await view.prepare();
+    view.sprites.configureRasterOptimizations({ boundedMasks: raster !== "fallback", recurringEffects: raster !== "fallback", staticCommands: raster !== "fallback" });
     view.setRunning(false);
     new GameHost(view.game).start("adventure", 1);
     await view.sprites.prepare(view.game);
     window.bench = { view };
     return { prepareMs: performance.now() - started, missing: view.sprites.missing };
-  }, presentation);
+  }, { presentation, raster });
   await page.waitForTimeout(1000);
   const before = Object.fromEntries((await cdp.send("Performance.getMetrics")).metrics.map(m => [m.name, m.value]));
   const trace = [];
@@ -60,6 +63,7 @@ try {
   await cdp.send("Tracing.start", { categories: "devtools.timeline,v8", transferMode: "ReportEvents" });
   const result = await page.evaluate(async ({ duration, steering }) => {
     const { view } = window.bench;
+    const rendererBefore = view.sprites.diagnostics();
     const raf = requestAnimationFrame.bind(window);
     const frame = [], render = [], input = [], nodes = [], calls = [], longTasks = [];
     const methodTimes = {};
@@ -146,6 +150,7 @@ try {
     observer?.disconnect();
     const quantiles = list => { const s = [...list].sort((a,b)=>a-b); const p = n => s.length ? s[Math.min(s.length - 1, Math.ceil(n * s.length) - 1)] : null; return { n: s.length, p50: p(.5), p95: p(.95), p99: p(.99), max: s.at(-1) ?? null }; };
     const result = { elapsed, frameMs: quantiles(frame), renderMs: quantiles(render), inputToRenderMs: quantiles(input), inputEvents, inputUnresolved: inputUnresolved + (pending ? 1 : 0), renderCallsPerSecond: draws / elapsed, distinctVisualUpdatesPerSecond: distinct / elapsed, localPositionUpdatesPerSecond: localVisualUpdates / elapsed, drawCalls: quantiles(calls), traversalNodes: quantiles(nodes), mainThreadLongTasksMs: quantiles(longTasks), methodTimes, simFrames: view.simFrame, digest: view.digest(), levelEnded: view.level?.ended, session: view.session ? { rollbacks: view.session.rollbacks, stalls: view.session.stalls } : null, heap: performance.memory ? { used: performance.memory.usedJSHeapSize, total: performance.memory.totalJSHeapSize } : null };
+    result.rendererBefore = rendererBefore; result.rendererAfter = view.sprites.diagnostics();
     view.destroy();
     return result;
   }, { duration: seconds, steering });
@@ -156,6 +161,7 @@ try {
   const output = { label, recordedAt: new Date().toISOString(), commit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), environment: { platform: platform(), release: release(), cpu: cpus()[0]?.model, logicalCpus: cpus().length, node: process.version, browser: browser.version(), headless: true, engine, assets }, preparation, ...result, taskCpuPercent: 100 * (after.TaskDuration - before.TaskDuration) / (after.Timestamp - before.Timestamp), gc: { count: gcEvents.length, totalMs: gcEvents.reduce((s,e)=>s+(e.dur ?? 0)/1000,0), maxMs: Math.max(0,...gcEvents.map(e=>(e.dur ?? 0)/1000)) }, errors, limitations: ["Native headless rAF cadence, not a physical high-refresh monitor", "Input-to-render callback proxy excludes OS input and display scanout", "Unresolved inputs include events replaced before movement or blocked by collision; reported separately", "Canvas instrumentation and trace overhead included equally in both variants", "GC trace durations are collector activity, not necessarily all stop-the-world time", "CPU is Chromium TaskDuration/wall time including measurement setup/teardown; no process RSS meter", "Solo renderer workload; network results are separate"] };
   output.steering = steering;
   output.presentation = presentation;
+  output.raster = raster;
   await mkdir(resolve(root,"benchmarks"),{recursive:true});
   await writeFile(resolve(root,"benchmarks",`${label}.json`),JSON.stringify(output,null,2)+"\n");
   console.log(JSON.stringify(output,null,2));

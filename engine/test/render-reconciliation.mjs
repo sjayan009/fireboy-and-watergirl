@@ -64,7 +64,7 @@ try {
         ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, 640, 480);
         renderer.draw(ctx, game, visuals, 0, now); visuals.presented(now);
         const x = visuals.sample(character, pose(character), 0, now).x;
-        samples.push({ now, x, filterKey: renderer.filterCache.get(character)?.key,
+        samples.push({ now, x, effectRasters: renderer.diagnostics().effectMisses,
           png: canvas.toDataURL("image/png").split(",")[1] });
       }
       rows.push({ level: num, oldX, correctedX: character.x, samples, missing: renderer.missing,
@@ -125,12 +125,14 @@ try {
     assert.equal(row.samples[0].x, row.oldX, "first reconciliation draw retains actual presented position");
     assert.equal(row.samples[2].x, row.correctedX, "80 ms draw reaches corrected authoritative position");
     assert.ok(Math.abs(row.samples[1].x - (row.oldX + row.correctedX) / 2) < 1e-8);
-    assert.equal(new Set(row.samples.map(sample => sample.filterKey)).size, 3,
+    assert.equal(new Set(row.samples.map(sample => sample.effectRasters)).size, 3,
       "filtered local descendant art follows each intermediate visual transform");
+    assert.equal(new Set(row.samples.map(sample => sample.png)).size, 3,
+      "continuous filtered presentation produces distinct raster output");
     for (const sample of row.samples) {
       const file = resolve(output, `adventure-${row.level}-${sample.now}ms.png`);
       await writeFile(file, Buffer.from(sample.png, "base64"));
-      delete sample.png; delete sample.filterKey; sample.image = file;
+      delete sample.png; sample.image = file;
     }
   }
   const { rollback } = result;
