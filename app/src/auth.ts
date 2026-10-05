@@ -396,15 +396,21 @@ export class ReauthenticationNeeded extends Error {
  * they think somebody else has it. Answers whether that worked, so the screen
  * never claims it did when it did not.
  */
-export async function setPassword(password: string,
-                                  nonce?: string): Promise<boolean> {
-  const { error } = await supabase.auth.updateUser(
-    nonce ? { password, nonce } : { password });
-  // Both codes measured against GoTrue v2.197 with the setting on.
+export async function setPassword(password: string, nonce?: string,
+                                  current?: string): Promise<boolean> {
+  const { error } = await supabase.auth.updateUser({
+    password,
+    ...(nonce ? { nonce } : {}),
+    ...(current !== undefined ? { current_password: current } : {}),
+  });
+  // Every code below measured against GoTrue v2.197 with its setting on.
   const code = (error as { code?: string } | null)?.code;
   if (code === "reauthentication_needed") throw new ReauthenticationNeeded();
   if (code === "reauthentication_not_valid") {
     throw new Error("That code is wrong or has expired. Ask for a new one.");
+  }
+  if (code === "current_password_invalid" || code === "current_password_required") {
+    throw new Error("that is not your current password");
   }
   fail(error);
   return signOutOtherDevices();
@@ -442,11 +448,21 @@ async function proveCurrentPassword(current: string): Promise<void> {
   await scratch.auth.signOut({ scope: "local" }).catch(() => {});
 }
 
-/** Change the password of an account that is already signed in. */
+/**
+ * Change the password of an account that is already signed in.
+ *
+ * The old password goes to Supabase as `current_password` as well as being
+ * proved here. With "Require current password when updating" on, GoTrue
+ * checks it itself -- the only version of this check a stolen session token
+ * cannot skip, since a token can call `updateUser` without this page. GoTrue
+ * exempts recovery sessions (`otp`, `magiclink`, `recovery`), which is what
+ * keeps the emailed reset link working, and accounts with no password, which
+ * is what keeps Google-only accounts able to add one.
+ */
 export async function changePassword(current: string, next: string,
                                      nonce?: string): Promise<boolean> {
   await proveCurrentPassword(current);
-  return setPassword(next, nonce);
+  return setPassword(next, nonce, current);
 }
 
 /**
