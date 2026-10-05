@@ -68,10 +68,11 @@ const rpc = (user, fn, args) =>
   api(user, `/rpc/${fn}`, { method: "POST", body: JSON.stringify(args) });
 
 /**
- * Whether `supabase/deferred/20261005040000_username_probe_budget.sql` has been
- * moved into `migrations/`. Flip it in the same commit that moves the file.
+ * `20261005040000_username_probe_budget` meters `claim_username`. True since
+ * that file left `supabase/deferred/`; kept as a switch so a run against a
+ * database that predates it says so in one place.
  */
-const CLAIM_IS_METERED = false;
+const CLAIM_IS_METERED = true;
 
 /**
  * Did this `claim_username` call get the name?

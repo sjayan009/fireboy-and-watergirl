@@ -574,10 +574,10 @@ export async function claimUsername(username: string): Promise<Profile> {
     new_username: username,
   });
   fail(error);
-  // A taken name is a raised error today, and becomes a row of nulls once
-  // `supabase/deferred/20261005040000_username_probe_budget.sql` is applied:
-  // a raise would roll back the attempt it had just been charged for. This
-  // release reads both, which is what lets that file move.
+  // A taken name is a row of nulls since `20261005040000_username_probe_budget`
+  // -- a raise would roll back the attempt it had just been charged for -- and
+  // a raised 23505 before it. Both are read, so neither order of deploy and
+  // migration shows anybody an empty profile.
   if (!data || !(data as Profile).id) throw new Error("that username is taken");
   const profile = data as Profile;
   publish({ ...state, profile, stage: "in" });

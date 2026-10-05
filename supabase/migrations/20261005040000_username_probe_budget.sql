@@ -1,10 +1,11 @@
 -- Ten username claims an hour, counted before the name is tried.
 --
--- NOT YET APPLIED -- see supabase/deferred/README.md. Move it into
--- `migrations/` once the client from the release that added it (the one whose
--- `claimUsername` treats a NULL answer as "that username is taken") is live.
--- Applied before that, the previous client reads NULL as success and publishes
--- an empty profile for anybody who picks a taken name during the deploy.
+-- The contracting half of `20261005030000_rename_through_the_function`. It
+-- waited in `supabase/deferred/` until the client whose `claimUsername` reads a
+-- NULL answer as "that username is taken" was live (6553a3b, confirmed from the
+-- deployed version.txt). Applied before that, the previous client would have
+-- read NULL as success and published an empty profile for anybody who picked a
+-- taken name during the deploy.
 --
 -- ## Why
 --

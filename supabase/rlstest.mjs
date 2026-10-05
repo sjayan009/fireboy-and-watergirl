@@ -175,8 +175,8 @@ try {
   const taken = await rpc(mallory, "claim_username", {
     new_username: an.toUpperCase(),
   });
-  // A 409 today; a row of nulls once the claim is metered (see
-  // `supabase/deferred/20261005040000_username_probe_budget.sql`).
+  // A row of nulls since the claim is metered (20261005040000) -- a raise
+  // would roll back the charge -- and a 409 on a database from before it.
   check("the same name in different case is refused",
         taken.status >= 400 || taken.body?.id == null, true);
 

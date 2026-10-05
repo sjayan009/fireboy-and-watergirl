@@ -91,10 +91,11 @@ client that had stopped using it was live. Until it ran, a feed could be reached
 by naming two user ids rather than by holding a consent the players can
 withdraw.
 
-`deferred/` was empty after that migration, and holds one file again now:
-`20261005040000_username_probe_budget.sql`, the metered `claim_username`, waiting
-on the client that understands its answer. A file sitting there is a
-contraction still waiting on a release, not a place things accumulate.
+`deferred/` is empty again: the metered `claim_username`
+(`20261005040000_username_probe_budget.sql`) waited there for the client that
+understands its answer, and moved once that client was live. That is the state
+to expect -- a file sitting there is a contraction still waiting on a release,
+not a place things accumulate.
 
 ## The schema
 
