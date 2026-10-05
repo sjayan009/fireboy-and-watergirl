@@ -372,22 +372,42 @@ export async function sendPasswordReset(email: string): Promise<void> {
 }
 
 /**
+ * Supabase wants the emailed code before it will change this password.
+ *
+ * With "Secure password change" on, a session more than a day old has to send
+ * the nonce `sendReauthenticationCode` mails, even with the old password
+ * proved. The screen catches this and asks for the code rather than showing
+ * GoTrue's message.
+ */
+export class ReauthenticationNeeded extends Error {
+  constructor() {
+    super("For a session this old, Supabase needs the code we email you too.");
+  }
+}
+
+/**
  * Set a new password, and end every other session on the account.
  *
- * `nonce` is the code `sendReauthenticationCode` mailed, for the one caller
- * that has no other proof to offer (see `settings.ts`). With "Secure password
- * change" on, Supabase checks it on the server for any session over a day old.
+ * `nonce` is the code `sendReauthenticationCode` mailed. Supabase checks it
+ * only with "Secure password change" on and only for a session over a day
+ * old; for anything younger it is the screen's proof, not the server's.
  *
  * The other sessions go because a password change is what somebody does when
- * they think somebody else has it. Keeping that somebody signed in would make
- * the change a formality.
+ * they think somebody else has it. Answers whether that worked, so the screen
+ * never claims it did when it did not.
  */
 export async function setPassword(password: string,
-                                  nonce?: string): Promise<void> {
+                                  nonce?: string): Promise<boolean> {
   const { error } = await supabase.auth.updateUser(
     nonce ? { password, nonce } : { password });
+  // Both codes measured against GoTrue v2.197 with the setting on.
+  const code = (error as { code?: string } | null)?.code;
+  if (code === "reauthentication_needed") throw new ReauthenticationNeeded();
+  if (code === "reauthentication_not_valid") {
+    throw new Error("That code is wrong or has expired. Ask for a new one.");
+  }
   fail(error);
-  await signOutOthers();
+  return signOutOtherDevices();
 }
 
 /** Mail a six-digit code that proves the person at the keyboard has the inbox. */
@@ -423,10 +443,10 @@ async function proveCurrentPassword(current: string): Promise<void> {
 }
 
 /** Change the password of an account that is already signed in. */
-export async function changePassword(current: string,
-                                     next: string): Promise<void> {
+export async function changePassword(current: string, next: string,
+                                     nonce?: string): Promise<boolean> {
   await proveCurrentPassword(current);
-  await setPassword(next);
+  return setPassword(next, nonce);
 }
 
 /**
@@ -452,14 +472,22 @@ export async function changeEmail(email: string,
 }
 
 /**
- * End every session on this account except this one.
+ * End every session on this account except this one, and say whether it did.
  *
- * Best effort: the change it follows has already happened, and failing to
- * tidy up after it must not report the change itself as failed.
+ * Never throws: the change it follows has already happened, and failing to
+ * tidy up after it must not report the change itself as failed. But it
+ * answers, so the screen can say "other devices are still signed in" instead
+ * of a reassurance that is not true.
  */
-async function signOutOthers(): Promise<void> {
-  const { error } = await supabase.auth.signOut({ scope: "others" });
-  if (error) console.warn("could not sign out other sessions:", error.message);
+export async function signOutOtherDevices(): Promise<boolean> {
+  try {
+    const { error } = await supabase.auth.signOut({ scope: "others" });
+    if (error) console.warn("could not sign out other sessions:", error.message);
+    return !error;
+  } catch (e) {
+    console.warn("could not sign out other sessions:", (e as Error).message);
+    return false;
+  }
 }
 
 /**
@@ -476,6 +504,10 @@ async function signOutOthers(): Promise<void> {
 export function arrivedByResetLink(withinMs = 15 * 60 * 1000): boolean {
   const token = state.session?.access_token;
   if (!token) return false;
+  // A confirmation or address-change link also signs in with `otp`. Only a
+  // reset sets `recovery_sent_at`, so the reset has to be recent as well.
+  const asked = Date.parse(state.user?.recovery_sent_at ?? "");
+  if (!(Date.now() - asked < 60 * 60 * 1000)) return false;
   try {
     const payload = JSON.parse(atob(token.split(".")[1]
       .replace(/-/g, "+").replace(/_/g, "/")));
@@ -625,7 +657,7 @@ export async function redeemRecoveryCode(code: string): Promise<void> {
   await refresh(fresh?.session ?? state.session);
   // The database already ended them (`20261005010000`); this says so again
   // from the client in case it is talking to a schema that has not.
-  await signOutOthers();
+  await signOutOtherDevices();
 }
 
 export async function unenrolTotp(factorId: string): Promise<void> {

@@ -256,9 +256,10 @@ try {
     for (const t of tables) {
       const r = await api(null, `/${t}?select=*&limit=1`);
       const rows = Array.isArray(r.body) ? r.body.length : -1;
-      // Refused outright is as good as an empty answer. `schema_migrations`
-      // has no grant for anon at all now, so it says 401 rather than [].
-      const denied = r.status === 401 || r.status === 403;
+      // `schema_migrations` has no grant for anon at all now, so it answers
+      // permission denied (42501) rather than []. Only that table, and only
+      // that code: a 401 from a broken or rotated key must not pass as safe.
+      const denied = t === "schema_migrations" && r.body?.code === "42501";
       if (rows !== 0 && !denied) seen.push(`${t}:${rows === -1 ? r.status : rows}`);
     }
     check("no table gives up a row", seen, []);
@@ -312,6 +313,32 @@ try {
           true);
   }
 
+  console.log("\nblock and unblock cannot be looped");
+  {
+    // A block rotates the feeds of the blocked person's spectators, and lifting
+    // it needs nobody's consent -- so without a meter, block-unblock was a loop
+    // that kept cutting off the spectators of a friend's other matches.
+    const looper = await makeUser("looper");
+    const friend = await makeUser("loopee");
+    const ln = `lp${stamp % 100000}`;
+    const fn = `le${stamp % 100000}`;
+    await rpc(looper, "claim_username", { new_username: ln });
+    await rpc(friend, "claim_username", { new_username: fn });
+    await rpc(looper, "request_friend", { their_username: fn });
+    await rpc(friend, "accept_friend", { their_id: looper.id });
+    const lifts = [];
+    for (let i = 0; i < 4; i++) {
+      await rpc(looper, "block_friend", { their_id: friend.id });
+      const r = await rpc(looper, "unblock_friend", { their_id: friend.id });
+      lifts.push(r.status < 400 ? "lifted" : r.body?.code);
+    }
+    check("three lifts an hour, and the fourth waits",
+          lifts, ["lifted", "lifted", "lifted", "53400"]);
+    check("leaving the block in place, not the friendship",
+          (await api(looper, "/friendships?select=status")).body?.[0]?.status,
+          "blocked");
+  }
+
   console.log("\na username changes through claim_username and nowhere else");
   {
     // `profiles_write_own` decides which ROW; the column grant decides which
@@ -345,8 +372,9 @@ try {
         answers.push(r.status === 200 ? (r.body?.id == null ? "taken" : "got")
                                       : r.body?.code);
       }
-      check("ten probes are answered and the eleventh is refused",
-            answers, [...new Array(10).fill("taken"), "53400"]);
+      // Ten an hour, and claiming its own name at the start spent one.
+      check("nine probes are answered and the tenth is refused",
+            answers, [...new Array(9).fill("taken"), "53400", "53400"]);
       check("and asking for the name you hold is still free",
             claimed(await rpc(prober, "claim_username", { new_username: mine })),
             true);

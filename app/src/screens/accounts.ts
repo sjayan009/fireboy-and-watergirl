@@ -219,6 +219,9 @@ export function passwordScreen(host: HTMLElement): void {
         if (inputOf(pw).value !== inputOf(again).value) {
           throw new Error("Those two passwords are not the same.");
         }
+        // Every other session ends with the reset. If that part failed the
+        // password is still changed, and staying on this screen to say so
+        // would only hold up somebody who got what they came for.
         await setPassword(inputOf(pw).value);
         go("/play");
       },

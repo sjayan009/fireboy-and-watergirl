@@ -105,9 +105,11 @@ try {
         // writing to the ledger, so it stops the run unless an operator says
         // otherwise.
         if (!ADOPT) {
+          // Stop here rather than carry on: the files after this one were
+          // written assuming this one ran, and nothing says it did.
           console.error(`  NULL  ${f} has a ledger row with no checksum`);
           unadopted.push(f);
-          continue;
+          break;
         }
         await client.query(
           "update public.schema_migrations set checksum = $2 where name = $1",

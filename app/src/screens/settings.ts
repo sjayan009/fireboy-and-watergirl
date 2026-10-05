@@ -10,7 +10,8 @@
 import {
   auth, changeEmail, changePassword, claimUsername, deleteAccount, enrolTotp,
   generateRecoveryCodes, hasPassword, listFactors, recoveryCodesLeft,
-  sendReauthenticationCode, setPassword, unenrolTotp, verifyTotp,
+  ReauthenticationNeeded, sendReauthenticationCode, setPassword,
+  signOutOtherDevices, unenrolTotp, verifyTotp,
 } from "../auth.js";
 import { supabase } from "../supabase.js";
 import { card, el, field, form, inputOf, note, on } from "../ui/dom.js";
@@ -215,8 +216,7 @@ function passwordSection(has: boolean, value: HTMLElement): HTMLElement {
     type: "password", required: true, minlength: 8,
     autocomplete: "new-password",
   });
-  const done = note(has ? "Changed. Every other device was signed out."
-                        : "Set. You can now sign in either way.");
+  const done = note("");
   done.hidden = true;
   const mailed = note(`Sent to ${auth().user?.email ?? "your address"}.`);
   mailed.hidden = true;
@@ -234,6 +234,14 @@ function passwordSection(has: boolean, value: HTMLElement): HTMLElement {
         button.disabled = false;
       }
     } }, "Email me a code");
+  // The same button and code field, for a password holder Supabase has asked
+  // to reauthenticate. Built once, shown only when needed.
+  const codeRow = el("div", { hidden: true },
+    note("Supabase wants a code from your email as well, because this session " +
+         "is more than a day old."),
+    el("p", { class: "note" }, ask), mailed, code);
+  // A required field the browser cannot show blocks the whole form.
+  if (has) inputOf(code).required = false;
 
   return el("div", {},
     has ? null : note("You signed in with Google, so this account has no " +
@@ -242,12 +250,30 @@ function passwordSection(has: boolean, value: HTMLElement): HTMLElement {
                       "email a code to your address first."),
     form({
       submit: has ? "Change password" : "Set password",
-      children: has ? [current, next, done]
+      // A password holder is asked for the code only if Supabase asks for it
+      // (`ReauthenticationNeeded`): a session over a day old, once "Secure
+      // password change" is on. Until then the code row stays out of the way.
+      children: has ? [current, codeRow, next, done]
                     : [el("p", { class: "note" }, ask), mailed, code, next, done],
       onSubmit: async () => {
         done.hidden = true;
-        if (has) await changePassword(inputOf(current).value, inputOf(next).value);
-        else await setPassword(inputOf(next).value, inputOf(code).value.trim());
+        const nonce = inputOf(code).value.trim() || undefined;
+        let others: boolean;
+        try {
+          others = has
+            ? await changePassword(inputOf(current).value, inputOf(next).value, nonce)
+            : await setPassword(inputOf(next).value, nonce);
+        } catch (e) {
+          if (e instanceof ReauthenticationNeeded) {
+            codeRow.hidden = false;
+            inputOf(code).required = true;
+          }
+          throw e;
+        }
+        done.textContent = (has ? "Changed." : "Set. You can now sign in either way.") +
+          (others ? " Every other device was signed out."
+                  : " Other devices could not be signed out -- sign out on them, " +
+                    "or change it again to retry.");
         inputOf(current).value = "";
         inputOf(code).value = "";
         inputOf(next).value = "";
@@ -362,13 +388,17 @@ async function drawFactors(host: HTMLElement, value: HTMLElement): Promise<void>
     const codes = el("div", { class: "codes" });
     host.replaceChildren(
       note("An authenticator app is enrolled. You will be asked for a code " +
-           "every time you sign in."),
+           "every time you sign in. Turning it off signs out your other " +
+           "devices."),
       recoverySection(codes),
       codes,
       el("button", {
         class: "ghost",
         onclick: async () => {
           for (const f of enrolled) await unenrolTotp(f.id);
+          // A password-only session parked at the code prompt somewhere else
+          // would otherwise be let in the moment the factor goes.
+          await signOutOtherDevices();
           await drawFactors(host, value);
         },
       }, "Turn it off"));
