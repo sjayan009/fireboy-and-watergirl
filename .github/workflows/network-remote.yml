@@ -33,11 +33,7 @@ on:
         required: true
       SUPABASE_PUBLISHABLE_KEY:
         required: true
-      SUPABASE_SECRET_KEY:
-        required: true
       SUPABASE_PROJECT_REF:
-        required: true
-      BROWSERBASE_API_KEY:
         required: true
       BROWSERBASE_PROJECT_ID:
         required: true
@@ -57,6 +53,10 @@ jobs:
     if: vars.FBWG_ZERO_DOLLAR_ACTIONS == '1' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      deployments: read
+      id-token: write   # the OIDC token the ci-credentials broker checks
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -87,11 +87,15 @@ jobs:
       - run: npm ci
       - run: npm --prefix engine run build
       - run: npx playwright install --with-deps chromium
+      - name: credentials from the broker, which checks this is main
+        uses: ./.github/actions/ci-credentials
+        with:
+          supabase-url: ${{ secrets.SUPABASE_URL }}
+          scopes: api browserbase
       - name: create private test environment
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
-          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           set -euo pipefail
@@ -108,7 +112,6 @@ jobs:
           FBWG_EXPECTED_SHA: ${{ inputs.expected_sha }}
           FBWG_REPETITIONS: ${{ inputs.repetitions }}
           FBWG_VERCEL_SHARE_URL: ${{ secrets.FBWG_VERCEL_SHARE_URL }}
-          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
           BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
         run: node app/test/remote-network.mjs
       - name: remove test environment
