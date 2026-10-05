@@ -18,10 +18,12 @@
  * recorded with the SHA-256 of its contents and checked against it on every
  * run; a changed file is a hard failure with the two digests printed.
  *
- * Rows written before checksums existed are adopted on the first run after
- * this, and say so. Adoption is not verification -- nothing can retroactively
+ * Rows written before checksums existed were adopted on the first run after
+ * that, and said so. Adoption is not verification -- nothing can retroactively
  * prove what those files contained when they ran -- it is the point from which
- * drift becomes detectable.
+ * drift becomes detectable. Every such row has been adopted now, so a row with
+ * no checksum is adopted only with `--adopt`: otherwise anything able to write
+ * one could make a pending migration be skipped for ever.
  *
  * The second is concurrency. The runner read the completed set once and then
  * worked through the pending files, so two runners started together -- the
@@ -49,6 +51,9 @@ const LOCK_KEY = 728_401_553;
 
 const sha = (s) => createHash("sha256").update(s).digest("hex");
 
+/** `--adopt`: accept ledger rows that have no checksum as applied. */
+const ADOPT = process.argv.includes("--adopt");
+
 const client = await open();
 let locked = false;
 try {
@@ -66,6 +71,16 @@ try {
   // checksums entirely.
   await client.query(
     "alter table public.schema_migrations add column if not exists checksum text");
+  // The ledger decides what runs as postgres and what is skipped, and it lives
+  // in the API-exposed schema -- where Supabase's default privileges hand anon
+  // and authenticated every verb by name. RLS with no policy already refused
+  // them on the live project, but only because a platform trigger outside this
+  // repository switched it on. Said here, every run, so it is true of any
+  // database this runner touches.
+  await client.query(
+    "alter table public.schema_migrations enable row level security");
+  await client.query(
+    "revoke all on public.schema_migrations from public, anon, authenticated");
 
   const done = new Map(
     (await client.query("select name, checksum from public.schema_migrations")).rows
@@ -75,6 +90,7 @@ try {
   let ran = 0;
   let adopted = 0;
   const drifted = [];
+  const unadopted = [];
 
   for (const f of files) {
     const sql = readFileSync(join(DIR, f), "utf8");
@@ -83,6 +99,18 @@ try {
     if (done.has(f)) {
       const recorded = done.get(f);
       if (recorded === null || recorded === undefined) {
+        // A row with no checksum makes its file be skipped without running.
+        // That was how pre-checksum rows were adopted, and every one of them
+        // has been; a row like that now is either a hand edit or somebody
+        // writing to the ledger, so it stops the run unless an operator says
+        // otherwise.
+        if (!ADOPT) {
+          // Stop here rather than carry on: the files after this one were
+          // written assuming this one ran, and nothing says it did.
+          console.error(`  NULL  ${f} has a ledger row with no checksum`);
+          unadopted.push(f);
+          break;
+        }
         await client.query(
           "update public.schema_migrations set checksum = $2 where name = $1",
           [f, digest]);
@@ -116,12 +144,21 @@ try {
     }
   }
 
+  if (unadopted.length > 0) {
+    console.error(
+      `\n${unadopted.length} ledger row(s) have no checksum: ` +
+      `${unadopted.join(", ")}.\nNothing ran them under this runner, so they ` +
+      "are not adopted automatically. If you cleared the checksum yourself " +
+      "after a cosmetic edit, run `npm run db:migrate -- --adopt`.");
+    process.exitCode = 1;
+  }
   if (drifted.length > 0) {
     console.error(
       `\n${drifted.length} applied migration(s) have been edited since they ` +
       `ran: ${drifted.join(", ")}.\nAn applied migration is history and cannot ` +
       "be rewritten -- put the change in a new file. If the edit is known to " +
-      "be cosmetic, clear the recorded checksum for that row by hand.");
+      "be cosmetic, clear the recorded checksum for that row by hand and run " +
+      "`npm run db:migrate -- --adopt`.");
     process.exitCode = 1;
   } else if (process.exitCode !== 1) {
     console.log(`\n${ran} applied, ${files.length - ran} already there` +

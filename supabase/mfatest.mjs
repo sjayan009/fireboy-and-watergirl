@@ -146,6 +146,38 @@ async function enrol(user) {
   return { factorId, secret, strong: verified.body.access_token };
 }
 
+/**
+ * Answer the factor from another session, raising THAT session to aal2.
+ *
+ * Retried once a TOTP window later, in case the code just used for enrolling
+ * is refused as already spent.
+ */
+async function answer(token, factorId, secret) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 31000));
+    const challenge = await as(token, `/auth/v1/factors/${factorId}/challenge`,
+                               { method: "POST" });
+    const verified = await as(token, `/auth/v1/factors/${factorId}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ challenge_id: challenge.body?.id, code: totp(secret) }),
+    });
+    if (verified.body?.access_token) {
+      return { token: verified.body.access_token,
+               refresh: verified.body.refresh_token };
+    }
+  }
+  throw new Error("could not answer the factor from a second session");
+}
+
+/** Another password sign-in: a second, separate `aal1` session. */
+async function signInAgain(user) {
+  return (await (await fetch(`${URL_}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { apikey: PUB, "content-type": "application/json" },
+    body: JSON.stringify({ email: user.email, password: user.password }),
+  })).json()).access_token;
+}
+
 try {
   console.log("one account, one factor, and two tokens for it");
   const me = await makeUser("me");
@@ -160,7 +192,10 @@ try {
   await rpc(friend.token, "accept_friend", { their_id: me.id });
 
   const weak = me.token;                       // the password sign-in
-  const { strong } = await enrol(me);          // the answered challenge
+  // The answered challenge. NB: answering it raises the session it was asked
+  // from, so `weak` and `strong` are two tokens for ONE session -- which is
+  // why the checks against GoTrue below sign in afresh.
+  const { strong, factorId, secret } = await enrol(me);
 
   check("the password session is aal1", claim(weak, "aal"), "aal1");
   check("and the answered one is aal2", claim(strong, "aal"), "aal2");
@@ -204,6 +239,29 @@ try {
           refused(await rpc(weak, "delete_me", {})), true);
     check("mint recovery codes",
           refused(await rpc(weak, "generate_recovery_codes", {})), true);
+
+    // Not Postgres: GoTrue's own user endpoint, which no policy here reaches.
+    // GoTrue refuses with `insufficient_aal` -- and pinned so an upgrade that
+    // stops doing so is a failure rather than a surprise. Changing the address
+    // is how an account is taken over, because the address is where password
+    // resets go.
+    //
+    // From a FRESH password session. GoTrue reads the assurance level from the
+    // session row, not from the token, and `weak`'s session was raised to aal2
+    // when the factor was answered from it -- so `weak` would be let through,
+    // and a run against a stack that does let it through changes the password
+    // every test after this one signs in with.
+    const fresh = await signInAgain(me);
+    const pw = await as(fresh, "/auth/v1/user", {
+      method: "PUT", body: JSON.stringify({ password: `${me.password}x` }),
+    });
+    check("change the password",
+          [pw.status, pw.body?.error_code], [401, "insufficient_aal"]);
+    const mail = await as(fresh, "/auth/v1/user", {
+      method: "PUT", body: JSON.stringify({ email: `moved_${me.email}` }),
+    });
+    check("move the account to another address",
+          [mail.status, mail.body?.error_code], [401, "insufficient_aal"]);
   }
 
   console.log("\nand what the aal2 token does instead");
@@ -251,6 +309,14 @@ try {
           (await rpc(weak, "redeem_recovery_code", { code: "AAAAA-AAAAA" })).body,
           false);
 
+    // A second password session, parked at the code prompt somewhere else.
+    // Before 20261005010000 it was promoted to the whole account the moment
+    // the factor went, without anybody signing in again.
+    const parked = await signInAgain(me);
+    // And a third that answered the factor -- the lost phone. Its own
+    // session, unlike `strong`, which shares `weak`'s.
+    const phone = await answer(await signInAgain(me), factorId, secret);
+
     // The whole point: the person using this cannot reach aal2, because the
     // authenticator is what they lost.
     check("the real one is accepted from the weak session",
@@ -263,6 +329,19 @@ try {
     check("so the same code cannot be used twice",
           (await rpc(weak, "redeem_recovery_code", { code: recovery[0] })).body,
           false);
+
+    // Recovery is what you do when the authenticator is lost -- usually with
+    // the phone it was on, which is signed in. Every other session ends.
+    check("the parked session is not promoted, it is ended",
+          (await api(parked, `/profiles?id=eq.${me.id}&select=id`)).body?.length, 0);
+    check("so is the aal2 session from before, though its token has not expired",
+          (await api(phone.token, `/profiles?id=eq.${me.id}&select=id`)).body?.length, 0);
+    const renewed = await fetch(`${URL_}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST",
+      headers: { apikey: PUB, "content-type": "application/json" },
+      body: JSON.stringify({ refresh_token: phone.refresh }),
+    });
+    check("and it cannot be renewed", renewed.status >= 400, true);
   }
 
   console.log("\nwith no factor enrolled, the aal1 session is the whole account");

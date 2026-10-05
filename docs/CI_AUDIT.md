@@ -1,5 +1,7 @@
 # CI and release-readiness audit — 24 September 2026
 
+> Since 5 October 2026 every workflow that holds a credential runs from `main` only, so the manual branch dispatch described below no longer reaches the database. See the note at the top of `.github/workflows/full.yml`.
+
 This audit used the 29 available `full` runs from 31 August through 23 September 2026, including the most recent 23 scheduled runs, their job/step metadata and representative failed logs. Historical run IDs below are stable GitHub evidence. Scheduled workflows execute from `main`; the changes on `net/realtime-hardening` only take effect for the schedule after a merge. Manual branch dispatch validates the branch workflow before that point.
 
 ## Why `full` stayed red
