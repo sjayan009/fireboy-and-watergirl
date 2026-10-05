@@ -74,6 +74,10 @@ check("supabase is reachable under the csp",
       (h(root, "content-security-policy") ?? "")
         .includes("wss://*.supabase.co"), true);
 check("X-Frame-Options", h(root, "x-frame-options"), "DENY");
+// Vercel adds HSTS by itself; the Cloudflare origin only sends what `_headers`
+// lists, which is generated from vercel.json -- so it is stated there for both.
+check("HSTS for two years",
+      (h(root, "strict-transport-security") ?? "").includes("max-age=63072000"), true);
 check("X-Content-Type-Options", h(root, "x-content-type-options"), "nosniff");
 check("Referrer-Policy", h(root, "referrer-policy"), "no-referrer");
 check("the landing page may be indexed", h(root, "x-robots-tag"), null);
