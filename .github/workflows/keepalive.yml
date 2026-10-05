@@ -29,7 +29,8 @@ permissions: {}
 
 jobs:
   ping:
-    if: github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1'
+    # main only: a dispatch from a branch runs that branch's copy of this file.
+    if: github.ref == 'refs/heads/main' && (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1')
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
