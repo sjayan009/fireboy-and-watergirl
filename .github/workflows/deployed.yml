@@ -41,6 +41,9 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1')
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token the ci-credentials broker checks
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
 
@@ -52,15 +55,18 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
 
+      - name: credentials from the broker, which checks this is main
+        uses: ./.github/actions/ci-credentials
+        with:
+          supabase-url: ${{ secrets.SUPABASE_URL }}
+          scopes: db api
+
       - name: write the environment the test scripts read
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
-          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
-          # Only `migrate.mjs` needs these two, and only since the step below
-          # existed. They reach the database directly rather than through the
-          # API, which is why they are a different pair of secrets.
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          # The secret key and the database password are not here: the step
+          # above exported them from the broker. The project ref is not secret.
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           umask 077
