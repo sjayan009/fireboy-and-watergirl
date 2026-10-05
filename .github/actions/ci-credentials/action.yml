@@ -1,0 +1,31 @@
+# This job's credentials, from the `ci-credentials` Edge Function rather than
+# from repository secrets.
+#
+# The job presents a GitHub Actions OIDC token: GitHub signs it, and GitHub --
+# not the workflow file -- writes the repository, the ref and the workflow file
+# into it. The broker hands out the database password and the secret key only
+# to allow-listed workflow files running on `main`. See
+# supabase/functions/ci-credentials/handler.ts for the whole policy.
+#
+# The job needs `permissions: id-token: write` (and `contents: read`), and Node
+# on the runner. Every value is masked before it is written anywhere, then
+# exported to the job's later steps as SUPABASE_DB_PASSWORD /
+# SUPABASE_SECRET_KEY / BROWSERBASE_API_KEY -- whichever the scopes asked for.
+name: ci-credentials
+description: Fetch main-only CI credentials from the ci-credentials broker with a GitHub OIDC token.
+inputs:
+  supabase-url:
+    description: The project URL the broker is deployed on.
+    required: true
+  scopes:
+    description: Space-separated, from db, api, browserbase.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: credentials from the broker, for main only
+      shell: bash
+      env:
+        BROKER: ${{ inputs.supabase-url }}/functions/v1/ci-credentials
+        SCOPES: ${{ inputs.scopes }}
+      run: node "$GITHUB_ACTION_PATH/fetch.mjs"

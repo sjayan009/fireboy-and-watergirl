@@ -36,6 +36,34 @@ database password, and answered the migrations. Point `SUPABASE_DB_CA` at a
 different file for a self-hosted database or a rotated root; there is no way to
 turn verification off.
 
+## CI credentials come from a broker, not from GitHub
+
+The database password, the secret key and the Browserbase key are not
+repository secrets. `functions/ci-credentials` hands them out, and only to a
+job whose GitHub Actions OIDC token says it is this repository, on
+`refs/heads/main`, running an allow-listed workflow file from `main`
+(`deployed.yml` and `full.yml` get the database; the network gates get the
+secret key). GitHub writes those claims and signs them, so a branch that edits
+its own copy of a workflow cannot claim `main` -- which an `if:` in that same
+file never stopped. Environment secrets would do the same job, but GitHub only
+offers them to private repositories on paid plans.
+
+The workflows call `.github/actions/ci-credentials` and need
+`permissions: id-token: write`. `test/ci-credentials.mjs` signs tokens with a
+real key and breaks each rule in turn.
+
+Rolling it out, in this order -- the workflows stop reading repository secrets
+the moment the change merges:
+
+```bash
+npx supabase functions deploy ci-credentials --project-ref <ref> --use-api --no-verify-jwt
+```
+
+then set `FBWG_CI_DB_PASSWORD`, `FBWG_CI_SECRET_KEY` and
+`FBWG_CI_BROWSERBASE_API_KEY` as Edge Function secrets, merge, prove one run
+(`full` by hand), and only then delete the three repository secrets -- and
+rotate them, since they lived in GitHub.
+
 ## An applied migration is history
 
 `migrate.mjs` records the SHA-256 of every file it applies and checks it on
