@@ -23,9 +23,11 @@ export interface Friend {
   /**
    * True when the block on this row is ours to lift.
    *
-   * Blocked rows are visible to both people -- the row is still theirs too --
-   * but only one of them can do anything about it, and the screen has to be
-   * able to tell which one it is looking at.
+   * Since `20261005000000_block_only_friendships` only the blocker is sent a
+   * blocked row at all -- to the other person a block reads as the blocker
+   * not existing -- so this is always true on a blocked row from the
+   * database. The screen still checks it, because a client older than that
+   * migration's schema is not the only thing that could hand it one.
    */
   blockedByMe: boolean;
 }

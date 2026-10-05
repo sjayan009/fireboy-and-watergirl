@@ -6,7 +6,8 @@
  * which part failed.
  */
 import {
-  auth, claimUsername, redeemRecoveryCode, resendVerification, retryAuth,
+  arrivedByResetLink, auth, claimUsername, redeemRecoveryCode,
+  resendVerification, retryAuth,
   sendPasswordReset, setPassword, signIn, signInWithGoogle, signOut, signUp,
   listFactors, verifyTotp,
 } from "../auth.js";
@@ -186,7 +187,25 @@ export function resetScreen(host: HTMLElement): void {
     })));
 }
 
+/**
+ * Choose a new password without the old one -- for somebody who just followed
+ * a reset link, and nobody else.
+ *
+ * The route admits any signed-in session, because the stage cannot tell a
+ * reset arrival from a tab that typed `#/password`. The session can: see
+ * `arrivedByResetLink`. Anybody else is sent to Settings, which asks for the
+ * current password first.
+ */
 export function passwordScreen(host: HTMLElement): void {
+  if (!arrivedByResetLink()) {
+    host.append(card("Choose a new password",
+      note("This page is for the link in a password-reset email, and this " +
+           "session did not arrive from one -- or arrived too long ago."),
+      note(auth().stage === "in"
+        ? link("Change your password in Settings", "#/settings")
+        : link("Back to the game", "#/play"))));
+    return;
+  }
   const pw = field("New password", { type: "password", required: true,
                                      minlength: 8, autocomplete: "new-password" });
   const again = field("Repeat it", { type: "password", required: true,
