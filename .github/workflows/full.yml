@@ -9,6 +9,12 @@
 # unavailable to pull requests from forks -- and the key stored here should be
 # one minted for CI, not one that has ever been anywhere else.
 #
+# Every credentialed job runs from `main` only. The gates used to admit
+# `net/realtime-hardening` as well, so it could be validated before merging,
+# and that meant whatever that branch pushed ran `db:migrate` as `postgres`
+# against production with no review. A workflow is read from the branch it is
+# dispatched on, so the gate is only as strong as the branches allowed through it.
+#
 # ## Why it is several jobs and not one command
 #
 # It was `npm run test:all`, which is `&&` all the way along -- so the first
@@ -34,7 +40,7 @@ jobs:
   # The migration runs once, before anything that reads the schema, and holds
   # the shared concurrency group while it does. `deployed` is in the same group.
   schema:
-    if: (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/net/realtime-hardening')
+    if: (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -66,7 +72,7 @@ jobs:
         run: rm -f .env.local
 
   engine:
-    if: (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/net/realtime-hardening')
+    if: (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -82,7 +88,7 @@ jobs:
         run: npm --prefix engine run test:full
 
   database:
-    if: (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/net/realtime-hardening')
+    if: (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     needs: schema
     timeout-minutes: 20
@@ -115,7 +121,7 @@ jobs:
         run: rm -f .env.local
 
   application:
-    if: (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/net/realtime-hardening')
+    if: (github.event.repository.private == false || vars.FBWG_ZERO_DOLLAR_ACTIONS == '1') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     needs: schema
     timeout-minutes: 40

@@ -1,5 +1,6 @@
-# Manual release-gate dispatcher. The existing default-branch workflow can
-# invoke branch-local reusable workflows before they are merged to main.
+# Manual release-gate dispatcher. The worker-image gate holds no secrets and
+# runs on any branch; the hosted and remote gates forward the Supabase secret
+# key and run from main only (see the note at the top of full.yml).
 # Browser play and replay verification already run in full and fast.
 name: release-gate
 on:
@@ -37,7 +38,7 @@ jobs:
       - name: build the verifier container
         run: docker build -f worker/Dockerfile -t fbwg-verifier:ci .
   hosted:
-    if: inputs.gate == 'hosted' && vars.FBWG_ZERO_DOLLAR_ACTIONS == '1' && (github.ref == 'refs/heads/net/realtime-hardening' || github.ref == 'refs/heads/main')
+    if: inputs.gate == 'hosted' && vars.FBWG_ZERO_DOLLAR_ACTIONS == '1' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/network-hosted.yml
     secrets:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -45,7 +46,7 @@ jobs:
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
   remote:
-    if: inputs.gate == 'remote' && vars.FBWG_ZERO_DOLLAR_ACTIONS == '1' && (github.ref == 'refs/heads/net/realtime-hardening' || github.ref == 'refs/heads/main')
+    if: inputs.gate == 'remote' && vars.FBWG_ZERO_DOLLAR_ACTIONS == '1' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       deployments: read

@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   hosted:
-    if: vars.FBWG_ZERO_DOLLAR_ACTIONS == '1' && (github.ref == 'refs/heads/net/realtime-hardening' || github.ref == 'refs/heads/main')
+    if: vars.FBWG_ZERO_DOLLAR_ACTIONS == '1' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
