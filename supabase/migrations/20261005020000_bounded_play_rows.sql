@@ -17,6 +17,11 @@
 --   * `claim_replay` served one global FIFO, so one colluding pair's backlog
 --     sat in front of everybody else's first attempt.
 --
+-- The limits below are per ACCOUNT, not per pair: a pair cap multiplies by
+-- however many friends an account has. Stale rows are cleaned up by whoever
+-- calls next, in small batches that skip rows somebody else holds locked, so an
+-- abandoned pair's leftovers do not wait for that pair to come back.
+--
 -- Ranked play is not reachable in production today (no `engine_versions` row
 -- accepts), and `match_sharing` holds nine rows, all long expired. This lands
 -- before either matters.
@@ -27,26 +32,94 @@
 --     feed after that player unfriended or blocked them: `revoke_pair_sharing`
 --     only rotated the pair's OWN matches, and the only recheck was a poll in
 --     the watcher's own browser. Realtime caches a joined channel's policy, so
---     a modified client could go on reading. Feeds now rotate when either
---     player's friendship with anybody leaves 'accepted'.
+--     a modified client could go on reading. Now a friendship leaving
+--     'accepted' rotates the feed of any match whose spectators it actually
+--     cut off -- and `unblock_friend` is metered, so block-unblock cannot be
+--     looped to keep cutting off a friend's other spectators.
 --
 -- Compatible with the release before: no signature changes, and the client
--- already handles every new refusal (53400) as "try again later".
+-- treats every new refusal (53400) as "try again later" or as not ranked.
 
--- ---- indexes the cascades and triggers were scanning without ------------
+-- ---- indexes the cascades, triggers and clean-ups were scanning without ---
 
 create index if not exists match_sharing_pair
   on play_private.match_sharing (user_a, user_b);
 create index if not exists match_sharing_user_b
   on play_private.match_sharing (user_b);
+create index if not exists match_sharing_expiry
+  on play_private.match_sharing (expires_at);
 create index if not exists ranked_attempts_user_b
   on play_private.ranked_attempts (user_b);
+create index if not exists ranked_attempts_stale
+  on play_private.ranked_attempts (created_at)
+  where state in ('waiting', 'not_ranked');
 create index if not exists verified_results_user_a
   on play_private.verified_results (user_a);
 create index if not exists verified_results_user_b
   on play_private.verified_results (user_b);
 create index if not exists play_budgets_owner
   on play_private.budgets (owner);
+
+-- ---- an hourly budget, beside the per-minute one --------------------------
+
+/**
+ * `spend`, with an hour for its window. Same table, its own action names.
+ */
+create or replace function play_private.spend_hourly(action_name text, maximum integer)
+returns void language plpgsql security definer set search_path = '' as $$
+declare n integer; waited interval;
+begin
+  insert into play_private.budgets as b(owner, action) values(auth.uid(), action_name)
+  on conflict(owner, action) do update set
+    calls = case when b.opened < now() - interval '1 hour' then 1 else b.calls + 1 end,
+    opened = case when b.opened < now() - interval '1 hour' then now() else b.opened end
+  returning calls, now() - opened into n, waited;
+  if n > maximum then
+    raise exception 'try again in % minutes',
+      greatest(1, ceil(extract(epoch from (interval '1 hour' - waited)) / 60))
+      using errcode = '53400';
+  end if;
+end $$;
+revoke all on function play_private.spend_hourly(text, integer)
+  from public, anon, authenticated, fbwg_verifier;
+
+/**
+ * Unchanged in what it does; three lifts an hour.
+ *
+ * A block rotates the feeds of the blocked person's spectators (see
+ * `revoke_pair_sharing` below), and a block is the blocker's to lift with no
+ * consent from anybody, so block-unblock-block was a loop any friend could run
+ * to keep cutting off the spectators of your matches with somebody else.
+ * Three lifts an hour is plenty for a person changing their mind.
+ */
+create or replace function public.unblock_friend(their_id uuid)
+returns public.friendships
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  me uuid := auth.uid();
+  row public.friendships;
+begin
+  perform public.assert_allowed();
+  perform play_private.spend_hourly('unblock', 3);
+  update public.friendships
+     set status = 'accepted', blocked_by = null, updated_at = now()
+   where user_a = least(me, their_id)
+     and user_b = greatest(me, their_id)
+     and status = 'blocked'
+     and blocked_by = me
+  returning * into row;
+  if row is null then
+    raise exception 'that is not your block to lift' using errcode = 'P0002';
+  end if;
+  return row;
+end;
+$$;
+
+revoke all on function public.unblock_friend(uuid) from public, anon;
+grant execute on function public.unblock_friend(uuid) to authenticated;
 
 -- ---- match sharing ------------------------------------------------------
 
@@ -72,6 +145,20 @@ $$;
 revoke all on function play_private.watch_topic_match(text)
   from public, anon, authenticated, fbwg_verifier;
 
+/**
+ * May this account watch a match between these two players? The spectator
+ * half of `can_watch_pair_topic`, so the trigger below asks the same question.
+ */
+create or replace function play_private.may_watch(watcher uuid, a uuid, b uuid)
+returns boolean language sql stable security definer set search_path = '' as $$
+  select watcher in (a, b) or exists(
+    select 1 from public.friendships f
+     where f.status = 'accepted' and watcher in (f.user_a, f.user_b)
+       and (a in (f.user_a, f.user_b) or b in (f.user_a, f.user_b)))
+$$;
+revoke all on function play_private.may_watch(uuid, uuid, uuid)
+  from public, anon, authenticated, fbwg_verifier;
+
 create or replace function public.can_watch_pair_topic(topic text)
 returns boolean language sql stable security definer set search_path = '' as $$
   select public.caller_allowed() and exists(
@@ -79,7 +166,7 @@ returns boolean language sql stable security definer set search_path = '' as $$
     join public.friendships pair on pair.user_a = m.user_a and pair.user_b = m.user_b and pair.status = 'accepted'
     where m.id = play_private.watch_topic_match(topic)
     and m.consent_a and m.consent_b and m.expires_at > now() and topic = 'watch:' || m.id::text || ':' || m.feed::text
-    and (auth.uid() in(m.user_a,m.user_b) or exists(select 1 from public.friendships f where f.status = 'accepted' and auth.uid() in(f.user_a,f.user_b) and (m.user_a in(f.user_a,f.user_b) or m.user_b in(f.user_a,f.user_b))))
+    and play_private.may_watch(auth.uid(), m.user_a, m.user_b)
   )
 $$;
 
@@ -93,14 +180,16 @@ returns boolean language sql stable security definer set search_path = '' as $$
 $$;
 
 /**
- * Unchanged in what it answers. Two additions at the top: rows this pair
- * left expired for over an hour are deleted, and a pair may hold at most
- * eight live matches at once.
+ * Unchanged in what it answers. Two additions at the top.
  *
- * An hour rather than the 45-second window itself, because `match_watch_state`
- * brings an expired row back to life when a game that paused -- a tab in the
- * background -- starts polling again, and that should keep working. A real
- * pair has one live match; eight is generous.
+ * Up to fifty rows -- anybody's -- that have been expired for over an hour are
+ * deleted. An hour rather than the 45-second window itself, because
+ * `match_watch_state` brings an expired row back when a game that paused -- a
+ * tab in the background -- starts polling again, and that should keep working.
+ * `skip locked`, so the clean-up never waits on a row somebody is using.
+ *
+ * And an account may hold at most eight live matches at once, across all its
+ * friends. A real player has one.
  */
 create or replace function public.match_consent(p_match uuid, their_id uuid, p_on boolean)
 returns table(topic text, shared boolean, mine boolean, theirs boolean)
@@ -111,12 +200,12 @@ begin
   perform play_private.spend('sharing',30);
   if p_match is null or their_id is null or p_on is null or not exists(select 1 from public.friendships where user_a = least(me,their_id) and user_b = greatest(me,their_id) and status = 'accepted') then raise exception 'Pair unavailable' using errcode = '42501'; end if;
   delete from play_private.match_sharing
-   where user_a = least(me,their_id) and user_b = greatest(me,their_id)
-     and expires_at < now() - interval '1 hour';
+   where id in (select s.id from play_private.match_sharing s
+                 where s.expires_at < now() - interval '1 hour'
+                 order by s.expires_at limit 50 for update skip locked);
   if not exists(select 1 from play_private.match_sharing where id = p_match)
      and (select count(*) from play_private.match_sharing
-           where user_a = least(me,their_id) and user_b = greatest(me,their_id)
-             and expires_at > now()) >= 8 then
+           where me in (user_a, user_b) and expires_at > now()) >= 8 then
     raise exception 'Please retry later' using errcode = '53400';
   end if;
   insert into play_private.match_sharing(id,user_a,user_b) values(p_match,least(me,their_id),greatest(me,their_id)) on conflict(id) do nothing;
@@ -141,12 +230,19 @@ grant execute on function public.match_consent(uuid,uuid,boolean) to authenticat
  *
  * Its own pair's matches, as before: consent off, new feed.
  *
- * And the LIVE matches either of the two plays with anybody else get a new
- * feed, consent untouched. A watcher was admitted because they were a friend
- * of one of the players; when that friendship ends, the topic they joined has
- * to stop existing, because Realtime will not re-ask the policy on its own.
- * The players' clients pick the new topic up on their next five-second poll of
- * `match_watch_state`; other watchers rejoin from the friends list.
+ * And the matches either of the two plays with somebody ELSE get a new feed,
+ * consent untouched -- but only those the other one can no longer watch. X and
+ * Y stop being friends: a match of X's with P is rotated only if Y is not also
+ * a friend of P, because if they are, Y was entitled to that feed anyway and
+ * rotating it would cut off every other spectator for nothing. A watcher was
+ * admitted because they were a friend of a player; when that ends, the topic
+ * they joined has to stop existing, because Realtime will not re-ask the
+ * policy on its own.
+ *
+ * Every row of theirs, not only live ones: `match_watch_state` revives a row
+ * that expired while the game was paused, and it would come back with the old
+ * feed. The players' clients pick the new topic up on their next five-second
+ * poll; other spectators rejoin from the friends list.
  */
 create or replace function play_private.revoke_pair_sharing() returns trigger
 language plpgsql security definer set search_path = '' as $$
@@ -155,10 +251,12 @@ begin
     update play_private.match_sharing set consent_a = false, consent_b = false, feed = gen_random_uuid(), expires_at = now()
     where user_a = old.user_a and user_b = old.user_b;
     if old.status = 'accepted' then
-      update play_private.match_sharing set feed = gen_random_uuid()
-       where expires_at > now()
-         and not (user_a = old.user_a and user_b = old.user_b)
-         and (user_a in (old.user_a, old.user_b) or user_b in (old.user_a, old.user_b));
+      update play_private.match_sharing m set feed = gen_random_uuid()
+       where not (m.user_a = old.user_a and m.user_b = old.user_b)
+         and ((old.user_a in (m.user_a, m.user_b)
+               and not play_private.may_watch(old.user_b, m.user_a, m.user_b))
+           or (old.user_b in (m.user_a, m.user_b)
+               and not play_private.may_watch(old.user_a, m.user_a, m.user_b)));
     end if;
   end if;
   return old;
@@ -168,9 +266,9 @@ revoke all on function play_private.revoke_pair_sharing() from public,anon,authe
 -- ---- ranked attempts ----------------------------------------------------
 
 /**
- * Tidy this pair's stale attempts. Called from both writers, so a pair that
- * keeps playing keeps its own history short and a pair that stops costs one
- * day's rows at most.
+ * Clean up stale attempts -- anybody's, fifty at a time. Called from both
+ * player writers, so as long as anybody plays ranked, nobody's leftovers sit
+ * there; and nobody playing means nobody is adding any.
  *
  * After twelve hours a waiting attempt can no longer be ranked
  * (`submit_ranked_replay` and `ranked_status` already say so); its replay is
@@ -178,24 +276,30 @@ revoke all on function play_private.revoke_pair_sharing() from public,anon,authe
  * deleted. Verified attempts are kept: `verified_results` hangs off them.
  * The client treats an attempt it cannot find after twelve hours as unranked,
  * so a deleted row reads the same as the label it already had.
+ *
+ * `skip locked`: a row another call holds is left for the next one, so two
+ * players submitting at once can never wait on each other here.
  */
-create or replace function play_private.prune_ranked(p_a uuid, p_b uuid)
+create or replace function play_private.prune_ranked()
 returns void language sql security definer set search_path = '' as $$
   update play_private.ranked_attempts
      set state = 'not_ranked', reason = 'Partner acknowledgement expired', replay = null
-   where user_a = p_a and user_b = p_b and state = 'waiting'
-     and created_at < now() - interval '12 hours';
+   where id in (select a.id from play_private.ranked_attempts a
+                 where a.state = 'waiting' and a.created_at < now() - interval '12 hours'
+                 order by a.created_at limit 50 for update skip locked);
   delete from play_private.ranked_attempts
-   where user_a = p_a and user_b = p_b and state = 'not_ranked'
-     and created_at < now() - interval '1 day';
+   where id in (select a.id from play_private.ranked_attempts a
+                 where a.state = 'not_ranked' and a.created_at < now() - interval '1 day'
+                 order by a.created_at limit 50 for update skip locked);
 $$;
-revoke all on function play_private.prune_ranked(uuid,uuid)
+revoke all on function play_private.prune_ranked()
   from public, anon, authenticated, fbwg_verifier;
 
 /**
- * Unchanged, except that a pair may hold at most 200 attempts still waiting
- * for both players. An honest pair registers one per run and completes or
- * abandons it; two hundred open in twelve hours is a script.
+ * Unchanged, except that an account may hold at most 200 attempts still
+ * waiting for both players, across all its friends. An honest pair registers
+ * one per run and completes or abandons it; two hundred open in twelve hours
+ * is a script.
  */
 create or replace function public.register_ranked_attempt(their_id uuid, p_connection uuid, p_run integer, p_mode text, p_level integer, p_engine text)
 returns uuid language plpgsql security definer set search_path = '' as $$
@@ -213,11 +317,10 @@ begin
   if p_mode not in ('adventure','puzzle','speed') or p_level < 1 or p_level > (case p_mode when 'adventure' then 17 when 'puzzle' then 9 else 6 end) then
     raise exception 'Invalid level' using errcode = '22023';
   end if;
-  perform play_private.prune_ranked(least(me,their_id), greatest(me,their_id));
+  perform play_private.prune_ranked();
   if not exists(select 1 from play_private.ranked_attempts where user_a = least(me,their_id) and user_b = greatest(me,their_id) and connection = p_connection and run = p_run)
      and (select count(*) from play_private.ranked_attempts
-           where user_a = least(me,their_id) and user_b = greatest(me,their_id)
-             and state = 'waiting') >= 200 then
+           where me in (user_a, user_b) and state = 'waiting') >= 200 then
     raise exception 'Please retry later' using errcode = '53400';
   end if;
   insert into play_private.ranked_attempts(user_a,user_b,connection,run,mode,level,engine,registered_a,registered_b)
@@ -230,11 +333,17 @@ begin
 end $$;
 
 /**
- * Unchanged, except that a pair may park replay bytes on at most eight
- * attempts that are still waiting for the other player. The honest case is
- * both players submitting within seconds of each other at the end of a run,
- * so a replay waits on one row, briefly. Eight MiB per pair is the ceiling on
- * bytes nobody has agreed to yet, instead of no ceiling.
+ * Unchanged, except for two ceilings, both per account across all its friends.
+ *
+ * At most eight attempts still waiting for the other player may hold replay
+ * bytes. The honest case is both players submitting within seconds of each
+ * other at the end of a run, so a replay waits on one row, briefly.
+ *
+ * At most four attempts queued for or under verification. Past that the
+ * attempt stays 'waiting' -- answered as such -- and the client's next
+ * ten-second retry queues it once one has finished. The queue holds replay
+ * bytes too, and without this a colluding pair moved their rows past every
+ * cap above simply by both submitting.
  */
 create or replace function public.submit_ranked_replay(p_attempt uuid, p_digest text, p_replay text default null)
 returns text language plpgsql security definer set search_path = '' as $$
@@ -242,6 +351,7 @@ declare row play_private.ranked_attempts; mine text;
 begin
   perform public.assert_allowed();
   perform play_private.spend('submit', 30);
+  perform play_private.prune_ranked();
   select * into row from play_private.ranked_attempts where id = p_attempt and auth.uid() in(user_a,user_b) for update;
   if row.id is null or not exists(select 1 from public.friendships where user_a = row.user_a and user_b = row.user_b and status = 'accepted') then raise exception 'Attempt unavailable' using errcode = '42501'; end if;
   if p_digest is null or p_digest !~ '^[0-9a-f]{64}$' or octet_length(p_replay) > 1048576 then raise exception 'Invalid replay submission' using errcode = '22023'; end if;
@@ -252,10 +362,9 @@ begin
     update play_private.ranked_attempts set state = 'not_ranked', reason = 'Submission expired', replay = null where id = row.id;
     return 'not_ranked';
   end if;
-  perform play_private.prune_ranked(row.user_a, row.user_b);
   if row.replay is null and p_replay is not null
      and (select count(*) from play_private.ranked_attempts
-           where user_a = row.user_a and user_b = row.user_b
+           where auth.uid() in (user_a, user_b)
              and state = 'waiting' and replay is not null) >= 8 then
     raise exception 'Please retry later' using errcode = '53400';
   end if;
@@ -269,6 +378,10 @@ begin
     return 'not_ranked';
   end if;
   if row.registered_a and row.registered_b and row.digest_a = row.digest_b and row.replay is not null then
+    if (select count(*) from play_private.ranked_attempts
+         where auth.uid() in (user_a, user_b) and state in ('queued','verifying')) >= 4 then
+      return 'waiting';
+    end if;
     update play_private.ranked_attempts set state = 'queued', queued_at = now() where id = row.id;
     return 'queued';
   end if;
@@ -284,7 +397,7 @@ grant execute on function public.register_ranked_attempt(uuid,uuid,integer,text,
  * Each eligible attempt is ranked within its own pair by age, plus however
  * many of the pair's attempts a verifier is already working on, and the queue
  * is served by that rank first and age second: every pair's first job goes
- * before any pair's second. A pair that queues fifty attempts now delays only
+ * before any pair's second. A pair that queues a backlog now delays only
  * itself. `FOR UPDATE` cannot share a statement with a window function, so the
  * order is computed first and the lock taken on each candidate in turn.
  */

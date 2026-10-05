@@ -187,14 +187,19 @@ $$;
 revoke all on function public.claim_username(text) from public, anon;
 grant execute on function public.claim_username(text) to authenticated;
 
--- (4). `schema_migrations` is the runner's ledger and always exists when this
--- runs; the guard is for applying the file by hand somewhere it does not.
+-- (4). The cut-off is when 0014 was applied, read from the runner's ledger.
+-- Without a ledger row -- the file applied by hand, or a renamed entry -- it
+-- falls back to the moment 0014 reached production (2026-09-04 16:21:15 UTC),
+-- rather than comparing against NULL and quietly deleting nothing.
 do $$
+declare
+  cutoff timestamptz := '2026-09-04 16:21:15.400267+00';
 begin
   if to_regclass('public.schema_migrations') is not null then
-    delete from public.mfa_recovery_codes c
-     where c.used_at is null
-       and c.created_at < (select m.applied_at from public.schema_migrations m
-                            where m.name = '0014_recovery_codes_aal2.sql');
+    select coalesce(max(m.applied_at), cutoff) into cutoff
+      from public.schema_migrations m
+     where m.name = '0014_recovery_codes_aal2.sql';
   end if;
+  delete from public.mfa_recovery_codes c
+   where c.used_at is null and c.created_at < cutoff;
 end $$;

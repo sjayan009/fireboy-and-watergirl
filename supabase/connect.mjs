@@ -37,9 +37,16 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 const CA = resolve(HERE, "certs/prod-ca-2021.crt");
 
+/**
+ * The environment the scripts run against: `.env.local`, or the file named by
+ * `FBWG_ENV_FILE` -- which is how the suites are pointed at a local
+ * `supabase start` stack without touching the file that holds production's
+ * keys.
+ */
 export function env() {
   const out = {};
-  for (const line of readFileSync(resolve(ROOT, ".env.local"), "utf8").split("\n")) {
+  const file = process.env.FBWG_ENV_FILE ?? resolve(ROOT, ".env.local");
+  for (const line of readFileSync(file, "utf8").split("\n")) {
     const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
     if (m) out[m[1]] = m[2].trim();
   }
@@ -91,6 +98,21 @@ function rootCertificate() {
 
 export async function open({ quiet = false } = {}) {
   const e = env();
+  // A local `supabase start` stack: plain TCP on the loopback interface, where
+  // there is no path for anybody to sit in. Refused for any other host, so
+  // this is not a way to turn verification off for a real database.
+  if (e.SUPABASE_DB_URL) {
+    const host = new URL(e.SUPABASE_DB_URL).hostname;
+    if (!["127.0.0.1", "localhost", "[::1]"].includes(host)) {
+      throw new Error("SUPABASE_DB_URL is only for a database on this machine");
+    }
+    const client = new pg.Client({
+      connectionString: e.SUPABASE_DB_URL, statement_timeout: 120000,
+    });
+    await client.connect();
+    if (!quiet) console.log("connected to the local stack");
+    return client;
+  }
   const ca = rootCertificate();
   let lastErr;
   for (const c of candidates(e)) {
