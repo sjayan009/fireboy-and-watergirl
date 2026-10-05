@@ -74,11 +74,10 @@ jobs:
           ids=$(gh api "repos/$GITHUB_REPOSITORY/deployments?sha=$EXPECTED_SHA&environment=Preview&per_page=30" --jq '.[].id')
           test -n "$ids"
           found=0
-          branch_alias='https://fireboy-and-watergirl-official-git-net-realti-34a877-local-lead.vercel.app'
           for id in $ids; do
             urls=$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=30" --jq '.[] | select(.state == "success") | .environment_url')
             while IFS= read -r url; do
-              if [ -n "$url" ] && { [ "$url" = "$PREVIEW_URL" ] || [ "$PREVIEW_URL" = "$branch_alias" ]; }; then
+              if [ -n "$url" ] && [ "$url" = "$PREVIEW_URL" ]; then
                 found=1
               fi
             done <<< "$urls"

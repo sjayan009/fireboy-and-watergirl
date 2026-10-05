@@ -445,7 +445,16 @@ async function proveCurrentPassword(current: string): Promise<void> {
     email, password: current,
   });
   if (error) throw new Error("that is not your current password");
-  await scratch.auth.signOut({ scope: "local" }).catch(() => {});
+  // `local` still revokes the scratch session on the server; it only spares
+  // this tab's. `signOut` reports failure in its result, not by throwing, so
+  // the result is what gets read -- and retried once, since a live session
+  // nobody holds is exactly what this was written to avoid leaving behind.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { error: out } = await scratch.auth.signOut({ scope: "local" })
+      .catch((e: Error) => ({ error: e }));
+    if (!out) return;
+    console.warn("could not end the password-check session:", out.message);
+  }
 }
 
 /**

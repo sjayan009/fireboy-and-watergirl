@@ -397,9 +397,14 @@ async function drawFactors(host: HTMLElement, value: HTMLElement): Promise<void>
         onclick: async () => {
           for (const f of enrolled) await unenrolTotp(f.id);
           // A password-only session parked at the code prompt somewhere else
-          // would otherwise be let in the moment the factor goes.
-          await signOutOtherDevices();
+          // would otherwise be let in the moment the factor goes. The database
+          // ends those itself (`20261006000000`); this also ends `aal2` ones.
+          const others = await signOutOtherDevices();
           await drawFactors(host, value);
+          if (!others) {
+            host.prepend(note("Two-factor is off, but other devices could not " +
+                              "be signed out. Sign out on them yourself."));
+          }
         },
       }, "Turn it off"));
     return;
