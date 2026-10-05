@@ -33,6 +33,5 @@ change was written, and the ledger only ever sees the name it lands under once.
 
 ## What is here
 
-| File | Waiting for |
-| --- | --- |
-| `20261005040000_username_probe_budget.sql` | The release whose `claimUsername` reads a NULL answer as "that username is taken" to be live. When it moves, flip `hardtest.mjs`'s `CLAIM_IS_METERED` to `true`. |
+Nothing. `20261005040000_username_probe_budget.sql` was the last file here; it
+moved into `migrations/` once the client that reads its answer was live.
