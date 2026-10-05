@@ -498,6 +498,15 @@ try {
     check("and the row says so with the form shut",
           await naming.locator(".settings-value").innerText(),
           `re${stamp % 100000}`);
+
+    // `#/password` sets a password without the old one, which is only right
+    // for a session that came from a reset link. This one signed in with a
+    // password, so it is sent to Settings instead.
+    console.log("\nthe reset-only password screen, from a tab that did not reset");
+    await page.evaluate(() => { location.hash = "/password"; });
+    await page.waitForSelector("text=did not arrive from one", { timeout: 15000 });
+    check("it offers no way to set a password without the old one",
+          await page.locator("input[type=password]").count(), 0);
     await page.close();
   }
 

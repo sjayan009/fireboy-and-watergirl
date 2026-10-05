@@ -30,7 +30,7 @@
  * So the two questions the boot sequence asks now have three answers each, and
  * the third one is a screen that says so and offers to try again.
  */
-import { supabase } from "./supabase.js";
+import { scratchClient, supabase } from "./supabase.js";
 import type { Session, User } from "@supabase/supabase-js";
 
 export interface Profile {
@@ -371,42 +371,153 @@ export async function sendPasswordReset(email: string): Promise<void> {
   fail(error);
 }
 
-export async function setPassword(password: string): Promise<void> {
-  const { error } = await supabase.auth.updateUser({ password });
+/**
+ * Supabase wants the emailed code before it will change this password.
+ *
+ * With "Secure password change" on, a session more than a day old has to send
+ * the nonce `sendReauthenticationCode` mails, even with the old password
+ * proved. The screen catches this and asks for the code rather than showing
+ * GoTrue's message.
+ */
+export class ReauthenticationNeeded extends Error {
+  constructor() {
+    super("For a session this old, Supabase needs the code we email you too.");
+  }
+}
+
+/**
+ * Set a new password, and end every other session on the account.
+ *
+ * `nonce` is the code `sendReauthenticationCode` mailed. Supabase checks it
+ * only with "Secure password change" on and only for a session over a day
+ * old; for anything younger it is the screen's proof, not the server's.
+ *
+ * The other sessions go because a password change is what somebody does when
+ * they think somebody else has it. Answers whether that worked, so the screen
+ * never claims it did when it did not.
+ */
+export async function setPassword(password: string,
+                                  nonce?: string): Promise<boolean> {
+  const { error } = await supabase.auth.updateUser(
+    nonce ? { password, nonce } : { password });
+  // Both codes measured against GoTrue v2.197 with the setting on.
+  const code = (error as { code?: string } | null)?.code;
+  if (code === "reauthentication_needed") throw new ReauthenticationNeeded();
+  if (code === "reauthentication_not_valid") {
+    throw new Error("That code is wrong or has expired. Ask for a new one.");
+  }
+  fail(error);
+  return signOutOtherDevices();
+}
+
+/** Mail a six-digit code that proves the person at the keyboard has the inbox. */
+export async function sendReauthenticationCode(): Promise<void> {
+  const { error } = await supabase.auth.reauthenticate();
   fail(error);
 }
 
 /**
- * Change the password of an account that is already signed in.
+ * Prove a password by USING it, on a client that is thrown away afterwards.
  *
- * The old password is checked by USING it, because Supabase does not ask for
- * one: `updateUser({ password })` will happily take a session's word for it.
- * That is fine for the emailed reset link, where the mail was the proof -- and
- * not fine here, where the proof would be a tab somebody left open.
+ * Supabase does not ask for the old password: `updateUser` will happily take a
+ * session's word for it. That is fine for the emailed reset link, where the
+ * mail was the proof -- and not fine for a signed-in change, where the proof
+ * would be a tab somebody left open.
+ *
+ * It used to sign in on the app's own client, which REPLACED this tab's
+ * session with the one the proof made -- for an account with a second factor,
+ * an `aal1` session in place of the `aal2` one, so the change that followed
+ * went out under a session Supabase refuses for exactly this. The scratch
+ * client keeps the proof out of the way, and its session is revoked at once
+ * rather than left alive on the server.
  */
-export async function changePassword(current: string,
-                                     next: string): Promise<void> {
+async function proveCurrentPassword(current: string): Promise<void> {
   const email = state.user?.email;
   if (!email) throw new Error("not signed in");
-  const { error: wrong } = await supabase.auth.signInWithPassword({
+  const scratch = scratchClient();
+  const { error } = await scratch.auth.signInWithPassword({
     email, password: current,
   });
-  if (wrong) throw new Error("that is not your current password");
-  await setPassword(next);
+  if (error) throw new Error("that is not your current password");
+  await scratch.auth.signOut({ scope: "local" }).catch(() => {});
+}
+
+/** Change the password of an account that is already signed in. */
+export async function changePassword(current: string, next: string,
+                                     nonce?: string): Promise<boolean> {
+  await proveCurrentPassword(current);
+  return setPassword(next, nonce);
 }
 
 /**
  * Ask to move the account to a different address.
  *
- * Nothing changes until the link is followed; Supabase mails the new address
- * and, depending on the project's settings, the old one as well. So this
- * returns having sent something, not having done something, and the screen has
- * to say so rather than reporting success.
+ * The address is where password resets go, so moving it moves the account.
+ * When the account has a password, it is proved first, the same way
+ * `changePassword` proves it. An account that only signs in with Google has
+ * none to prove; for it, and for any request made outside this screen, the
+ * guard is Supabase's "Secure email change", which makes the OLD address
+ * confirm as well.
+ *
+ * Nothing changes until the link is followed, so this returns having sent
+ * something, not having done something, and the screen has to say so rather
+ * than reporting success.
  */
-export async function changeEmail(email: string): Promise<void> {
+export async function changeEmail(email: string,
+                                  current: string | null): Promise<void> {
+  if (current !== null) await proveCurrentPassword(current);
   const { error } = await supabase.auth.updateUser(
     { email }, { emailRedirectTo: landing("email") });
   fail(error);
+}
+
+/**
+ * End every session on this account except this one, and say whether it did.
+ *
+ * Never throws: the change it follows has already happened, and failing to
+ * tidy up after it must not report the change itself as failed. But it
+ * answers, so the screen can say "other devices are still signed in" instead
+ * of a reassurance that is not true.
+ */
+export async function signOutOtherDevices(): Promise<boolean> {
+  try {
+    const { error } = await supabase.auth.signOut({ scope: "others" });
+    if (error) console.warn("could not sign out other sessions:", error.message);
+    return !error;
+  } catch (e) {
+    console.warn("could not sign out other sessions:", (e as Error).message);
+    return false;
+  }
+}
+
+/**
+ * Did this session come from an emailed link, a few minutes ago?
+ *
+ * `#/password` sets a new password without asking for the old one, which is
+ * right for somebody who just followed a reset link -- the mail was the proof
+ * -- and wrong for any other signed-in tab, which could simply navigate there.
+ * The session says how it was made: a password sign-in carries `amr` method
+ * `password`, Google carries `oauth`, and a link carries `otp` (measured
+ * against the live project) or, on some flows, `recovery`. The timestamp
+ * bounds it, so a reset session left open later does not stay a reset session.
+ */
+export function arrivedByResetLink(withinMs = 15 * 60 * 1000): boolean {
+  const token = state.session?.access_token;
+  if (!token) return false;
+  // A confirmation or address-change link also signs in with `otp`. Only a
+  // reset sets `recovery_sent_at`, so the reset has to be recent as well.
+  const asked = Date.parse(state.user?.recovery_sent_at ?? "");
+  if (!(Date.now() - asked < 60 * 60 * 1000)) return false;
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1]
+      .replace(/-/g, "+").replace(/_/g, "/")));
+    const amr = (payload.amr ?? []) as { method?: string; timestamp?: number }[];
+    return amr.some((m) => (m.method === "otp" || m.method === "recovery")
+      && typeof m.timestamp === "number"
+      && Date.now() - m.timestamp * 1000 < withinMs);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -447,6 +558,11 @@ export async function claimUsername(username: string): Promise<Profile> {
     new_username: username,
   });
   fail(error);
+  // A taken name is a raised error today, and becomes a row of nulls once
+  // `supabase/deferred/20261005040000_username_probe_budget.sql` is applied:
+  // a raise would roll back the attempt it had just been charged for. This
+  // release reads both, which is what lets that file move.
+  if (!data || !(data as Profile).id) throw new Error("that username is taken");
   const profile = data as Profile;
   publish({ ...state, profile, stage: "in" });
   return profile;
@@ -539,6 +655,9 @@ export async function redeemRecoveryCode(code: string): Promise<void> {
   // the screen that asked for it.
   const { data: fresh } = await supabase.auth.refreshSession();
   await refresh(fresh?.session ?? state.session);
+  // The database already ended them (`20261005010000`); this says so again
+  // from the client in case it is talking to a schema that has not.
+  await signOutOtherDevices();
 }
 
 export async function unenrolTotp(factorId: string): Promise<void> {

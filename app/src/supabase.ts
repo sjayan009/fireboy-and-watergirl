@@ -18,6 +18,27 @@ if (!__SUPABASE_URL__ || !__SUPABASE_KEY__) {
     ".env.local at the repo root, or set them in the deploy environment.");
 }
 
+/**
+ * A client that remembers nothing, for proving a password without becoming
+ * the session that proved it.
+ *
+ * Signing in on `supabase` itself would REPLACE the session in this tab -- and
+ * for an account with a second factor, replace an `aal2` session with an
+ * `aal1` one, dropping the person back to the code prompt halfway through a
+ * settings change. This one keeps its session in memory, never refreshes it,
+ * and is thrown away by whoever asked for it.
+ */
+export function scratchClient() {
+  return createClient(__SUPABASE_URL__, __SUPABASE_KEY__, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      storageKey: "fbwg-proof",
+    },
+  });
+}
+
 export const supabase = createClient(__SUPABASE_URL__, __SUPABASE_KEY__, {
   auth: {
     persistSession: true,

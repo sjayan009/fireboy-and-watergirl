@@ -351,16 +351,14 @@ def export_sounds(ffdec):
 
 
 def main():
+    # FFDEC_DIR only. This used to fall back to the first ffdec-cli.jar a glob
+    # found under $TEMP/claude, and $TEMP defaults to /tmp -- so on a shared
+    # POSIX machine any other user could plant the jar this runs, with the
+    # developer's access to .env.local and its database password.
     ffdec = None
-    for base in (os.environ.get("FFDEC_DIR"), ):
-        if base and os.path.isfile(os.path.join(base, "ffdec-cli.jar")):
-            ffdec = os.path.join(base, "ffdec-cli.jar")
-    if not ffdec:
-        import glob
-        hits = glob.glob(os.path.join(
-            os.environ.get("TEMP", "/tmp"), "claude", "*", "*", "scratchpad",
-            "ffdec", "ffdec-cli.jar"))
-        ffdec = hits[0] if hits else None
+    base = os.environ.get("FFDEC_DIR")
+    if base and os.path.isfile(os.path.join(base, "ffdec-cli.jar")):
+        ffdec = os.path.join(base, "ffdec-cli.jar")
     if not ffdec:
         sys.exit("ffdec-cli.jar not found; set FFDEC_DIR to the JPEXS folder")
     print("using %s" % ffdec)

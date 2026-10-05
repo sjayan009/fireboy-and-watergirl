@@ -16,6 +16,8 @@ try {
   await db.query("begin");
   await db.query(`
     create table if not exists auth.mfa_factors(id uuid primary key default gen_random_uuid(), user_id uuid, status text);
+    -- assurance_satisfied() asks whether the token's session still exists.
+    create table if not exists auth.sessions(id uuid primary key, user_id uuid);
     create or replace function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims',true),''),'{}')::jsonb $$;
     create table if not exists realtime.messages(id bigint, extension text, topic text, private boolean);
     alter table realtime.messages enable row level security;
@@ -24,22 +26,30 @@ try {
   `);
   const dir = new URL("../migrations/",import.meta.url);
   for (const file of readdirSync(dir).filter(f => f.endsWith(".sql")).sort()) {
-    const sql = readFileSync(new URL(file,dir),"utf8");
+    // A migration's own top-level `begin;`/`commit;` (20260911000000 has
+    // both) would COMMIT this fixture's outer transaction partway through --
+    // leaving the database half-migrated afterwards, and every later
+    // `set local` a no-op, so each call below ran as nobody at all.
+    const sql = readFileSync(new URL(file,dir),"utf8").replace(/^(begin|commit);$/gim, "");
     try { await db.query(sql); }
     catch (e) { console.error(file, sql.slice(Math.max(0,Number(e.position) - 100),Number(e.position) + 100)); throw e; }
   }
   console.log("All baseline and production-play migrations applied in a rollback transaction");
-  const ids = [randomUUID(),randomUUID(),randomUUID()].sort();
-  const [a,b,c] = ids;
+  const ids = [randomUUID(),randomUUID(),randomUUID(),randomUUID()].sort();
+  const [a,b,c,d] = ids;
+  const sessions = new Map();
   for (const [i,id] of ids.entries()) {
     await db.query("insert into auth.users(id,email) values($1,$2)",[id,`fixture${i}@example.test`]);
     await db.query("insert into public.profiles(id,username) values($1,$2)",[id,`fixture${i}`]);
+    const session = randomUUID();
+    sessions.set(id, session);
+    await db.query("insert into auth.sessions(id,user_id) values($1,$2)",[session,id]);
   }
   await db.query("insert into public.friendships(user_a,user_b,status,requested_by) values($1,$2,'accepted',$1),($1,$3,'accepted',$1)",[a,b,c]);
   await db.query("insert into play_private.engine_versions(version) values($1)",[ENGINE_VERSION]);
   const as = async (id,role="authenticated") => {
     await db.query("reset role");
-    await db.query("select set_config('request.jwt.claim.sub',$1,true),set_config('request.jwt.claims',$2,true)",[id,JSON.stringify({ sub:id,role,aal:"aal1" })]);
+    await db.query("select set_config('request.jwt.claim.sub',$1,true),set_config('request.jwt.claims',$2,true)",[id,JSON.stringify({ sub:id,role,aal:"aal1",session_id:sessions.get(id) })]);
     await db.query(`set local role ${role}`);
   };
   const denied = async (sql,args=[]) => {
@@ -56,6 +66,13 @@ try {
   const match = randomUUID(), digest = createHash("sha256").update(replay).digest("hex");
   await as(a);
   assert.equal((await db.query("select * from public.list_friends()")).rows.length,2);
+  await db.query("reset role");
+  await db.query("delete from auth.sessions where id=$1",[sessions.get(a)]);
+  await as(a);
+  assert.equal((await db.query("select * from public.list_friends()")).rows.length,0,"a token whose session is gone reaches nothing");
+  await db.query("reset role");
+  await db.query("insert into auth.sessions(id,user_id) values($1,$2)",[sessions.get(a),a]);
+  await as(a);
   const attempt = await register(b);
   assert.equal(await register(b),attempt,"registration is idempotent");
   await denied("select * from play_private.ranked_attempts");
@@ -122,19 +139,57 @@ try {
   await as(a); const revoked = await consent(b,false); assert.notEqual(revoked.topic,both.topic);
   await as(c); assert.equal((await db.query("select public.can_watch_pair_topic($1) ok",[both.topic])).rows[0].ok,false);
   /*
-   * The shape the PREVIOUS release publishes to, which this migration has to
-   * go on answering. `deployed` applies migrations before it waits for Vercel,
-   * so that client is briefly talking to this schema; if these four answers
-   * change, spectating breaks at the moment of every deploy. The contract
-   * migration in `supabase/deferred/` is what finally turns the first three
-   * false, and it runs a release later.
+   * The derived `watch:<lo>:<hi>` shape is gone: `20260906000000_watch_topic_contract`
+   * moved out of `deferred/` and removed it. Naming two user ids reaches
+   * nothing any more, for a player or a friend of one.
    */
   const derived = (x,y) => `watch:${x}:${y}`;
   const may = async (fn,topic) => (await db.query(`select public.${fn}($1) ok`,[topic])).rows[0].ok;
-  await as(a); assert.equal(await may("can_feed_watch_topic",derived(a,b)),true,"a player still feeds the derived topic");
-  await as(c); assert.equal(await may("can_watch_pair_topic",derived(a,b)),true,"a friend of a player still watches it");
-  assert.equal(await may("can_feed_watch_topic",derived(a,b)),false,"but a watcher still cannot feed it");
-  assert.equal(await may("can_watch_pair_topic",derived(b,c)),false,"and a pair that is not a friendship names nothing");
+  await as(a); assert.equal(await may("can_feed_watch_topic",derived(a,b)),false,"a player cannot feed a derived topic");
+  await as(c); assert.equal(await may("can_watch_pair_topic",derived(a,b)),false,"nor can a friend of one watch it");
+  assert.equal(await may("can_watch_pair_topic","watch:not-a-uuid:x"),false,"a malformed topic is simply false");
+
+  /*
+   * A friendship ending rotates only the feeds it actually cut off. c is a
+   * friend of a; d is a friend of a AND of b. When a blocks c, c's way into
+   * a's match with b is gone and the feed must change. When a then blocks d,
+   * d can still watch through b, so the feed stays put rather than cutting off
+   * every other spectator for nothing.
+   */
+  await db.query("reset role");
+  await db.query("insert into public.friendships(user_a,user_b,status,requested_by) values($1,$2,'accepted',$1),($3,$2,'accepted',$3)",[a,d,b]);
+  await as(a); await consent(b,true);
+  await as(b); const watched = await consent(a,true); assert.equal(watched.shared,true);
+  await as(c); assert.equal(await may("can_watch_pair_topic",watched.topic),true,"c watches through a");
+  await as(a); await db.query("select public.block_friend($1)",[c]);
+  await as(c); assert.equal(await may("can_watch_pair_topic",watched.topic),false,"a blocks c: c's old feed is dead");
+  await as(a); const rotated = (await db.query("select * from public.match_watch_state($1)",[match])).rows[0];
+  assert.notEqual(rotated.topic,watched.topic,"and a's game has a new feed");
+  assert.equal(rotated.shared,true,"without either player losing consent");
+  await db.query("select public.block_friend($1)",[d]);
+  const kept = (await db.query("select * from public.match_watch_state($1)",[match])).rows[0];
+  assert.equal(kept.topic,rotated.topic,"blocking d, who still watches through b, rotates nothing");
+  await as(d); assert.equal(await may("can_watch_pair_topic",kept.topic),true,"and d still watches through b");
+  await as(a);
+  assert.equal((await db.query("select (public.unblock_friend($1)).status s",[c])).rows[0].s,"accepted");
+  assert.equal((await db.query("select (public.unblock_friend($1)).status s",[d])).rows[0].s,"accepted");
+
+  /*
+   * The verifier queue holds replay bytes, so an account may have only four
+   * attempts queued or verifying. A fifth both players have acknowledged stays
+   * 'waiting' until one finishes.
+   */
+  await db.query("reset role");
+  await db.query(`insert into play_private.ranked_attempts(user_a,user_b,connection,run,mode,level,engine,registered_a,registered_b,digest_a,digest_b,replay,state,queued_at)
+                  select $1,$2,gen_random_uuid(),1,'speed',3,$3,true,true,$4,$4,'r','queued',now() from generate_series(1,4)`,[a,b,ENGINE_VERSION,digest]);
+  await as(a); const fifth = await register(b,9);
+  assert.equal(await submit(fifth,digest,replay),"waiting");
+  await as(b); await register(a,9);
+  assert.equal(await submit(fifth,digest),"waiting","the fifth waits for room in the queue");
+  await db.query("reset role");
+  await db.query("update play_private.ranked_attempts set state='not_ranked' where state='queued' and id<>$1",[fifth]);
+  await as(b);
+  assert.equal(await submit(fifth,digest),"queued","and is queued once there is some");
   await as(a); await consent(b,true);
   await db.query("select public.block_friend($1)",[b]);
   await denied("select public.register_ranked_attempt($1,$2,3,'adventure',1,$3)",[b,match,ENGINE_VERSION]);

@@ -10,7 +10,8 @@
 import {
   auth, changeEmail, changePassword, claimUsername, deleteAccount, enrolTotp,
   generateRecoveryCodes, hasPassword, listFactors, recoveryCodesLeft,
-  setPassword, unenrolTotp, verifyTotp,
+  ReauthenticationNeeded, sendReauthenticationCode, setPassword,
+  signOutOtherDevices, unenrolTotp, verifyTotp,
 } from "../auth.js";
 import { supabase } from "../supabase.js";
 import { card, el, field, form, inputOf, note, on } from "../ui/dom.js";
@@ -61,6 +62,7 @@ export function settingsScreen(host: HTMLElement): void {
   const boardValue = el("span", { class: "settings-value" }, "Checking…");
   const passwordValue = el("span", { class: "settings-value" }, "Checking…");
   const password = el("div", {}, note("Checking…"));
+  const email = el("div", {}, note("Checking…"));
 
   host.append(card("Settings",
     el("div", { class: "settings-list" },
@@ -83,7 +85,7 @@ export function settingsScreen(host: HTMLElement): void {
           },
         })),
       group("Password", passwordValue, password),
-      group("Email", auth().user?.email ?? "Not set", emailSection()),
+      group("Email", auth().user?.email ?? "Not set", email),
       group("Two-factor", twoFactorValue, factors),
       group("Leaderboard", boardValue, boardSection(boardValue)),
       group("Game display", "On this device", presentationSection()),
@@ -92,7 +94,7 @@ export function settingsScreen(host: HTMLElement): void {
       el("a", { href: "#/play" }, "Back to the game"))));
 
   void drawFactors(factors, twoFactorValue);
-  void drawPassword(password, passwordValue);
+  void drawPassword(password, passwordValue, email);
 }
 
 function presentationSection(): HTMLElement {
@@ -121,10 +123,14 @@ function presentationSection(): HTMLElement {
  * produces either a form nobody can satisfy or one that sets a password without
  * asking for anything.
  */
-async function drawPassword(host: HTMLElement, value: HTMLElement): Promise<void> {
+async function drawPassword(host: HTMLElement, value: HTMLElement,
+                            email: HTMLElement): Promise<void> {
   const has = await hasPassword();
   value.textContent = has ? "Change it" : "Set a password";
   host.replaceChildren(passwordSection(has, value));
+  // The address row asks the same question -- prove the password, if there
+  // is one -- so it waits for the same answer.
+  email.replaceChildren(emailSection(has));
 }
 
 /**
@@ -186,52 +192,97 @@ function boardSection(value: HTMLElement): HTMLElement {
 }
 
 /**
- * Change the password, proving the old one on the way through -- unless there
- * is no old one.
+ * Change the password, proving the old one on the way through -- or, when
+ * there is no old one, proving the inbox instead.
  *
- * An account that arrived through Google has no password at all, and the proof
- * `changePassword` uses is signing in with the current one. So the row as
- * written asked such a person for a password that does not exist and rejected
- * every answer, including the right one, which there was none of. There is no
- * way forward from that screen.
- *
- * With no password enrolled the proof is dropped, and it is dropped safely for
- * the mirror image of the reason it exists: `changePassword`'s comment says a
- * bare `updateUser` would let a tab somebody left open replace a password they
- * knew. Here there is no password to replace and nothing to take over -- the
- * account is reached by Google, which this form cannot touch.
+ * An account that arrived through Google has no password, so the proof
+ * `changePassword` uses -- signing in with the current one -- is not
+ * available. That row used to drop the proof altogether, on the argument that
+ * there was no password to take over. But setting one ADDS a way in that
+ * outlives the session, so a tab somebody left open could give them a
+ * permanent key to the account. So it asks for the code Supabase mails to the
+ * account's address (`reauthenticate`) and sends it with the new password as
+ * the nonce, which Supabase checks once "Secure password change" is on.
  */
 function passwordSection(has: boolean, value: HTMLElement): HTMLElement {
   const current = field("Current password", {
     type: "password", required: true, autocomplete: "current-password",
   });
+  const code = field("Code from the email", {
+    inputmode: "numeric", pattern: "[0-9]{6}", required: true,
+    autocomplete: "one-time-code",
+  });
   const next = field(has ? "New password" : "Password", {
     type: "password", required: true, minlength: 8,
     autocomplete: "new-password",
   });
-  const done = note(has ? "Changed." : "Set. You can now sign in either way.");
+  const done = note("");
   done.hidden = true;
+  const mailed = note(`Sent to ${auth().user?.email ?? "your address"}.`);
+  mailed.hidden = true;
+  const ask = el("button", { type: "button", class: "ghost small",
+    onclick: async (e: Event) => {
+      const button = e.currentTarget as HTMLButtonElement;
+      button.disabled = true;
+      try {
+        await sendReauthenticationCode();
+        mailed.textContent = `Sent to ${auth().user?.email ?? "your address"}.`;
+      } catch (err) {
+        mailed.textContent = (err as Error).message;
+      } finally {
+        mailed.hidden = false;
+        button.disabled = false;
+      }
+    } }, "Email me a code");
+  // The same button and code field, for a password holder Supabase has asked
+  // to reauthenticate. Built once, shown only when needed.
+  const codeRow = el("div", { hidden: true },
+    note("Supabase wants a code from your email as well, because this session " +
+         "is more than a day old."),
+    el("p", { class: "note" }, ask), mailed, code);
+  // A required field the browser cannot show blocks the whole form.
+  if (has) inputOf(code).required = false;
 
   return el("div", {},
     has ? null : note("You signed in with Google, so this account has no " +
                       "password. Setting one ADDS a second way in; Google " +
-                      "keeps working either way."),
+                      "keeps working either way. To prove it is you, we " +
+                      "email a code to your address first."),
     form({
       submit: has ? "Change password" : "Set password",
-      children: [has ? current : null, next, done],
+      // A password holder is asked for the code only if Supabase asks for it
+      // (`ReauthenticationNeeded`): a session over a day old, once "Secure
+      // password change" is on. Until then the code row stays out of the way.
+      children: has ? [current, codeRow, next, done]
+                    : [el("p", { class: "note" }, ask), mailed, code, next, done],
       onSubmit: async () => {
         done.hidden = true;
-        if (has) await changePassword(inputOf(current).value, inputOf(next).value);
-        else await setPassword(inputOf(next).value);
+        const nonce = inputOf(code).value.trim() || undefined;
+        let others: boolean;
+        try {
+          others = has
+            ? await changePassword(inputOf(current).value, inputOf(next).value, nonce)
+            : await setPassword(inputOf(next).value, nonce);
+        } catch (e) {
+          if (e instanceof ReauthenticationNeeded) {
+            codeRow.hidden = false;
+            inputOf(code).required = true;
+          }
+          throw e;
+        }
+        done.textContent = (has ? "Changed." : "Set. You can now sign in either way.") +
+          (others ? " Every other device was signed out."
+                  : " Other devices could not be signed out -- sign out on them, " +
+                    "or change it again to retry.");
         inputOf(current).value = "";
+        inputOf(code).value = "";
         inputOf(next).value = "";
+        mailed.hidden = true;
         done.hidden = false;
         // The row said "Set a password" and no longer should. Only the summary
         // is corrected, not the whole section: rebuilding it would replace the
         // form and take the confirmation above with it, which is the mistake
-        // the username row documents. The form goes on offering to set a
-        // password, which for the rest of this visit is a harmless thing to
-        // offer -- `setPassword` simply writes another one.
+        // the username row documents.
         value.textContent = "Change it";
       },
     }));
@@ -240,13 +291,21 @@ function passwordSection(has: boolean, value: HTMLElement): HTMLElement {
 /**
  * Move the account to another address.
  *
+ * The address is where password resets go, so this is the account changing
+ * hands as far as recovery is concerned: an account with a password proves it
+ * first. One without -- Google only -- relies on Supabase's "Secure email
+ * change", which makes the old address confirm too.
+ *
  * Says "check your email", not "done", because nothing has changed yet: the
  * link in the message is the thing that changes it, and reporting success here
  * would have somebody sign out believing an address they cannot yet sign in
  * with.
  */
-function emailSection(): HTMLElement {
+function emailSection(has: boolean): HTMLElement {
   const current = auth().user?.email ?? "";
+  const password = field("Current password", {
+    type: "password", required: true, autocomplete: "current-password",
+  });
   const next = field("New email", {
     type: "email", required: true, autocomplete: "email",
   });
@@ -258,10 +317,12 @@ function emailSection(): HTMLElement {
     note("Signed in as ", el("code", {}, current), "."),
     form({
       submit: "Send the confirmation",
-      children: [next, sent],
+      children: has ? [password, next, sent] : [next, sent],
       onSubmit: async () => {
         sent.hidden = true;
-        await changeEmail(inputOf(next).value.trim());
+        await changeEmail(inputOf(next).value.trim(),
+                          has ? inputOf(password).value : null);
+        inputOf(password).value = "";
         sent.hidden = false;
       },
     }));
@@ -327,13 +388,17 @@ async function drawFactors(host: HTMLElement, value: HTMLElement): Promise<void>
     const codes = el("div", { class: "codes" });
     host.replaceChildren(
       note("An authenticator app is enrolled. You will be asked for a code " +
-           "every time you sign in."),
+           "every time you sign in. Turning it off signs out your other " +
+           "devices."),
       recoverySection(codes),
       codes,
       el("button", {
         class: "ghost",
         onclick: async () => {
           for (const f of enrolled) await unenrolTotp(f.id);
+          // A password-only session parked at the code prompt somewhere else
+          // would otherwise be let in the moment the factor goes.
+          await signOutOtherDevices();
           await drawFactors(host, value);
         },
       }, "Turn it off"));

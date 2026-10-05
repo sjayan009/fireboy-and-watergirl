@@ -175,7 +175,10 @@ try {
   const taken = await rpc(mallory, "claim_username", {
     new_username: an.toUpperCase(),
   });
-  check("the same name in different case is refused", taken.status >= 400, true);
+  // A 409 today; a row of nulls once the claim is metered (see
+  // `supabase/deferred/20261005040000_username_probe_budget.sql`).
+  check("the same name in different case is refused",
+        taken.status >= 400 || taken.body?.id == null, true);
 
   const bad = await rpc(mallory, "claim_username", {
     new_username: "no",
@@ -576,8 +579,20 @@ try {
     const cast = await rpc(alice, "block_friend", { their_id: bob.id });
     check("alice can block bob", cast.status < 400, true);
 
+    // Being blocked must read exactly like the blocker not existing -- that is
+    // why `request_friend` answers a blocked pair with nulls -- so none of the
+    // three reads that used to say otherwise may say it now.
     const row = await api(bob, `/friendships?select=status,blocked_by`);
-    check("bob can see he is blocked", row.body?.[0]?.status, "blocked");
+    check("bob cannot see the block in the table", row.body?.length, 0);
+    const listed = await rpc(bob, "list_friends", {});
+    check("nor in his friends list",
+          (listed.body ?? []).filter((f) => f.id === alice.id).length, 0);
+    check("nor read alice's profile any more",
+          (await api(bob, `/profiles?id=eq.${alice.id}&select=username`)).body?.length,
+          0);
+    check("while alice still sees the block she has to be able to lift",
+          (await rpc(alice, "list_friends", {})).body
+            ?.find((f) => f.id === bob.id)?.blockedByMe, true);
 
     const lift = await rpc(bob, "unblock_friend", { their_id: alice.id });
     check("but he cannot lift it", lift.status >= 400, true);
@@ -628,6 +643,33 @@ try {
           ["accepted", null]);
     check("with every level they finished still there",
           (await api(bob, "/pair_progress?select=node")).body?.length, 5);
+  }
+
+  console.log("\na request cannot be blocked into a friendship");
+  {
+    // request, block, unblock: three calls by ONE person used to end at
+    // 'accepted', because block took a pending row and unblock restores
+    // whatever it lifts to 'accepted'. Only a friendship can be blocked now.
+    const pusher = await makeUser("pusher");
+    const target = await makeUser("target");
+    const pn = `psh${stamp % 100000}`;
+    const tn = `tgt${stamp % 100000}`;
+    await rpc(pusher, "claim_username", { new_username: pn });
+    await rpc(target, "claim_username", { new_username: tn });
+    const sent = await rpc(pusher, "request_friend", { their_username: tn });
+    check("the request is pending", sent.body?.status, "pending");
+    check("its sender cannot block it",
+          (await rpc(pusher, "block_friend", { their_id: target.id })).status >= 400,
+          true);
+    check("so there is nothing to unblock",
+          (await rpc(pusher, "unblock_friend", { their_id: target.id })).status >= 400,
+          true);
+    check("nor can its recipient block it -- a request is declined",
+          (await rpc(target, "block_friend", { their_id: pusher.id })).status >= 400,
+          true);
+    check("and it is still only a request",
+          (await api(target, "/friendships?select=status")).body?.[0]?.status,
+          "pending");
   }
 
   console.log("\nan account can delete itself, and only itself");
