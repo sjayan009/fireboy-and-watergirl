@@ -219,6 +219,11 @@ export function passwordScreen(host: HTMLElement): void {
         if (inputOf(pw).value !== inputOf(again).value) {
           throw new Error("Those two passwords are not the same.");
         }
+        // Asked again at submit, not only at render: a reset tab left open
+        // past the window is no longer a reset tab.
+        if (!arrivedByResetLink()) {
+          throw new Error("This reset link is too old now. Ask for a new one.");
+        }
         // Every other session ends with the reset. If that part failed the
         // password is still changed, and staying on this screen to say so
         // would only hold up somebody who got what they came for.
