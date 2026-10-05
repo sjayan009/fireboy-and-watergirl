@@ -22,7 +22,7 @@
  * that, and said so. Adoption is not verification -- nothing can retroactively
  * prove what those files contained when they ran -- it is the point from which
  * drift becomes detectable. Every such row has been adopted now, so a row with
- * no checksum is adopted only with `--adopt`: otherwise anything able to write
+ * no checksum is adopted only when named with `--adopt=<file>`: otherwise anything able to write
  * one could make a pending migration be skipped for ever.
  *
  * The second is concurrency. The runner read the completed set once and then
@@ -51,8 +51,13 @@ const LOCK_KEY = 728_401_553;
 
 const sha = (s) => createHash("sha256").update(s).digest("hex");
 
-/** `--adopt`: accept ledger rows that have no checksum as applied. */
-const ADOPT = process.argv.includes("--adopt");
+/**
+ * `--adopt=<file>`: accept that one ledger row with no checksum as applied.
+ * Named per file, so clearing one checksum cannot wave through another.
+ */
+const ADOPT = new Set(process.argv
+  .filter((a) => a.startsWith("--adopt="))
+  .map((a) => a.slice("--adopt=".length)));
 
 const client = await open();
 let locked = false;
@@ -104,7 +109,7 @@ try {
         // has been; a row like that now is either a hand edit or somebody
         // writing to the ledger, so it stops the run unless an operator says
         // otherwise.
-        if (!ADOPT) {
+        if (!ADOPT.has(f)) {
           // Stop here rather than carry on: the files after this one were
           // written assuming this one ran, and nothing says it did.
           console.error(`  NULL  ${f} has a ledger row with no checksum`);
@@ -121,6 +126,9 @@ try {
         console.error(`        applied ${recorded}`);
         console.error(`        on disk ${digest}`);
         drifted.push(f);
+        // Stop for the same reason as a missing checksum: what ran is not
+        // what the later files were written against.
+        break;
       } else {
         console.log(`  skip  ${f}`);
       }
@@ -149,7 +157,7 @@ try {
       `\n${unadopted.length} ledger row(s) have no checksum: ` +
       `${unadopted.join(", ")}.\nNothing ran them under this runner, so they ` +
       "are not adopted automatically. If you cleared the checksum yourself " +
-      "after a cosmetic edit, run `npm run db:migrate -- --adopt`.");
+      "after a cosmetic edit, run `npm run db:migrate -- --adopt=<file>`.");
     process.exitCode = 1;
   }
   if (drifted.length > 0) {
@@ -158,7 +166,7 @@ try {
       `ran: ${drifted.join(", ")}.\nAn applied migration is history and cannot ` +
       "be rewritten -- put the change in a new file. If the edit is known to " +
       "be cosmetic, clear the recorded checksum for that row by hand and run " +
-      "`npm run db:migrate -- --adopt`.");
+      "`npm run db:migrate -- --adopt=<file>`.");
     process.exitCode = 1;
   } else if (process.exitCode !== 1) {
     console.log(`\n${ran} applied, ${files.length - ran} already there` +

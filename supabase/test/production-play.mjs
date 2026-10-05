@@ -195,5 +195,113 @@ try {
   await denied("select public.register_ranked_attempt($1,$2,3,'adventure',1,$3)",[b,match,ENGINE_VERSION]);
   await db.query("reset role");
   assert.equal((await db.query("select consent_a or consent_b as consent from play_private.match_sharing where id=$1",[match])).rows[0].consent,false);
+
+  /*
+   * What the second fix check found untested (2026-10-05). Each block names
+   * its finding. State on entry: a blocked b; a-c, a-d and b-d are friends.
+   */
+  const refused = async (code,sql,args=[]) => {
+    await db.query("savepoint coded_fixture");
+    let got = null;
+    try { await db.query(sql,args); } catch (e) { got = e.code; }
+    await db.query("rollback to coded_fixture");
+    assert.equal(got,code,`expected ${code}: ${sql}`);
+  };
+  const consentTo = async (m,peer,on) => (await db.query("select * from public.match_consent($1,$2,$3)",[m,peer,on])).rows[0];
+  const kill = async (id) => { await db.query("reset role"); await db.query("delete from auth.sessions where id=$1",[sessions.get(id)]); };
+  const revive = async (id) => { await db.query("reset role"); await db.query("insert into auth.sessions(id,user_id) values($1,$2)",[sessions.get(id),id]); };
+  const onTopic = (t) => db.query("select set_config('realtime.topic',$1,true)",[t]);
+  await db.query("reset role");
+  await db.query("delete from play_private.budgets where action <> 'unblock'");
+
+  // F2: the Realtime policies, not only the functions, refuse a dead session.
+  const m2 = randomUUID();
+  await as(a); await consentTo(m2,c,true);
+  await as(c); const live = await consentTo(m2,a,true); assert.equal(live.shared,true);
+  const post = "insert into realtime.messages(topic,extension,private) values($1,'broadcast',true)";
+  const seen = "select count(*)::int n from realtime.messages where topic=$1";
+  await as(a); await onTopic(live.topic);
+  await db.query(post,[live.topic]);
+  await kill(a); await as(a); await onTopic(live.topic);
+  await refused("42501",post,[live.topic]);
+  await revive(a);
+  await as(d); await onTopic(live.topic);
+  assert.equal((await db.query(seen,[live.topic])).rows[0].n,1,"d reads the feed through a");
+  await kill(d); await as(d); await onTopic(live.topic);
+  assert.equal((await db.query(seen,[live.topic])).rows[0].n,0,"and nothing once d's session is gone");
+  await revive(d);
+
+  // E4: a friendship DELETED rotates too, and an expired row comes back with
+  // the new feed rather than the one the ex-friend joined.
+  await db.query("update play_private.match_sharing set expires_at=now()-interval '10 seconds' where id=$1",[m2]);
+  await db.query("delete from public.friendships where user_a=$1 and user_b=$2",[a,d]);
+  await as(a); const back = (await db.query("select * from public.match_watch_state($1)",[m2])).rows[0];
+  assert.notEqual(back.topic,live.topic,"the revived match has a new feed");
+  assert.equal(back.shared,true,"with consent intact");
+  await as(d); assert.equal(await may("can_watch_pair_topic",back.topic),false,"d, no longer a's friend, cannot watch it");
+
+  // E4: eight live matches per account. m2 is one.
+  await as(a);
+  for (let i = 0; i < 7; i++) await consentTo(randomUUID(),c,true);
+  await refused("53400","select * from public.match_consent($1,$2,true)",[randomUUID(),c]);
+  await db.query("reset role");
+  await db.query("delete from play_private.budgets where action <> 'unblock'");
+
+  // D1: a row queued for a day is released by the next writer's clean-up.
+  const stuck = (await db.query(`insert into play_private.ranked_attempts(user_a,user_b,connection,run,mode,level,engine,registered_a,registered_b,digest_a,digest_b,replay,state,queued_at)
+                  values($1,$2,gen_random_uuid(),1,'speed',3,$3,true,true,$4,$4,'r','queued',now()-interval '2 days') returning id`,[a,c,ENGINE_VERSION,digest])).rows[0].id;
+  await as(a); await register(c,20);
+  await db.query("reset role");
+  const released = (await db.query("select state, replay from play_private.ranked_attempts where id=$1",[stuck])).rows[0];
+  assert.deepEqual(released,{ state:"not_ranked", replay:null },"a stuck queue row is ended and its replay released");
+
+  // D7: two hundred waiting attempts per account.
+  await db.query(`insert into play_private.ranked_attempts(user_a,user_b,connection,run,mode,level,engine)
+                  select $1,$2,gen_random_uuid(),1,'speed',3,$3 from generate_series(1,200)`,[a,c,ENGINE_VERSION]);
+  await as(a); await refused("53400","select public.register_ranked_attempt($1,$2,21,'speed',3,$3)",[c,randomUUID(),ENGINE_VERSION]);
+  await db.query("reset role");
+  await db.query("delete from play_private.ranked_attempts where run=1 and state='waiting' and user_a=$1 and user_b=$2",[a,c]);
+
+  // D7: eight waiting attempts holding replay bytes per account.
+  await db.query(`insert into play_private.ranked_attempts(user_a,user_b,connection,run,mode,level,engine,replay)
+                  select $1,$2,gen_random_uuid(),1,'speed',3,$3,'r' from generate_series(1,8)`,[a,c,ENGINE_VERSION]);
+  await as(a); const ninth = await register(c,22);
+  await refused("53400","select public.submit_ranked_replay($1,$2,$3)",[ninth,digest,replay]);
+  await db.query("reset role");
+  await db.query("delete from play_private.ranked_attempts where run=1 and state='waiting' and user_a=$1 and user_b=$2",[a,c]);
+
+  // F1: a verified factor going takes the account's aal1 sessions with it --
+  // not aal2 ones, and not the token's own.
+  const [s1,s2] = [randomUUID(),randomUUID()];
+  await db.query("insert into auth.sessions(id,user_id,aal) values($1,$3,'aal1'),($2,$3,'aal2')",[s1,s2,c]);
+  const factor = (await db.query(`insert into auth.mfa_factors(id,user_id,factor_type,status,created_at,updated_at)
+                  values(gen_random_uuid(),$1,'totp','verified',now(),now()) returning id`,[c])).rows[0].id;
+  await as(c); await db.query("reset role");
+  await db.query("delete from auth.mfa_factors where id=$1",[factor]);
+  const left = (await db.query("select id from auth.sessions where user_id=$1",[c])).rows.map(r => r.id).sort();
+  assert.deepEqual(left,[sessions.get(c),s2].sort(),"the parked aal1 session is gone; aal2 and the caller's own stay");
+
+  // F5: a token naming no session cannot redeem, so cannot end every session.
+  await as(c);
+  await db.query("select set_config('request.jwt.claims',$1,true)",[JSON.stringify({ sub:c,role:"authenticated",aal:"aal1" })]);
+  await refused("42501","select public.redeem_recovery_code('nothing')");
+
+  // F4: an anonymous token reaches nothing, and claim_username wants a
+  // confirmed, non-anonymous user. The fixture users start unconfirmed.
+  await as(c);
+  await db.query("select set_config('request.jwt.claims',$1,true)",[JSON.stringify({ sub:c,role:"authenticated",aal:"aal1",session_id:sessions.get(c),is_anonymous:true })]);
+  assert.equal((await db.query("select * from public.list_friends()")).rows.length,0,"an anonymous token reaches nothing");
+  await as(c); await refused("42501","select public.claim_username('fresh_name')");
+  await db.query("reset role"); await db.query("update auth.users set email_confirmed_at=now(), is_anonymous=true where id=$1",[c]);
+  await as(c); await refused("42501","select public.claim_username('fresh_name')");
+  await db.query("reset role"); await db.query("update auth.users set is_anonymous=false where id=$1",[c]);
+  await as(c); assert.equal((await db.query("select (public.claim_username('fresh_name')).username u")).rows[0].u,"fresh_name");
+
+  // E4: three unblocks an hour. a lifted two above.
+  await as(a);
+  await db.query("select public.block_friend($1)",[c]);
+  await db.query("select public.unblock_friend($1)",[c]);
+  await db.query("select public.block_friend($1)",[c]);
+  await refused("53400","select public.unblock_friend($1)",[c]);
   console.log("PASS: account/pair authorization, immutable acknowledgements, duplicate claims, leased completion, verified-only scores, independent spectator consent and revocation");
 } finally { await db.query("rollback"); await db.end(); }
