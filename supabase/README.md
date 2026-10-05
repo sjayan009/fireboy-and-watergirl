@@ -91,9 +91,10 @@ client that had stopped using it was live. Until it ran, a feed could be reached
 by naming two user ids rather than by holding a consent the players can
 withdraw.
 
-`deferred/` is empty as of that migration. That is the state to expect: a file
-sitting there is a contraction still waiting on a release, not a place things
-accumulate.
+`deferred/` was empty after that migration, and holds one file again now:
+`20261005040000_username_probe_budget.sql`, the metered `claim_username`, waiting
+on the client that understands its answer. A file sitting there is a
+contraction still waiting on a release, not a place things accumulate.
 
 ## The schema
 
@@ -131,6 +132,14 @@ the code prompt in `auth.ts` guarded the SPA and nothing underneath it.
 only for an account with no verified factor. `redeem_recovery_code` is the one
 deliberate exception, because the person using one cannot reach `aal2` by
 definition.
+
+Since `20261005010000` the session also has to **still exist**: the token's
+`session_id` must name a live row in `auth.sessions`. A JWT outlives its session
+by up to an hour otherwise, so signing out everywhere, redeeming a recovery code
+(which now ends every other session) and Supabase's own time-boxes would not
+reach the database until the token expired. An anonymous token is refused, and
+`claim_username` requires a confirmed address, so the profile gate means what
+`open_the_gate` said it meant.
 
 **An account with no profile is inert.** `0004` said so and `profiles_read` was
 `using (true)`, so an account that had signed up and gone no further could list
@@ -194,7 +203,7 @@ users, so they can run against the live project repeatedly.
 
 | | |
 |---|---|
-| `rlstest.mjs` | the policies, including a no-profile caller, a forged accepted friendship, direct `pair_progress` verbs by a MEMBER, and a leaderboard fed impossible times |
-| `mfatest.mjs` | a real TOTP factor, enrolled and answered, then every table verb and every RPC tried with the `aal1` token and again with the `aal2` one |
-| `hardtest.mjs` | races: two people for one name, two for the last use of a code, sixteen requests from one person, and sixty out-of-order progress writes |
+| `rlstest.mjs` | the policies, including a no-profile caller, a forged accepted friendship (by PATCH, and by blocking your own request), a block the blocked party cannot see, direct `pair_progress` verbs by a MEMBER, and a leaderboard fed impossible times |
+| `mfatest.mjs` | a real TOTP factor, enrolled and answered, then every table verb, every RPC and GoTrue's own email and password change tried with the `aal1` token and again with the `aal2` one; and a recovery that ends every other session |
+| `hardtest.mjs` | races: two people for one name, two for the last use of a code, sixteen requests from one person, and sixty out-of-order progress writes; the migration ledger and the username column, closed to the API |
 | `realtimetest.mjs` | the two topics, from a third account that is refused and a fourth that is admitted |

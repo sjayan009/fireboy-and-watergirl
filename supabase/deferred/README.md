@@ -35,4 +35,4 @@ change was written, and the ledger only ever sees the name it lands under once.
 
 | File | Waiting for |
 | --- | --- |
-| `20260906000000_watch_topic_contract.sql` | The release that stops using `watch:<lo>:<hi>` to be live |
+| `20261005040000_username_probe_budget.sql` | The release whose `claimUsername` reads a NULL answer as "that username is taken" to be live. When it moves, flip `hardtest.mjs`'s `CLAIM_IS_METERED` to `true`. |

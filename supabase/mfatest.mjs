@@ -143,7 +143,17 @@ async function enrol(user) {
   if (!verified.body?.access_token) {
     throw new Error("could not verify: " + JSON.stringify(verified.body));
   }
-  return { factorId, secret, strong: verified.body.access_token };
+  return { factorId, secret, strong: verified.body.access_token,
+           strongRefresh: verified.body.refresh_token };
+}
+
+/** Another password sign-in: a second, separate `aal1` session. */
+async function signInAgain(user) {
+  return (await (await fetch(`${URL_}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { apikey: PUB, "content-type": "application/json" },
+    body: JSON.stringify({ email: user.email, password: user.password }),
+  })).json()).access_token;
 }
 
 try {
@@ -160,7 +170,7 @@ try {
   await rpc(friend.token, "accept_friend", { their_id: me.id });
 
   const weak = me.token;                       // the password sign-in
-  const { strong } = await enrol(me);          // the answered challenge
+  const { strong, strongRefresh } = await enrol(me);  // the answered challenge
 
   check("the password session is aal1", claim(weak, "aal"), "aal1");
   check("and the answered one is aal2", claim(strong, "aal"), "aal2");
@@ -204,6 +214,22 @@ try {
           refused(await rpc(weak, "delete_me", {})), true);
     check("mint recovery codes",
           refused(await rpc(weak, "generate_recovery_codes", {})), true);
+
+    // Not Postgres: GoTrue's own user endpoint, which no policy here reaches.
+    // Measured before this assertion was written -- GoTrue refuses with
+    // `insufficient_aal` -- and pinned so an upgrade that stops doing so is a
+    // failure rather than a surprise. Changing the address is how an account
+    // is taken over, because the address is where password resets go.
+    const pw = await as(weak, "/auth/v1/user", {
+      method: "PUT", body: JSON.stringify({ password: `${me.password}x` }),
+    });
+    check("change the password",
+          [pw.status, pw.body?.error_code], [401, "insufficient_aal"]);
+    const mail = await as(weak, "/auth/v1/user", {
+      method: "PUT", body: JSON.stringify({ email: `moved_${me.email}` }),
+    });
+    check("move the account to another address",
+          [mail.status, mail.body?.error_code], [401, "insufficient_aal"]);
   }
 
   console.log("\nand what the aal2 token does instead");
@@ -251,6 +277,11 @@ try {
           (await rpc(weak, "redeem_recovery_code", { code: "AAAAA-AAAAA" })).body,
           false);
 
+    // A second password session, parked at the code prompt somewhere else.
+    // Before 20261005010000 it was promoted to the whole account the moment
+    // the factor went, without anybody signing in again.
+    const parked = await signInAgain(me);
+
     // The whole point: the person using this cannot reach aal2, because the
     // authenticator is what they lost.
     check("the real one is accepted from the weak session",
@@ -263,6 +294,19 @@ try {
     check("so the same code cannot be used twice",
           (await rpc(weak, "redeem_recovery_code", { code: recovery[0] })).body,
           false);
+
+    // Recovery is what you do when the authenticator is lost -- usually with
+    // the phone it was on, which is signed in. Every other session ends.
+    check("the parked session is not promoted, it is ended",
+          (await api(parked, `/profiles?id=eq.${me.id}&select=id`)).body?.length, 0);
+    check("so is the aal2 session from before, though its token has not expired",
+          (await api(strong, `/profiles?id=eq.${me.id}&select=id`)).body?.length, 0);
+    const renewed = await fetch(`${URL_}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST",
+      headers: { apikey: PUB, "content-type": "application/json" },
+      body: JSON.stringify({ refresh_token: strongRefresh }),
+    });
+    check("and it cannot be renewed", renewed.status >= 400, true);
   }
 
   console.log("\nwith no factor enrolled, the aal1 session is the whole account");

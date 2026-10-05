@@ -67,6 +67,20 @@ async function api(user, path, init = {}) {
 const rpc = (user, fn, args) =>
   api(user, `/rpc/${fn}`, { method: "POST", body: JSON.stringify(args) });
 
+/**
+ * Whether `supabase/deferred/20261005040000_username_probe_budget.sql` has been
+ * moved into `migrations/`. Flip it in the same commit that moves the file.
+ */
+const CLAIM_IS_METERED = false;
+
+/**
+ * Did this `claim_username` call get the name?
+ *
+ * A taken name used to be a 409 and, once the claim is metered, is a 200 with a
+ * row of nulls -- a raise would roll back the charge. Both mean "no".
+ */
+const claimed = (r) => r.status < 400 && r.body?.id != null;
+
 async function makeUser(tag) {
   const email = `fbwg_hard_${tag}_${stamp}@example.com`;
   const password = `pw_${stamp}_${tag}!A`;
@@ -97,7 +111,7 @@ try {
       rpc(a, "claim_username", { new_username: wanted }),
       rpc(b, "claim_username", { new_username: wanted }),
     ]);
-    const won = [ra, rb].filter((r) => r.status < 400).length;
+    const won = [ra, rb].filter(claimed).length;
     check("exactly one of them got the name", won, 1);
 
     // Asked as whoever WON, which is the only account that can answer it.
@@ -107,7 +121,7 @@ try {
     // A test that fails half the time on the function guarding the invite gate
     // is worse than no test, because the next real regression looks like the
     // usual noise.
-    const winner = ra.status < 400 ? a : b;
+    const winner = claimed(ra) ? a : b;
     const holders = await api(winner, `/profiles?username=eq.${wanted}&select=id`);
     check("and only one profile has it", holders.body?.length ?? 0, 1);
   }
@@ -132,7 +146,7 @@ try {
     // Every one of them is a legitimate retry of the same intention, so every
     // one of them should succeed. Idempotent, not merely serialized.
     check("all sixteen are answered the same way",
-          all.filter((r) => r.status < 400).length, 16);
+          all.filter(claimed).length, 16);
     check("and all sixteen say the same name",
           new Set(all.map((r) => r.body?.username)).size, 1);
 
@@ -242,7 +256,10 @@ try {
     for (const t of tables) {
       const r = await api(null, `/${t}?select=*&limit=1`);
       const rows = Array.isArray(r.body) ? r.body.length : -1;
-      if (rows !== 0) seen.push(`${t}:${rows === -1 ? r.status : rows}`);
+      // Refused outright is as good as an empty answer. `schema_migrations`
+      // has no grant for anon at all now, so it says 401 rather than [].
+      const denied = r.status === 401 || r.status === 403;
+      if (rows !== 0 && !denied) seen.push(`${t}:${rows === -1 ? r.status : rows}`);
     }
     check("no table gives up a row", seen, []);
 
@@ -271,6 +288,69 @@ try {
       body: JSON.stringify({ id: users[0].id, username: `anon${stamp % 10000}` }),
     });
     check("nor can they write a row directly", inserted.status >= 400, true);
+  }
+
+  console.log("\nthe migration ledger, to somebody who HAS signed in");
+  {
+    // `migrate.mjs` skips any file whose ledger row has no checksum and runs any
+    // file that has no row, as postgres. So the ledger must not be writable
+    // through the API by anybody -- and not readable either, since it is a map
+    // of what the schema does.
+    const u = await makeUser("ledger");
+    const forged = await api(u, "/schema_migrations", {
+      method: "POST",
+      body: JSON.stringify({ name: `99999999999999_${stamp}.sql`, checksum: null }),
+    });
+    check("a signed-in account cannot add a ledger row", forged.status >= 400, true);
+    const wiped = await api(u, "/schema_migrations?name=like.0*", { method: "DELETE" });
+    check("nor remove one",
+          wiped.status >= 400 || (Array.isArray(wiped.body) && wiped.body.length === 0),
+          true);
+    const read = await api(u, "/schema_migrations?select=name&limit=1");
+    check("nor read them",
+          read.status >= 400 || (Array.isArray(read.body) && read.body.length === 0),
+          true);
+  }
+
+  console.log("\na username changes through claim_username and nowhere else");
+  {
+    // `profiles_write_own` decides which ROW; the column grant decides which
+    // columns. A PATCH of `username` used to go straight past the shape check
+    // and answer 409 for a name somebody else held: an unmetered oracle.
+    const holder = await makeUser("holder");
+    const prober = await makeUser("prober");
+    const held = `held${stamp % 100000}`;
+    const mine = `prb${stamp % 100000}`;
+    await rpc(holder, "claim_username", { new_username: held });
+    await rpc(prober, "claim_username", { new_username: mine });
+    const patched = await api(prober, `/profiles?id=eq.${prober.id}`, {
+      method: "PATCH", body: JSON.stringify({ username: held.toUpperCase() }),
+    });
+    check("a PATCH of a name somebody holds is refused", patched.status >= 400, true);
+    const free = await api(prober, `/profiles?id=eq.${prober.id}`, {
+      method: "PATCH", body: JSON.stringify({ username: `${mine}x` }),
+    });
+    check("with the same answer as a free one",
+          [free.status, free.body?.code], [patched.status, patched.body?.code]);
+    check("while the column the client does write still works",
+          (await api(prober, `/profiles?id=eq.${prober.id}`, {
+            method: "PATCH", body: JSON.stringify({ hide_from_leaderboard: true }),
+          })).body?.[0]?.hide_from_leaderboard, true);
+
+    if (CLAIM_IS_METERED) {
+      const answers = [];
+      for (let i = 0; i < 11; i++) {
+        const r = await rpc(prober, "claim_username",
+                            { new_username: held.toUpperCase() });
+        answers.push(r.status === 200 ? (r.body?.id == null ? "taken" : "got")
+                                      : r.body?.code);
+      }
+      check("ten probes are answered and the eleventh is refused",
+            answers, [...new Array(10).fill("taken"), "53400"]);
+      check("and asking for the name you hold is still free",
+            claimed(await rpc(prober, "claim_username", { new_username: mine })),
+            true);
+    }
   }
 
   console.log("\nnames that are trying it on");
