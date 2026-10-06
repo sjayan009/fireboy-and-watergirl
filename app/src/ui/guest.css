@@ -79,6 +79,15 @@ body:has(#app.guest-host) { background-image: none; }
 .local-hint { margin: 0; display: grid; justify-items: center; gap: .375rem; color: var(--faint); font-size: .8125rem; line-height: 1.3; white-space: nowrap; }
 .local-hint > span { display: inline-flex; align-items: center; gap: .375rem; }
 .local-hint kbd { min-width: 1.75rem; height: 1.75rem; font-size: .75rem; }
+/*
+ * Pause is neither player's, so it lights in a third colour: a lavender at the
+ * players' own lightness and chroma (OKLCH .76 / .13, hue 300 -- ember is .75 /
+ * .16 at 40, water .82 / .10 at 214), so it reads as one family with them.
+ */
+.local { --pause: #BE9DF7; --glow-pause: #be9df740; }
+.local-hint kbd.is-down { background: color-mix(in srgb, var(--pause) 28%, var(--surface)); border-color: var(--pause); box-shadow: 0 0 1rem var(--glow-pause); }
+.local-hint > span { transition: color 160ms var(--ease); }
+.local-hint > span:has(kbd.is-down) { color: var(--pause); }
 
 /*
  * Loading a level: a frosted pill over the foot of the stage, with a hairline
