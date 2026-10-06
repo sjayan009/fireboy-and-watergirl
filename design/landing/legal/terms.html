@@ -16,10 +16,19 @@
 <body>
 <header class="nav">
   <div class="wrap nav-row">
-    <a class="brand" href="../" aria-label="Fireboy and Watergirl, home"><span class="brand-text">Fireboy &amp; Watergirl</span></a>
-    <nav class="nav-links" aria-label="Site"><a href="privacy.html">Privacy</a><a href="terms.html" aria-current="page">Terms</a></nav>
+    <a class="brand" href="../" aria-label="Fireboy and Watergirl, home"><svg class="emblem" viewBox="0 0 48 48" aria-hidden="true"><path d="M23 4C24 15 9 17 9 29a14 14 0 0 0 14 14V30c-6-1-6-7-3-10 1 4 3 5 3 5V4Z"/><path d="M29 6c0 9 12 14 12 23a14 14 0 0 1-14 14V29c7-2 8-7 2-13V6Z"/></svg><span class="brand-text">Fireboy &amp; Watergirl</span></a>
+    <nav class="nav-links" aria-label="Site">
+      <a href="../#multiplayer">Online Multiplayer</a><a href="../#between">Watch &amp; Compete</a><a href="../developers/">For Developers</a><a href="../legal/privacy.html" aria-current="page">Legal</a>
+    </nav>
+    <div class="nav-end">
+      <div id="theme"></div>
+      <a class="btn btn-ghost btn-s" href="../#/login" data-signin>Play Online</a>
+    </div>
   </div>
 </header>
+<nav class="devnav" aria-label="Legal">
+  <div class="wrap devnav-row"><span class="devnav-label">Legal</span><a href="privacy.html">Privacy Policy</a><a href="terms.html" aria-current="page">Terms</a></div>
+</nav>
 <main class="wrap legal">
   <div class="dev-hero">
     <p class="t-eyebrow">Effective 6 October 2026</p>
@@ -28,7 +37,7 @@
   </div>
 
   <h2 class="t-heading">What this is</h2>
-  <p>This is an unofficial, free, non-commercial fan project run by Jayan S. It is <b>not affiliated with, endorsed by or sponsored by Oslo Albet</b>, the creator of Fireboy &amp; Watergirl. "Fireboy &amp; Watergirl", the original game, and its characters, art, levels and audio belong to their owner. No rights in them are granted to you or claimed by us. If you hold rights in this material and want it changed or removed, email us and we will respond promptly.</p>
+  <p>This is an unofficial, free, non-commercial fan project run by Jayan Sirikonda. It is <b>not affiliated with, endorsed by or sponsored by Oslo Albet</b>, the creator of Fireboy &amp; Watergirl. "Fireboy &amp; Watergirl", the original game, and its characters, art, levels and audio belong to their owner. No rights in them are granted to you or claimed by us. If you hold rights in this material and want it changed or removed, email us and we will respond promptly.</p>
 
   <h2 class="t-heading">Accounts</h2>
   <p>You must be 13 or older to make an account. Keep your sign-in details to yourself; you are responsible for activity on your account. You can delete your account at any time in Settings.</p>
@@ -40,12 +49,19 @@
   <p>The service is provided free and "as is". It may change, break, lose progress or shut down at any time, including if its owner asks for it to be taken down. To the extent the law allows, we are not liable for any loss arising from your use of it.</p>
 
   <h2 class="t-heading">Changes and contact</h2>
-  <p>If these terms change, the date at the top changes too, and continuing to use the site means you accept the new version. Questions, rights notices and takedown requests go to Jayan S at <a href="mailto:sirikonda.jayan9@gmail.com">sirikonda.jayan9@gmail.com</a>. Your privacy is covered by the <a href="privacy.html">Privacy Policy</a>.</p>
+  <p>If these terms change, the date at the top changes too, and continuing to use the site means you accept the new version. Questions, rights notices and takedown requests go to Jayan Sirikonda at <a href="mailto:sirikonda.jayan9@gmail.com">sirikonda.jayan9@gmail.com</a>. Your privacy is covered by the <a href="privacy.html">Privacy Policy</a>.</p>
 </main>
 <footer class="footer">
   <div class="wrap footer-row">
-    <p style="max-width:34rem;margin:0">An unofficial fan project, not affiliated with or endorsed by Oslo Albet. <a href="../">Back to the game</a></p>
+    <p style="max-width:34rem;margin:0">Fireboy &amp; Watergirl: The Forest Temple, rebuilt for online co-op. The original game, its art and its audio are by Oslo Albet, 2009. An unofficial fan project, not affiliated with or endorsed by Oslo Albet.</p>
+    <div class="footer-credit">
+      <p style="margin:0">Online Multiplayer by Jayan Sirikonda</p>
+      <p class="footer-links"><a href="../developers/">For Developers</a> · <a href="../legal/privacy.html">Privacy</a> · <a href="../legal/terms.html">Terms</a></p>
+    </div>
   </div>
 </footer>
+<script type="module">
+  import "../shared/site.js";
+</script>
 </body>
 </html>
