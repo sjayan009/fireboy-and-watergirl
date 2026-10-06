@@ -13,6 +13,12 @@ interface IceServer {
 interface BrokerDependencies {
   env(name: string): string | undefined;
   verifyUser(token: string): Promise<{ id: string; is_anonymous?: boolean } | null>;
+  /**
+   * Charge one credential to the caller, as the caller, in the database:
+   * `spend_turn_credential()`, which needs a profile and keeps a budget that
+   * survives isolates. "limited" is over budget; "refused" is not a player.
+   */
+  charge(token: string): Promise<"ok" | "limited" | "refused">;
   fetch: typeof fetch;
   now?: () => number;
 }
@@ -43,14 +49,15 @@ function cloudflareServers(value: unknown): IceServer[] | null {
 
 export function createTurnHandler(deps: BrokerDependencies): (req: Request) => Promise<Response> {
   const now = deps.now ?? Date.now;
-  // Best effort abuse resistance per warm isolate, not a global billing cap.
-  // Existing SQL budgets are specific to friend/progress RPCs and cannot be
-  // reused here. Bounded memory also limits authenticated account-flood abuse.
+  // A first, cheap gate per warm isolate. The real cap is `charge`, which
+  // holds across isolates; this one only spares the database a flood.
   const budgets = new Map<string, { start: number; calls: number }>();
   const allowed = (deps.env("TURN_ALLOWED_ORIGINS") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   return async (req) => {
     const origin = req.headers.get("origin");
-    const originAllowed = !origin || !allowed.length || allowed.includes(origin);
+    // An unset allowlist used to mean every origin. It now means none: a
+    // missing secret should stop the broker, not open it.
+    const originAllowed = !origin || allowed.includes(origin);
     const headers: Record<string, string> = {
       "Cache-Control": "no-store",
       "Content-Type": "application/json",
@@ -58,7 +65,7 @@ export function createTurnHandler(deps: BrokerDependencies): (req: Request) => P
       "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-retry-count, traceparent, tracestate, baggage",
       "Access-Control-Allow-Methods": "POST, OPTIONS",
     };
-    if (originAllowed) headers["Access-Control-Allow-Origin"] = allowed.length && origin ? origin : "*";
+    if (originAllowed && origin) headers["Access-Control-Allow-Origin"] = origin;
     const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers });
     if (!originAllowed) return reply(403, { error: "Origin not allowed" });
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers });
@@ -85,6 +92,12 @@ export function createTurnHandler(deps: BrokerDependencies): (req: Request) => P
       headers["Retry-After"] = String(Math.max(1, Math.ceil((budget.start + WINDOW_MS - issuedAt) / 1000)));
       return reply(429, { error: "Try again later" });
     }
+
+    let charged: Awaited<ReturnType<BrokerDependencies["charge"]>>;
+    try { charged = await deps.charge(bearer[1]); }
+    catch { return reply(503, { error: "TURN temporarily unavailable" }); }
+    if (charged === "refused") return reply(403, { error: "Claim a username first" });
+    if (charged === "limited") return reply(429, { error: "Try again later" });
 
     const keyId = deps.env("CLOUDFLARE_TURN_KEY_ID");
     const apiToken = deps.env("CLOUDFLARE_TURN_API_TOKEN");

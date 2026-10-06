@@ -24,9 +24,11 @@ const env = { CLOUDFLARE_TURN_KEY_ID: "fake-key-id", CLOUDFLARE_TURN_API_TOKEN: 
   TURN_ALLOWED_ORIGINS: "https://game.example,http://localhost:5174" };
 let authCalls = 0, upstreamCalls = 0;
 let response = () => Response.json({ iceServers: servers, debug: master });
+let charge = async () => "ok";
 const handler = createTurnHandler({
   env: (key) => env[key], now: () => time,
   verifyUser: async (token) => { authCalls++; return token === "valid-user-token" ? { id: "user-a" } : null; },
+  charge: (token) => charge(token),
   fetch: async (url, init) => {
     upstreamCalls++;
     assert.equal(url, "https://rtc.live.cloudflare.com/v1/turn/keys/fake-key-id/credentials/generate-ice-servers");
@@ -79,9 +81,24 @@ assert.equal(result.status, 429);
 assert.equal(result.headers.get("retry-after"), "600");
 time += 600_000;
 assert.equal((await handler(req())).status, 200);
-const misconfigured = createTurnHandler({ env: () => undefined, verifyUser: async () => ({ id: "x" }), fetch: async () => { throw new Error("must not fetch"); } });
+// The database's budget, which holds across isolates, and its player check.
+const before = upstreamCalls;
+charge = async () => "refused";
+assert.equal((await handler(req())).status, 403, "an account without a profile mints nothing");
+charge = async () => "limited";
+assert.equal((await handler(req())).status, 429, "over the durable budget");
+charge = async () => { throw new Error("database down"); };
+assert.equal((await handler(req())).status, 503, "no budget, no credential");
+assert.equal(upstreamCalls, before, "none of those reached Cloudflare");
+charge = async () => "ok";
+
+const noFetch = async () => { throw new Error("must not fetch"); };
+const origins = (key) => key === "TURN_ALLOWED_ORIGINS" ? env.TURN_ALLOWED_ORIGINS : undefined;
+const unlisted = createTurnHandler({ env: () => undefined, verifyUser: async () => ({ id: "x" }), charge: async () => "ok", fetch: noFetch });
+assert.equal((await unlisted(req())).status, 403, "an unset allowlist admits no browser origin");
+const misconfigured = createTurnHandler({ env: origins, verifyUser: async () => ({ id: "x" }), charge: async () => "ok", fetch: noFetch });
 assert.equal((await misconfigured(req())).status, 503);
-const anonymous = createTurnHandler({ env: () => undefined, verifyUser: async () => ({ id: "x", is_anonymous: true }), fetch: async () => { throw new Error("must not fetch"); } });
+const anonymous = createTurnHandler({ env: origins, verifyUser: async () => ({ id: "x", is_anonymous: true }), charge: async () => "ok", fetch: noFetch });
 assert.equal((await anonymous(req())).status, 401);
 console.log("TURN broker: verified auth gate, CORS, bounded TTL, generic failures, response allowlist and throttle passed");
 

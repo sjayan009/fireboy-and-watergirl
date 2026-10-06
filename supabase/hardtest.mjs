@@ -305,6 +305,23 @@ try {
           200);
   }
 
+  console.log("\nTURN credentials are charged to a player, across every isolate");
+  {
+    // `turn-credentials` calls this as the caller before it asks Cloudflare.
+    const nobody = await makeUser("turnnone");
+    check("an account without a profile is refused",
+          (await rpc(nobody, "spend_turn_credential", {})).status >= 400, true);
+    const player = await makeUser("turnplayer");
+    await rpc(player, "claim_username", { new_username: `tp${stamp % 100000}` });
+    let ok = 0;
+    for (let i = 0; i < 24; i++) {
+      if ((await rpc(player, "spend_turn_credential", {})).status < 400) ok++;
+    }
+    check("a player gets twenty-four an hour", ok, 24);
+    check("and not a twenty-fifth",
+          (await rpc(player, "spend_turn_credential", {})).status >= 400, true);
+  }
+
   console.log("\nthe whole surface, to somebody who has not signed in");
   {
     const tables = ["profiles", "friendships", "pair_progress", "solo_progress",
