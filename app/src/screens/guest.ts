@@ -24,7 +24,7 @@ export function guestScreen(host: HTMLElement): () => void {
   host.append(el("div", { class: "guest" },
     el("header", { class: "guest-bar" },
       el("a", { href: "#/" }, "Fireboy & Watergirl"),
-      el("a", { class: "secondary", href: "#/login" }, "Sign in for online play")),
+      el("a", { class: "secondary", href: "#/login" }, "Play Online")),
     el("div", { class: "guest-stage" }, canvas),
     el("p", { class: "note", id: "guest-keys" },
       "Fireboy: arrow keys · Watergirl: W A D · P pauses. Progress is saved in this browser only.")));

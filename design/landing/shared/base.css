@@ -163,6 +163,8 @@ h1, h2, h3, h4, p { margin: 0; }
 .footer { border-top: 1px solid var(--edge); padding: 2.5rem 0 3.5rem; color: var(--faint); font-size: .875rem; }
 .footer-row { display: flex; flex-wrap: wrap; gap: 1rem 2rem; justify-content: space-between; align-items: flex-start; }
 .footer a { color: var(--dim); }
+.footer-credit { display: grid; gap: .5rem; }
+.footer-links { margin: 0; }
 
 /* Reduced motion keeps colour and opacity changes and removes travel. */
 @media (prefers-reduced-motion: reduce) {
