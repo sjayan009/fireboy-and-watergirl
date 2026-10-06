@@ -583,3 +583,8 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
   .tool[aria-expanded='true'],.drawer-tabs .current { outline:2px solid Highlight; }
   .friend-avatar::after { forced-color-adjust:none; }
 }
+
+/* The age screen (age.ts): two fields side by side, otherwise the sign-up form's own pieces. */
+.age-row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 10px; }
+.card .pick { min-height: 44px; }
+.age-refusal { display: grid; gap: 14px; margin-top: 20px; }

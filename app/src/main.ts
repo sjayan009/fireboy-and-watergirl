@@ -37,6 +37,8 @@ const routes: Route[] = [
   { path: "/login", stages: ["out"], render: loginScreen },
   { path: "/signup", stages: ["out"], render: signUpScreen },
   { path: "/reset", stages: ["out"], render: resetScreen },
+  // Two on one keyboard with no account; signed in, /play does the same.
+  { path: "/local", stages: ["out"], render: lazy(async () => (await import("./screens/guest.js")).guestScreen) },
   // Reached from the emailed link, which arrives with a session already.
   { path: "/password", stages: ["in", "nameless"], render: passwordScreen },
   // "out" as well as "unverified", and that is the whole fix for a sign-up that

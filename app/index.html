@@ -3,13 +3,28 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Fireboy &amp; Watergirl</title>
+    <title>Fireboy &amp; Watergirl: Forest Temple Online Co-op</title>
     <!--
       Indexed: the bare address is the landing page, and this is what a search
       result says about it. The game's extracted art is kept out of search by
       robots.txt instead.
     -->
-    <meta name="description" content="Fireboy &amp; Watergirl in the Forest Temple: play as two on one computer, or online with a friend." />
+    <meta name="description" content="Play the 2009 Forest Temple with a friend: two on one keyboard with no account, or online from anywhere with rollback netcode. A free, unofficial fan rebuild." />
+    <!--
+      For links shared anywhere and for crawlers that do not run scripts.
+      __SITE__ is the production origin, filled in by the build (vite.config.ts).
+    -->
+    <link rel="canonical" href="__SITE__/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Fireboy &amp; Watergirl" />
+    <meta property="og:title" content="Fireboy &amp; Watergirl: Forest Temple Online Co-op" />
+    <meta property="og:description" content="Play the 2009 Forest Temple with a friend: two on one keyboard with no account, or online from anywhere with rollback netcode. A free, unofficial fan rebuild." />
+    <meta property="og:url" content="__SITE__/" />
+    <meta property="og:image" content="__SITE__/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"VideoGame","name":"Fireboy & Watergirl: The Forest Temple (online co-op fan rebuild)","url":"__SITE__/","description":"Play the 2009 Forest Temple with a friend: two on one keyboard with no account, or online from anywhere with rollback netcode. A free, unofficial fan rebuild.","genre":["Puzzle","Platformer","Co-op"],"playMode":["CoOp","MultiPlayer"],"numberOfPlayers":{"@type":"QuantitativeValue","value":2},"gamePlatform":"Web browser","applicationCategory":"Game","operatingSystem":"Any","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"author":{"@type":"Person","name":"Jayan Sirikonda"},"image":"__SITE__/og.png"}</script>
     <meta name="color-scheme" content="dark" />
     <!--
       The paired glyph, on its own tile. SVG where it is supported, and two
@@ -21,7 +36,12 @@
     <link rel="apple-touch-icon" href="/icon-180.png" />
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app"><noscript>
+      <h1>Fireboy &amp; Watergirl: The Forest Temple, online co-op</h1>
+      <p>The 2009 Flash game, recovered from its compiled file and rebuilt for the browser. Play as two on one keyboard with no account, or sign in and play online with a friend anywhere, with rollback netcode and progress saved for the pair. This site needs JavaScript.</p>
+      <p><a href="developers/">For Developers</a> · <a href="legal/privacy.html">Privacy</a> · <a href="legal/terms.html">Terms</a></p>
+      <p>An unofficial fan project, not affiliated with or endorsed by Oslo Albet, who created Fireboy &amp; Watergirl.</p>
+    </noscript></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
