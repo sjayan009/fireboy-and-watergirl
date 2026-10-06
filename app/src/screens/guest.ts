@@ -45,6 +45,25 @@ export function guestScreen(host: HTMLElement): () => void {
   });
   const online = el("a", { class: "btn btn-water btn-s btn-online btn-pulse", href: "#/login" }, "Play Online ");
   online.insertAdjacentHTML("beforeend", ARROW);
+  // A level's art arrives before it starts. Without this the stage sits on the
+  // map with a lit node and nothing else, and keys pressed meanwhile seem lost.
+  const bar = el("span", { class: "local-loading-bar" });
+  const said = el("span", {}, "Loading the level");
+  const loading = el("div", { class: "local-loading", role: "status", "aria-live": "polite" }, said, el("span", { class: "local-loading-track" }, bar));
+  loading.hidden = true;
+  const progress = (stage: string, c: { total: number; ready: number; failed: number }) => {
+    if (stage === "background") return;
+    const done = c.ready + c.failed;
+    loading.hidden = stage === "critical" && done === c.total;
+    loading.classList.remove("is-error");
+    said.textContent = "Loading the level";
+    bar.style.transform = `scaleX(${stage === "metadata" ? 0.04 : Math.max(0.04, done / Math.max(1, c.total))})`;
+  };
+  const refused = () => {
+    loading.hidden = false;
+    loading.classList.add("is-error");
+    said.textContent = "This level could not load. Check your connection and pick it again.";
+  };
   // A laptop window is short, so the stage is limited by height: full screen
   // gives it the whole display, key cards and all.
   const full = el("button", { class: "btn btn-ghost btn-s", type: "button" });
@@ -61,13 +80,14 @@ export function guestScreen(host: HTMLElement): () => void {
           emblem(), el("span", { class: "brand-text" }, "Fireboy & Watergirl")),
         el("div", { class: "nav-end" }, full, online))),
     el("main", { class: "local-main" },
-      el("div", { class: "local-stage" }, canvas),
+      el("div", { class: "local-stage" }, canvas, loading),
       el("div", { class: "local-controls", id: "guest-keys" },
         el("div", { class: "player player-fire" },
           el("span", { class: "player-name" }, "Fireboy"),
           el("span", { class: "keys" },
             key("ArrowLeft", "←", "Left arrow"), key("ArrowUp", "↑", "Up arrow"), key("ArrowRight", "→", "Right arrow"))),
-        el("p", { class: "local-hint" }, key("KeyP", "P", "P"), "pauses · Saved in this browser"),
+        el("p", { class: "local-hint" },
+          el("span", {}, key("KeyP", "P", "P"), "pauses"), el("span", {}, "Saved in this browser")),
         el("div", { class: "player player-water" },
           el("span", { class: "player-name" }, "Watergirl"),
           el("span", { class: "keys" },
@@ -84,7 +104,8 @@ export function guestScreen(host: HTMLElement): () => void {
     on(full, "click", () => document.fullscreenElement ? document.exitFullscreen() : page.requestFullscreen())];
   if (!document.fullscreenEnabled) full.hidden = true;
 
-  const view = new GameView({ canvas, assets: __ASSETS__, save: new LocalSave(GUEST_KEY) });
+  const view = new GameView({ canvas, assets: __ASSETS__, save: new LocalSave(GUEST_KEY),
+    onPreparationProgress: progress, onRefused: refused });
   canvas.focus();
   return () => {
     if (document.fullscreenElement) void document.exitFullscreen();
