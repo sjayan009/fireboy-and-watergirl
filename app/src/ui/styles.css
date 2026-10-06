@@ -584,13 +584,6 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
   .friend-avatar::after { forced-color-adjust:none; }
 }
 
-/* Guest local play (screens/guest.ts): the stage, as large as fits, 4:3. */
-#app:has(.guest) { padding: 12px 14px; }
-.guest { width: 100%; display: grid; gap: 8px; justify-items: center; }
-.guest-bar { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.guest-bar > a:first-child { white-space: nowrap; }
-.guest-bar a.secondary { width: auto; }
-.guest-stage { width: min(100%, calc((100dvh - 120px) * 4 / 3)); aspect-ratio: 4 / 3; }
 /* The age screen (age.ts): two fields side by side, otherwise the sign-up form's own pieces. */
 .age-row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 10px; }
 .card .pick { min-height: 44px; }
