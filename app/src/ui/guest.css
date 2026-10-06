@@ -8,20 +8,23 @@
 #app.guest-host { display: block; padding: 0; min-height: 100dvh; align-items: initial; justify-content: initial; }
 body:has(#app.guest-host) { background-image: none; }
 
-.local { min-height: 100dvh; display: grid; grid-template-rows: auto 1fr; overflow-x: clip; }
+.local { min-height: 100dvh; display: grid; grid-template-rows: auto 1fr; overflow-x: clip; background: var(--bg); }
+/* Full Screen hides on phones, where the header has room for one button. */
+@media (max-width: 560px) { .local .nav-end .btn-ghost { display: none; } }
 .local-main {
-  display: grid; align-content: center; justify-items: center; gap: 1.25rem;
-  padding: 1.25rem var(--gutter) 1.5rem;
+  display: grid; align-content: center; justify-items: center; gap: 1rem;
+  padding: .75rem var(--gutter) 1rem;
 }
 
 /*
- * The stage: as large as the window allows at 4:3, leaving room for the nav
- * and the key cards. Behind it, an ember glow on Fireboy's side and a water
+ * The stage: as large as the window allows at 4:3, leaving only what the nav
+ * (3.7rem), the key cards (3.6rem) and the gaps between them need (11rem in
+ * all). Behind it, an ember glow on Fireboy's side and a water
  * glow on Watergirl's, so the frame sits between the two players' colours.
  */
 .local-stage {
   position: relative; isolation: isolate;
-  width: min(100%, calc((100dvh - 15.5rem) * 4 / 3)); min-width: min(100%, 20rem);
+  width: min(100%, calc((100dvh - 11rem) * 4 / 3)); min-width: min(100%, 20rem);
   aspect-ratio: 4 / 3;
   animation: local-in 520ms var(--ease-out) both;
 }
@@ -41,8 +44,8 @@ body:has(#app.guest-host) { background-image: none; }
 
 /* ---- The two players' keys ---- */
 .local-controls {
-  width: min(100%, calc((100dvh - 15.5rem) * 4 / 3)); min-width: min(100%, 20rem);
-  display: grid; grid-template-columns: auto auto auto; justify-content: center; align-items: center; gap: .75rem 1.75rem;
+  width: 100%;
+  display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .75rem 1.75rem;
   animation: local-in 520ms 80ms var(--ease-out) both;
 }
 .player {
@@ -72,13 +75,12 @@ body:has(#app.guest-host) { background-image: none; }
 .player-fire kbd.is-down { background: color-mix(in srgb, var(--fire) 28%, var(--surface)); border-color: var(--fire-text); box-shadow: 0 0 1rem var(--glow-fire); }
 .player-water kbd.is-down { background: color-mix(in srgb, var(--water) 28%, var(--surface)); border-color: var(--water-text); box-shadow: 0 0 1rem var(--glow-water); }
 
-.local-hint { margin: 0; text-align: center; color: var(--faint); font-size: .8125rem; line-height: 1.5; }
+.local-hint { margin: 0; text-align: center; color: var(--faint); font-size: .8125rem; line-height: 1.5; white-space: nowrap; }
 .local-hint kbd { min-width: 1.75rem; height: 1.75rem; font-size: .75rem; margin-right: .25rem; }
 
-@media (max-width: 760px) {
-  .local-controls { grid-template-columns: 1fr; justify-content: stretch; }
-  .local-hint { grid-row: 3; }
-}
+/* Too narrow for one row: the two cards side by side above the hint, or stacked. */
+@media (max-width: 900px) { .local-hint { order: 3; flex-basis: 100%; } }
+@media (max-width: 560px) { .player { flex: 1 1 100%; } }
 @media (prefers-reduced-motion: reduce) {
   .local-stage, .local-controls { animation-name: local-fade; }
   .local kbd.is-down { transform: none; }
