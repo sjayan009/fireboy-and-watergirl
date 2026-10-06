@@ -70,9 +70,11 @@ if (WANT) {
 }
 check("frame-ancestors none", (h(root, "content-security-policy") ?? "")
       .includes("frame-ancestors 'none'"), true);
-check("supabase is reachable under the csp",
+check("supabase is reachable under the csp, and only this project",
       (h(root, "content-security-policy") ?? "")
-        .includes("wss://*.supabase.co"), true);
+        .includes("wss://" + new URL(API).host), true);
+check("and inline <style> elements are refused",
+      /style-src-elem 'self' 'sha256-/.test(h(root, "content-security-policy") ?? ""), true);
 check("X-Frame-Options", h(root, "x-frame-options"), "DENY");
 // Vercel adds HSTS by itself; the Cloudflare origin only sends what `_headers`
 // lists, which is generated from vercel.json -- so it is stated there for both.

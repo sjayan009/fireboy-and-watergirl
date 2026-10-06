@@ -44,8 +44,13 @@ body:has(#app.landing-host) { background-image: none; }
 #app.landing-host :is(.btn, .vg-btn, .icon-btn, .seg button, .theme button, .scene-replay, .watch-replay):active:not(:disabled) { transform: scale(.97); }
 `;
 
-const doc = new DOMParser().parseFromString(markup, "text/html");
-const pageCss = [...doc.querySelectorAll("head style")].map((s) => s.textContent ?? "").join("\n");
+// The page's own <style> blocks are lifted out as text before parsing: even an
+// inert DOMParser document reports a <style> the CSP refuses.
+const styleBlocks: string[] = [];
+const doc = new DOMParser().parseFromString(
+  markup.replace(/<style>([\s\S]*?)<\/style>/g, (_, css: string) => { styleBlocks.push(css); return ""; }),
+  "text/html");
+const pageCss = styleBlocks.join("\n");
 const title = doc.title;
 const description = doc.querySelector('meta[name="description"]')?.getAttribute("content") ?? "";
 
@@ -64,10 +69,11 @@ function body(): DocumentFragment {
 }
 
 export function landingScreen(host: HTMLElement): () => void {
-  const style = document.createElement("style");
-  style.dataset.landing = "";
-  style.textContent = [tokens, base, study, journey, doors, pageCss, SHELL].join("\n");
-  document.head.append(style);
+  // A constructed stylesheet, not a <style> element: the CSP refuses inline
+  // <style> (`style-src-elem` lists only 'self' and the 404 page's hash).
+  const style = new CSSStyleSheet();
+  style.replaceSync([tokens, base, study, journey, doors, pageCss, SHELL].join("\n"));
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, style];
   const was = { title: document.title, meta: document.querySelector('meta[name="description"]')?.getAttribute("content") };
   document.title = title;
   document.querySelector('meta[name="description"]')?.setAttribute("content", description);
@@ -86,7 +92,7 @@ export function landingScreen(host: HTMLElement): () => void {
   return () => {
     page.destroy();
     host.classList.remove("landing-host");
-    style.remove();
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== style);
     document.documentElement.removeAttribute("data-theme");
     document.documentElement.removeAttribute("data-theme-pref");
     document.title = was.title;
