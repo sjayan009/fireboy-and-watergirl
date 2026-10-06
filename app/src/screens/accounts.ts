@@ -15,8 +15,22 @@ import {
   card, el, field, form, googleButton, inputOf, link, note, orDivider,
 } from "../ui/dom.js";
 import { go, rerender } from "../router.js";
+import { ageCleared, ageGate } from "../age.js";
+
+/** Google makes accounts as well as signing them in, so it waits on the age screen too. */
+const google = () => googleButton(async () => {
+  if (ageCleared()) await signInWithGoogle(); else go("/signup");
+});
+
+const agreement = () => note("By making an account you agree to the ",
+  link("Terms", "legal/terms.html"), " and the ", link("Privacy Policy", "legal/privacy.html"), ".");
 
 export function signUpScreen(host: HTMLElement): void {
+  if (!ageCleared()) {
+    host.append(card("Make an Account", ageGate(rerender),
+      note("Already have one? ", link("Sign In", "#/login"))));
+    return;
+  }
   const email = field("Email", { type: "email", required: true,
                                  autocomplete: "email" });
   const pw = field("Password", { type: "password", required: true,
@@ -25,7 +39,7 @@ export function signUpScreen(host: HTMLElement): void {
                                            autocomplete: "new-password" });
 
   host.append(card("Make an Account",
-    googleButton(signInWithGoogle),
+    google(),
     orDivider(),
     form({
       submit: "Sign Up",
@@ -43,7 +57,7 @@ export function signUpScreen(host: HTMLElement): void {
         awaitingExisting = existing;
         go("/verify");
       },
-      footer: note("Already have one? ", link("Sign In", "#/login")),
+      footer: el("div", {}, agreement(), note("Already have one? ", link("Sign In", "#/login"))),
     })));
 }
 
@@ -91,7 +105,7 @@ export function loginScreen(host: HTMLElement): void {
 
   host.append(card("Sign In",
     refused,
-    googleButton(signInWithGoogle),
+    google(),
     orDivider(),
     form({
       submit: "Sign In",
