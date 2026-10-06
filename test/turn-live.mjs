@@ -7,7 +7,7 @@ const url = process.env.SUPABASE_URL;
 const key = process.env.SUPABASE_PUBLISHABLE_KEY;
 const token = process.env.FBWG_TURN_USER_TOKEN;
 if (!url || !key || !token) {
-  console.error("Live TURN not run: set SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY and FBWG_TURN_USER_TOKEN (a signed-in user's access token).");
+  console.error("Live TURN not run: set SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY and FBWG_TURN_USER_TOKEN (the access token of a signed-in user who has claimed a username).");
   process.exit(2);
 }
 const endpoint = `${url.replace(/\/$/, "")}/functions/v1/turn-credentials`;

@@ -17,6 +17,7 @@
  *     months later.
  */
 import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import sharp from "sharp";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -289,6 +290,16 @@ console.log("\nand there is a 404 page that can actually run");
           !/(?:src|href)="https?:\/\//.test(live));
     check("it offers a way back", /href="\/"/.test(live));
     check("and asks not to be indexed", /noindex/.test(page));
+    // The CSP allows inline <style> by hash only, and this page's one block is
+    // the hash it names. Edit the CSS without updating vercel.json and the page
+    // renders unstyled on both hosts -- so the build refuses instead.
+    const styles = [...live.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]);
+    const csp = JSON.parse(readFileSync(join(DIST, "..", "vercel.json"), "utf8"))
+      .headers.flatMap((h) => h.headers)
+      .find((h) => h.key === "Content-Security-Policy")?.value ?? "";
+    check("and its one <style> is the one the CSP names by hash",
+          styles.length === 1 && csp.includes(
+            `'sha256-${createHash("sha256").update(styles[0]).digest("base64")}'`));
   }
 }
 
