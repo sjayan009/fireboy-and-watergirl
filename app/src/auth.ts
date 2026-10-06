@@ -185,11 +185,29 @@ async function redeemTokenHash(): Promise<void> {
   const params = new URLSearchParams(location.search);
   const token_hash = params.get("token_hash");
   const type = params.get("type");
-  if (!token_hash || !type) return;
-  const { error } = await supabase.auth.verifyOtp({
-    token_hash, type: type as "signup" | "recovery" | "email_change" | "invite",
+  if (!token_hash || !LINK_TYPES.has(type ?? "")) return;
+  // A link carries a whole session, so anybody can send one for THEIR account
+  // and sign this browser into it. Keep the session that was here, and ask
+  // before swapping when this browser did not ask for a link.
+  const { data: before } = await supabase.auth.getSession();
+  const { data, error } = await supabase.auth.verifyOtp({
+    token_hash, type: type as "signup" | "recovery" | "email_change",
   });
-  if (error) console.warn("that link could not be used:", error.message);
+  if (error) { console.warn("that link could not be used:", error.message); return; }
+  const user = data.session?.user;
+  const prior = before.session;
+  if (!user || (prior ? prior.user.id === user.id : askedForLink())) return;
+  if (confirm(`This link signed you in as ${user.email ?? "another account"}. Keep using that account?`)) return;
+  if (prior) await supabase.auth.setSession(prior);
+  else await supabase.auth.signOut({ scope: "local" });
+}
+
+const LINK_TYPES = new Set(["signup", "recovery", "email_change"]);
+const ASKED_KEY = "fbwg.emailLinkAsked";
+
+/** Did this browser send an emailed link in the last day? */
+function askedForLink(): boolean {
+  try { return Date.now() - Number(localStorage.getItem(ASKED_KEY) ?? 0) < 86_400_000; } catch { return false; }
 }
 
 /** Start listening. Resolves once the first state is known. */
@@ -221,6 +239,7 @@ function fail(error: { message: string } | null): void {
  * Supabase refuses to send it at all.
  */
 function landing(intent?: string): string {
+  try { localStorage.setItem(ASKED_KEY, String(Date.now())); } catch { /* the link asks first */ }
   return intent ? `${location.origin}/?intent=${intent}` : `${location.origin}/`;
 }
 

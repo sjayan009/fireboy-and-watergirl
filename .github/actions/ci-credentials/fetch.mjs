@@ -37,7 +37,8 @@ const res = await fetch(broker, {
   signal: AbortSignal.timeout(20000),
 }).catch((e) => fail(`could not reach the broker: ${e.message}`));
 const body = await res.json().catch(() => ({}));
-if (res.status !== 200) fail(`ci-credentials answered ${res.status} (${body.rule ?? body.error ?? "no detail"})`);
+// One line: `fail` prints a workflow command, and a newline would start another.
+if (res.status !== 200) fail(`ci-credentials answered ${res.status} (${String(body.rule ?? body.error ?? "no detail").replace(/[\r\n]/g, " ")})`);
 
 const credentials = body.credentials ?? {};
 const allowed = new Set(Object.values(NAMES));

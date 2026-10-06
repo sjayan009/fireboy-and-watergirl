@@ -246,8 +246,11 @@ function passwordSection(has: boolean, value: HTMLElement): HTMLElement {
   return el("div", {},
     has ? null : note("You signed in with Google, so this account has no " +
                       "password. Setting one ADDS a second way in; Google " +
-                      "keeps working either way. To prove it is you, we " +
-                      "email a code to your address first."),
+                      "keeps working either way. We email a code to your " +
+                      "address first."),
+    // Not "to prove it is you": Supabase checks that code only for a session
+    // over a day old, so for a younger one it is this screen's check, not the
+    // server's. Saying it proved anything would overstate it.
     form({
       submit: has ? "Change password" : "Set password",
       // A password holder is asked for the code only if Supabase asks for it

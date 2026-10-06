@@ -249,6 +249,62 @@ try {
           (await api(a, "/pair_progress?select=node")).body?.length, 0);
   }
 
+  console.log("\none friend alone does not put the pair on the board");
+  {
+    // `sync_progress` needs only the friendship, so either of two people can
+    // write the pair's times. The board shows a time BOTH of them reported.
+    const a = await makeUser("boarda");
+    const b = await makeUser("boardb");
+    await rpc(a, "claim_username", { new_username: `ba${stamp % 100000}` });
+    await rpc(b, "claim_username", { new_username: `bb${stamp % 100000}` });
+    await rpc(a, "request_friend", { their_username: `bb${stamp % 100000}` });
+    await rpc(b, "accept_friend", { their_id: a.id });
+    const send = (from, to, secs) => {
+      const stats = new Array(32).fill(-1);
+      const times = new Array(32).fill(0);
+      stats[0] = 3; times[0] = secs;
+      return rpc(from, "sync_progress", {
+        their_id: to.id, p_stats: stats, p_times: times,
+        p_times_str: new Array(32).fill(""),
+      });
+    };
+    const standing = async () =>
+      ((await rpc(a, "leaderboard_standing", { their_id: b.id })).body ?? [])
+        .find((r) => r.node === 1);
+    await send(a, b, 3);
+    check("a time only one of them sent is not listed", await standing(), undefined);
+    await send(b, a, 40);
+    check("once both have, the pair is listed", !!(await standing()), true);
+    const top = (await rpc(a, "leaderboard", { p_node: 1, p_limit: 100 })).body ?? [];
+    const mine = top.find((r) => r.is_mine);
+    check("at the slower of the two times", mine ? mine.best_time_s : 40, 40);
+  }
+
+  console.log("\na friend cannot spend somebody else's sharing ceiling");
+  {
+    // The eight-live-matches ceiling counts the rows an account made, not
+    // every row that names it: otherwise one friend fills it for everybody.
+    const a = await makeUser("capa");
+    const b = await makeUser("capb");
+    const c = await makeUser("capc");
+    for (const [u, n] of [[a, "ca"], [b, "cb"], [c, "cc"]]) {
+      await rpc(u, "claim_username", { new_username: `${n}${stamp % 100000}` });
+    }
+    await rpc(a, "request_friend", { their_username: `cb${stamp % 100000}` });
+    await rpc(b, "accept_friend", { their_id: a.id });
+    await rpc(c, "request_friend", { their_username: `cb${stamp % 100000}` });
+    await rpc(b, "accept_friend", { their_id: c.id });
+    for (let i = 0; i < 8; i++) {
+      await rpc(a, "match_consent", { p_match: crypto.randomUUID(), their_id: b.id, p_on: false });
+    }
+    check("the friend who made eight is at their own ceiling",
+          (await rpc(a, "match_consent", { p_match: crypto.randomUUID(), their_id: b.id, p_on: false })).status >= 400,
+          true);
+    check("and the account they named can still share with somebody else",
+          (await rpc(b, "match_consent", { p_match: crypto.randomUUID(), their_id: c.id, p_on: false })).status,
+          200);
+  }
+
   console.log("\nthe whole surface, to somebody who has not signed in");
   {
     const tables = ["profiles", "friendships", "pair_progress", "solo_progress",

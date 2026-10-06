@@ -522,7 +522,10 @@ try {
                   `${board.status} ${JSON.stringify(board.body).slice(0, 300)}`);
     }
     check("a stranger can see the entry", !!entry, true);
-    check("with the time that is actually stored", entry?.best_time_s, stored);
+    // The board shows the slower of the two players' own bests -- a time BOTH
+    // of them reported -- so one friend cannot put the pair on it alone.
+    // Alice sent 41 s and bob 30 s, so the pair's best is 30 and the board's 41.
+    check("with the time both of them reported", entry?.best_time_s, 41);
     check("and it is not hers", entry?.is_mine, false);
     check("but the row behind it is still hidden",
           (await api(mallory, "/pair_progress?select=node,best_time_s")).body?.length,
