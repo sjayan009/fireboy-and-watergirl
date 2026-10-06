@@ -1,5 +1,5 @@
 import { defineConfig, Plugin } from "vite";
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, existsSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveUnder } from "../safepath.mjs";
@@ -110,8 +110,57 @@ function extractedAssets(): Plugin {
   };
 }
 
+/**
+ * The production origin, for the few things that must be absolute: the
+ * canonical link, social cards, the sitemap and llms.txt. Everything a person
+ * clicks stays relative. SITE_URL wins (a custom domain); on Vercel the
+ * project's production domain is supplied to every build.
+ */
+const SITE = (process.env.SITE_URL
+  || (process.env.VERCEL_PROJECT_PRODUCTION_URL && `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`)
+  || "https://fireboy-and-watergirl-official.vercel.app").replace(/\/$/, "");
+
+const PAGES = ["", "developers/", "developers/netcode.html", "developers/recovery.html",
+  "developers/architecture.html", "legal/privacy.html", "legal/terms.html"];
+
+function discovery(): Plugin {
+  return {
+    name: "fbwg-discovery",
+    transformIndexHtml: (html) => html.replaceAll("__SITE__", SITE),
+    apply: "build",
+    closeBundle() {
+      const dist = resolve(ROOT, "dist");
+      writeFileSync(resolve(dist, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${PAGES.map(p => `  <url><loc>${SITE}/${p}</loc></url>`).join("\n")}
+</urlset>
+`);
+      appendFileSync(resolve(dist, "robots.txt"), `
+Sitemap: ${SITE}/sitemap.xml
+`);
+      writeFileSync(resolve(dist, "llms.txt"), `# Fireboy & Watergirl: The Forest Temple, online co-op
+
+> The 2009 Flash game Fireboy & Watergirl in the Forest Temple, recovered from its compiled SWF with no source code and rebuilt in TypeScript for the browser. Two players share one keyboard with no account, or play online from anywhere over deterministic rollback netcode (WebRTC, one frame of input delay). Free. An unofficial fan project, not affiliated with or endorsed by Oslo Albet.
+
+## Play
+- [Play](${SITE}/): landing page; local two-player needs no account, online play needs a free account (13+)
+
+## For Developers
+- [Overview](${SITE}/developers/): how a Flash game with no source became online co-op, with the numbers
+- [Netcode](${SITE}/developers/netcode.html): rollback netcode running live: prediction, correction, re-simulation
+- [Recovery](${SITE}/developers/recovery.html): taking the SWF apart and rebuilding levels, art and audio
+- [Architecture](${SITE}/developers/architecture.html): determinism across browser engines, security, testing
+
+## Legal
+- [Privacy Policy](${SITE}/legal/privacy.html)
+- [Terms](${SITE}/legal/terms.html)
+`);
+    },
+  };
+}
+
 export default defineConfig(({ command }) => ({
-  plugins: [extractedAssets()],
+  plugins: [extractedAssets(), discovery()],
   define: {
     ...publicEnv(),
     __ASSETS__: JSON.stringify(assetBase(command === "serve")),
@@ -144,9 +193,8 @@ export default defineConfig(({ command }) => ({
      *
      * They were shipped, and a shipped source map is the source: the whole app,
      * unminified, with its comments, served from a static origin that anybody
-     * who has the URL can read. This deployment ships art extracted from a 2009
-     * commercial game and is meant not to be public, so handing out the source
-     * alongside it is the same decision made twice by accident.
+     * who has the URL can read. The site is public and indexed now, but the
+     * repository is private, and a source map would publish it anyway.
      *
      * A local `npm run dev` is unaffected -- Vite always maps in development --
      * and `FBWG_SOURCEMAPS=1` puts them back for a build somebody actually

@@ -174,3 +174,10 @@ a.devcard { transition: box-shadow var(--press) var(--ease), transform var(--pre
 .tiers b { display: block; font-weight: 650; }
 .tiers span { color: var(--dim); font-size: .9375rem; }
 @media (max-width: 900px) { .paths { grid-template-columns: minmax(0, 1fr); } }
+
+/* Privacy and Terms (legal/): prose at reading width. */
+.legal { max-width: 46rem; padding-bottom: 4rem; }
+.legal h2 { margin: 2.25rem 0 .75rem; }
+.legal p, .legal li { color: var(--dim); line-height: 1.65; }
+.legal b { color: var(--ink); }
+.legal ul { padding-left: 1.25rem; display: grid; gap: .5rem; }

@@ -37,6 +37,8 @@ const DEVELOPERS = {
   netcode: resolve(HERE, "developers/netcode.html"),
   recovery: resolve(HERE, "developers/recovery.html"),
   architecture: resolve(HERE, "developers/architecture.html"),
+  privacy: resolve(HERE, "legal/privacy.html"),
+  terms: resolve(HERE, "legal/terms.html"),
 };
 
 export default defineConfig(({ mode }) => ({
