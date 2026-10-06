@@ -118,7 +118,7 @@ function extractedAssets(): Plugin {
  */
 const SITE = (process.env.SITE_URL
   || (process.env.VERCEL_PROJECT_PRODUCTION_URL && `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`)
-  || "https://fireboy-and-watergirl-official.vercel.app").replace(/\/$/, "");
+  || "https://fbwg-online-multiplayer.vercel.app").replace(/\/$/, "");
 
 const PAGES = ["", "developers/", "developers/netcode.html", "developers/recovery.html",
   "developers/architecture.html", "legal/privacy.html", "legal/terms.html"];
