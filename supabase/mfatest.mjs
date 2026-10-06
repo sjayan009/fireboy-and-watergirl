@@ -200,8 +200,9 @@ try {
   check("the password session is aal1", claim(weak, "aal"), "aal1");
   check("and the answered one is aal2", claim(strong, "aal"), "aal2");
 
-  const topic = `pair:${me.id < friend.id ? me.id : friend.id}:` +
-                `${me.id < friend.id ? friend.id : me.id}`;
+  const [lo, hi] = me.id < friend.id ? [me.id, friend.id] : [friend.id, me.id];
+  const topic = "pair:" + (await (await admin(
+    `/rest/v1/friendships?select=channel&user_a=eq.${lo}&user_b=eq.${hi}`)).json())[0]?.channel;
 
   console.log("\nwhat the aal1 token can still do, now that a factor exists");
   {
@@ -284,6 +285,21 @@ try {
             .body?.[0]?.best_time_s, 44);
     check("joins the pair's topic",
           (await rpc(strong, "can_use_pair_topic", { topic })).body, true);
+  }
+
+  console.log("\na signed-out session cannot reach recovery");
+  {
+    // Its token outlives the session by up to an hour. The recovery functions
+    // used to read only the token, so a thief kept after "sign out everywhere"
+    // could mint codes, spend one and take the factor off.
+    const ended = await answer(await signInAgain(me), factorId, secret);
+    await fetch(`${URL_}/auth/v1/logout?scope=local`, {
+      method: "POST", headers: { apikey: PUB, Authorization: `Bearer ${ended.token}` },
+    });
+    check("its aal2 token cannot mint codes",
+          refused(await rpc(ended.token, "generate_recovery_codes", {})), true);
+    check("nor spend one",
+          refused(await rpc(ended.token, "redeem_recovery_code", { code: "AAAAA-AAAAA" })), true);
   }
 
   console.log("\nrecovery is minted strong and spent weak");

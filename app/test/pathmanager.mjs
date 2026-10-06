@@ -595,7 +595,7 @@ const repeatedSummary = {
     return "ok";
   } }));
   for (let side = 0; side < 2; side++) {
-    pairs.push(new PairChannel("pair:a:b", lives[side], { userId: side ? "b" : "a", username: `peer${side}`, activity: "in_game" }));
+    pairs.push(new PairChannel("pair:a:b", side ? "a" : "b", lives[side], { userId: side ? "b" : "a", username: `peer${side}`, activity: "in_game" }));
   }
   const relays = pairs.map(pair => {
     const lane = scopedChannel(scopedChannel(pair, "level-attempt"), "path-v1", "gameplay");

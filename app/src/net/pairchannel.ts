@@ -2,8 +2,10 @@
  * The one channel a pair of friends shares.
  *
  * Every accepted friendship has exactly one Supabase Realtime topic,
- * `pair:<lo>:<hi>`, using the same canonical ordering the `friendships` table
- * enforces. That single channel carries four things that would otherwise need
+ * `pair:<channel>`, where `channel` is a column of the friendship row that the
+ * database replaces whenever the friendship changes state. A topic built from
+ * the two user ids could never be withdrawn: an ex-friend who kept a tab open
+ * would still be subscribed to it. That single channel carries four things that would otherwise need
  * four mechanisms:
  *
  *   presence     is my friend online, in the lobby, or in a game
@@ -196,8 +198,14 @@ export interface Handover {
   chooser: string;
 }
 
-export function topicFor(a: string, b: string): string {
-  return `pair:${a < b ? a : b}:${a < b ? b : a}`;
+/** The pair's current topic, read from the friendship row both members may see. */
+export async function topicFor(me: string, friendId: string): Promise<string> {
+  const [lo, hi] = me < friendId ? [me, friendId] : [friendId, me];
+  const { data, error } = await supabase.from("friendships").select("channel")
+    .eq("user_a", lo).eq("user_b", hi).eq("status", "accepted").maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error("You are not friends with that person");
+  return "pair:" + (data as { channel: string }).channel;
 }
 
 // ---- what arrives on the wire -------------------------------------------
@@ -369,6 +377,7 @@ function asPresence(entry: unknown): Presence | null {
 export class PairChannel {
   private constructor(
     readonly topic: string,
+    readonly friendId: string,
     private live: RealtimeChannel,
     readonly me: Presence,
   ) {}
@@ -407,8 +416,7 @@ export class PairChannel {
       void this.close(); return null;
     }
     const p = payload as Record<string, unknown> | null;
-    const friend = this.topic.split(":").find(id => id !== "pair" && id !== this.me.userId);
-    if (!p || p.v !== 2 || p.build !== ENGINE_VERSION || p.from !== friend || !isUuid(p.id)) return null;
+    if (!p || p.v !== 2 || p.build !== ENGINE_VERSION || p.from !== this.friendId || !isUuid(p.id)) return null;
     return { id: p.id, data: p.data };
   }
 
@@ -445,11 +453,13 @@ export class PairChannel {
    * turned into one here or a caller would sit waiting on a channel that is
    * never coming up.
    */
-  static open(friendId: string, me: Presence,
-              signal?: AbortSignal): Promise<PairChannel> {
-    const topic = topicFor(me.userId, friendId);
+  static async open(friendId: string, me: Presence,
+                    signal?: AbortSignal): Promise<PairChannel> {
+    const topic = await topicFor(me.userId, friendId);
+    if (signal?.aborted) throw new Error("cancelled");
     const pair = new PairChannel(
       topic,
+      friendId,
       supabase.channel(topic, {
         config: { private: true, presence: { key: me.userId } },
       }),
