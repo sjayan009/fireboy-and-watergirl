@@ -19,10 +19,12 @@ import tokens from "@landing/shared/tokens.css?inline";
 import base from "@landing/shared/base.css?inline";
 import local from "../ui/guest.css?inline";
 import { el, on } from "../ui/dom.js";
-import { emblem } from "../ui/brand.js";
 
 export const GUEST_KEY = "FBCookie:guest";
 
+// The landing header's own mark, so `.brand` sizes and spaces it exactly as
+// there. The app's `emblem()` carries the sign-in card's size and spacing.
+const EMBLEM = '<svg class="emblem" viewBox="0 0 48 48" aria-hidden="true"><path d="M23 4C24 15 9 17 9 29a14 14 0 0 0 14 14V30c-6-1-6-7-3-10 1 4 3 5 3 5V4Z"/><path d="M29 6c0 9 12 14 12 23a14 14 0 0 1-14 14V29c7-2 8-7 2-13V6Z"/></svg>';
 const ARROW = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12m0 0-5-5m5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 // Corners pointing out to enter, in to leave.
@@ -43,6 +45,9 @@ export function guestScreen(host: HTMLElement): () => void {
     role: "application", "aria-label": "Fireboy and Watergirl, played on a canvas",
     "aria-describedby": "guest-keys",
   });
+  const brand = el("a", { class: "brand", href: "#/", "aria-label": "Fireboy and Watergirl, home" },
+    el("span", { class: "brand-text" }, "Fireboy & Watergirl"));
+  brand.insertAdjacentHTML("afterbegin", EMBLEM);
   const online = el("a", { class: "btn btn-water btn-s btn-online btn-pulse", href: "#/login" }, "Play Online ");
   online.insertAdjacentHTML("beforeend", ARROW);
   // A level's art arrives before it starts. Without this the stage sits on the
@@ -76,8 +81,7 @@ export function guestScreen(host: HTMLElement): () => void {
   host.append(el("div", { class: "local" },
     el("header", { class: "nav" },
       el("div", { class: "wrap nav-row" },
-        el("a", { class: "brand", href: "#/", "aria-label": "Fireboy and Watergirl, home" },
-          emblem(), el("span", { class: "brand-text" }, "Fireboy & Watergirl")),
+        brand,
         el("div", { class: "nav-end" }, full, online))),
     el("main", { class: "local-main" },
       el("div", { class: "local-stage" }, canvas, loading),
