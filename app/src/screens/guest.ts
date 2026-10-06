@@ -25,6 +25,10 @@ export const GUEST_KEY = "FBCookie:guest";
 
 const ARROW = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12m0 0-5-5m5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
+// Corners pointing out to enter, in to leave.
+const EXPAND = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 7.5v-4h4M16.5 7.5v-4h-4M3.5 12.5v4h4M16.5 12.5v4h-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const SHRINK = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 3.5v4h-4M12.5 3.5v4h4M7.5 16.5v-4h-4M12.5 16.5v-4h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
 const key = (code: string, label: string, name: string) =>
   el("kbd", { "data-code": code, title: name }, label);
 
@@ -41,13 +45,21 @@ export function guestScreen(host: HTMLElement): () => void {
   });
   const online = el("a", { class: "btn btn-water btn-s btn-online btn-pulse", href: "#/login" }, "Play Online ");
   online.insertAdjacentHTML("beforeend", ARROW);
+  // A laptop window is short, so the stage is limited by height: full screen
+  // gives it the whole display, key cards and all.
+  const full = el("button", { class: "btn btn-ghost btn-s", type: "button" });
+  const drawFull = () => {
+    const on = !!document.fullscreenElement;
+    full.innerHTML = (on ? SHRINK : EXPAND) + (on ? "Exit Full Screen" : "Full Screen");
+  };
+  drawFull();
 
   host.append(el("div", { class: "local" },
     el("header", { class: "nav" },
       el("div", { class: "wrap nav-row" },
         el("a", { class: "brand", href: "#/", "aria-label": "Fireboy and Watergirl, home" },
           emblem(), el("span", { class: "brand-text" }, "Fireboy & Watergirl")),
-        el("div", { class: "nav-end" }, online))),
+        el("div", { class: "nav-end" }, full, online))),
     el("main", { class: "local-main" },
       el("div", { class: "local-stage" }, canvas),
       el("div", { class: "local-controls", id: "guest-keys" },
@@ -55,7 +67,7 @@ export function guestScreen(host: HTMLElement): () => void {
           el("span", { class: "player-name" }, "Fireboy"),
           el("span", { class: "keys" },
             key("ArrowLeft", "←", "Left arrow"), key("ArrowUp", "↑", "Up arrow"), key("ArrowRight", "→", "Right arrow"))),
-        el("p", { class: "local-hint" }, key("KeyP", "P", "P"), "pauses", el("br"), "Saved in this browser"),
+        el("p", { class: "local-hint" }, key("KeyP", "P", "P"), "pauses · Saved in this browser"),
         el("div", { class: "player player-water" },
           el("span", { class: "player-name" }, "Watergirl"),
           el("span", { class: "keys" },
@@ -66,11 +78,16 @@ export function guestScreen(host: HTMLElement): () => void {
   const caps = new Map([...host.querySelectorAll<HTMLElement>("kbd[data-code]")].map(k => [k.dataset.code!, k]));
   const press = (down: boolean) => (e: Event) => caps.get((e as KeyboardEvent).code)?.classList.toggle("is-down", down);
   const release = () => caps.forEach(k => k.classList.remove("is-down"));
-  const off = [on(window, "keydown", press(true)), on(window, "keyup", press(false)), on(window, "blur", release)];
+  const page = host.querySelector<HTMLElement>(".local")!;
+  const off = [on(window, "keydown", press(true)), on(window, "keyup", press(false)), on(window, "blur", release),
+    on(document, "fullscreenchange", drawFull),
+    on(full, "click", () => document.fullscreenElement ? document.exitFullscreen() : page.requestFullscreen())];
+  if (!document.fullscreenEnabled) full.hidden = true;
 
   const view = new GameView({ canvas, assets: __ASSETS__, save: new LocalSave(GUEST_KEY) });
   canvas.focus();
   return () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
     view.destroy();
     off.forEach(f => f());
     host.classList.remove("guest-host");
