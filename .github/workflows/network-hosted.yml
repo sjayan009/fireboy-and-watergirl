@@ -32,7 +32,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm --prefix engine run build
       - run: npx playwright install --with-deps chromium
       - name: credentials from the broker, which checks this is main

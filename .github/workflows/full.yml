@@ -58,7 +58,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: credentials from the broker, which checks this is main
         uses: ./.github/actions/ci-credentials
         with:
@@ -91,7 +91,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npx playwright install --with-deps chromium firefox webkit
       # No credentials at all: none of this touches the network.
       - name: the whole engine, including the soak and the goldens
@@ -111,7 +111,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: credentials from the broker, which checks this is main
         uses: ./.github/actions/ci-credentials
         with:
@@ -150,7 +150,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npx playwright install --with-deps chromium firefox webkit
       - name: credentials from the broker, which checks this is main
         uses: ./.github/actions/ci-credentials
