@@ -11,7 +11,7 @@
     "serve": "node serve.mjs",
     "dev": "npm --prefix app run dev",
     "build": "npm --prefix app run build",
-    "test": "npm --prefix engine test && npm run test:progress && npm run test:network-unit && npm run test:free && npm run test:servers && npm run test:docs && npm run build && npm run test:assets && npm run check && npm run lint",
+    "test": "npm --prefix engine test && npm run test:progress && node app/test/age.mjs && npm run test:network-unit && npm run test:free && npm run test:servers && npm run test:docs && npm run build && npm run test:assets && npm run check && npm run lint",
     "unenrol": "node supabase/unenrol.mjs",
     "app:test": "npm --prefix app test",
     "check": "npm --prefix app run check",

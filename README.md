@@ -52,6 +52,12 @@ credentials come from an authenticated Supabase Edge Function. See the
 
 ## Accounts
 
+Local two-player (`#/local`) needs no account and keeps progress in the
+browser. Accounts are 13 and up: every way to make one, Google included, waits
+on a neutral age screen first (`app/src/age.ts`). The Privacy Policy and Terms
+are in `design/landing/legal/`, and [docs/LAUNCH.md](docs/LAUNCH.md) has the
+launch checklist.
+
 Sign-up needs a confirmed email address, and two-factor is optional. Google
 sign-in satisfies verification without requiring an outbound email provider.
 `claim_username` creates the profile after verification; invite codes have been
