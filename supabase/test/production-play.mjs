@@ -153,8 +153,9 @@ try {
    * A friendship ending rotates only the feeds it actually cut off. c is a
    * friend of a; d is a friend of a AND of b. When a blocks c, c's way into
    * a's match with b is gone and the feed must change. When a then blocks d,
-   * d can still watch through b, so the feed stays put rather than cutting off
-   * every other spectator for nothing.
+   * the block reaches a's matches too: d no longer watches through b
+   * (20261007000000), so that feed changes as well. Removing d without a
+   * block would leave d watching through b, and the feed would stay put.
    */
   await db.query("reset role");
   await db.query("insert into public.friendships(user_a,user_b,status,requested_by) values($1,$2,'accepted',$1),($3,$2,'accepted',$3)",[a,d,b]);
@@ -168,8 +169,8 @@ try {
   assert.equal(rotated.shared,true,"without either player losing consent");
   await db.query("select public.block_friend($1)",[d]);
   const kept = (await db.query("select * from public.match_watch_state($1)",[match])).rows[0];
-  assert.equal(kept.topic,rotated.topic,"blocking d, who still watches through b, rotates nothing");
-  await as(d); assert.equal(await may("can_watch_pair_topic",kept.topic),true,"and d still watches through b");
+  assert.notEqual(kept.topic,rotated.topic,"blocking d rotates the feed d was on");
+  await as(d); assert.equal(await may("can_watch_pair_topic",kept.topic),false,"and d may not watch a through b");
   await as(a);
   assert.equal((await db.query("select (public.unblock_friend($1)).status s",[c])).rows[0].s,"accepted");
   assert.equal((await db.query("select (public.unblock_friend($1)).status s",[d])).rows[0].s,"accepted");
@@ -255,16 +256,18 @@ try {
   const released = (await db.query("select state, replay from play_private.ranked_attempts where id=$1",[stuck])).rows[0];
   assert.deepEqual(released,{ state:"not_ranked", replay:null },"a stuck queue row is ended and its replay released");
 
-  // D7: two hundred waiting attempts per account.
-  await db.query(`insert into play_private.ranked_attempts(user_a,user_b,connection,run,mode,level,engine)
-                  select $1,$2,gen_random_uuid(),1,'speed',3,$3 from generate_series(1,200)`,[a,c,ENGINE_VERSION]);
+  // D7: two hundred waiting attempts per account -- the ones IT registered
+  // (20261007000000), so one friend cannot fill another's ceiling.
+  await db.query(`insert into play_private.ranked_attempts(user_a,user_b,connection,run,mode,level,engine,registered_a)
+                  select $1,$2,gen_random_uuid(),1,'speed',3,$3,true from generate_series(1,200)`,[a,c,ENGINE_VERSION]);
   await as(a); await refused("53400","select public.register_ranked_attempt($1,$2,21,'speed',3,$3)",[c,randomUUID(),ENGINE_VERSION]);
+  await as(c); await register(a,23);
   await db.query("reset role");
   await db.query("delete from play_private.ranked_attempts where run=1 and state='waiting' and user_a=$1 and user_b=$2",[a,c]);
 
   // D7: eight waiting attempts holding replay bytes per account.
-  await db.query(`insert into play_private.ranked_attempts(user_a,user_b,connection,run,mode,level,engine,replay)
-                  select $1,$2,gen_random_uuid(),1,'speed',3,$3,'r' from generate_series(1,8)`,[a,c,ENGINE_VERSION]);
+  await db.query(`insert into play_private.ranked_attempts(user_a,user_b,connection,run,mode,level,engine,replay,replay_by)
+                  select $1,$2,gen_random_uuid(),1,'speed',3,$3,'r',$1 from generate_series(1,8)`,[a,c,ENGINE_VERSION]);
   await as(a); const ninth = await register(c,22);
   await refused("53400","select public.submit_ranked_replay($1,$2,$3)",[ninth,digest,replay]);
   await db.query("reset role");

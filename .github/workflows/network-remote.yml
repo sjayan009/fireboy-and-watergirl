@@ -11,6 +11,10 @@ on:
         description: Full commit SHA served by /version.txt
         required: true
         type: string
+      share_url:
+        description: Vercel share URL for the Preview (expires after 23 hours)
+        required: true
+        type: string
       repetitions:
         description: One or two fresh games; each repeats close, silent, close
         required: true
@@ -28,6 +32,9 @@ on:
       repetitions:
         required: true
         type: string
+      share_url:
+        required: true
+        type: string
     secrets:
       SUPABASE_URL:
         required: true
@@ -36,8 +43,6 @@ on:
       SUPABASE_PROJECT_REF:
         required: true
       BROWSERBASE_PROJECT_ID:
-        required: true
-      FBWG_VERCEL_SHARE_URL:
         required: true
 
 permissions:
@@ -58,6 +63,12 @@ jobs:
       deployments: read
       id-token: write   # the OIDC token the ci-credentials broker checks
     steps:
+      # The share URL arrives as a run input rather than a repository secret,
+      # which a workflow on any branch could read. Inputs are not masked, so it
+      # is masked here first, read from the event file so that no step prints
+      # it in its env header before the mask exists.
+      - name: mask the share URL
+        run: node -e "const u=require(process.env.GITHUB_EVENT_PATH).inputs?.share_url; if(!u){process.exit(1)} console.log('::add-mask::'+u)"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -83,7 +94,7 @@ jobs:
             done <<< "$urls"
           done
           test "$found" = 1
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm --prefix engine run build
       - run: npx playwright install --with-deps chromium
       - name: credentials from the broker, which checks this is main
@@ -110,7 +121,7 @@ jobs:
           FBWG_PREVIEW_URL: ${{ inputs.preview_url }}
           FBWG_EXPECTED_SHA: ${{ inputs.expected_sha }}
           FBWG_REPETITIONS: ${{ inputs.repetitions }}
-          FBWG_VERCEL_SHARE_URL: ${{ secrets.FBWG_VERCEL_SHARE_URL }}
+          FBWG_VERCEL_SHARE_URL: ${{ inputs.share_url }}
           BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
         run: node app/test/remote-network.mjs
       - name: remove test environment

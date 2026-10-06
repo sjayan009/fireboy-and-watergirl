@@ -286,6 +286,11 @@ try {
     // the form that works when somebody opens the email on a different device
     // from the one they signed up on.
     const page = await newPage();
+    // No browser asked for this link, so the app asks before keeping the
+    // session it carries (a link for someone else's account must not sign
+    // this browser in silently).
+    let asked = "";
+    page.once("dialog", (d) => { asked = d.message(); void d.accept(); });
     await page.goto(
       `${URL_}?token_hash=${linked.hashed_token}&type=signup`,
       { waitUntil: "load" });
@@ -299,6 +304,7 @@ try {
         () => document.body.innerText.slice(0, 200))));
       throw new Error("the confirmation link did not land on the app");
     }
+    check("a link nobody here asked for asks first", asked.includes(email), true);
     check("following it lands on the username screen, signed in", true, true);
 
     const after = await (await admin(
@@ -524,6 +530,7 @@ try {
           typeof linked.hashed_token === "string", true);
 
     const page = await newPage();
+    page.once("dialog", (d) => void d.accept());
     await page.goto(
       `${URL_}?token_hash=${linked.hashed_token}&type=recovery&intent=password`,
       { waitUntil: "load" });

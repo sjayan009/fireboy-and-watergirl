@@ -69,9 +69,16 @@ async function makeUser(tag) {
   return u;
 }
 
-/** The pair topic for two ids, in the order `friendships` stores them. */
-const topicFor = (a, b) =>
-  `pair:${a < b ? a : b}:${a < b ? b : a}`;
+/**
+ * The pair topic for two ids: `pair:` and the friendship row's `channel`,
+ * which the database replaces whenever the friendship changes state.
+ */
+const topicFor = async (a, b) => {
+  const [lo, hi] = a < b ? [a, b] : [b, a];
+  const rows = await (await admin(
+    `/rest/v1/friendships?select=channel&user_a=eq.${lo}&user_b=eq.${hi}`)).json();
+  return "pair:" + rows[0]?.channel;
+};
 
 /**
  * Try to join a topic, and say what happened.
@@ -132,14 +139,14 @@ try {
   // which is worth knowing before relying on unfriending to lock somebody out.
   await rpc(alice, "request_friend", { their_username: mn });
   check("neither side may use it",
-        await join(alice, topicFor(alice.id, mallory.id)), "refused");
+        await join(alice, await topicFor(alice.id, mallory.id)), "refused");
 
   console.log("\nan accepted one opens exactly one channel");
   await rpc(alice, "request_friend", { their_username: bn });
   const accepted = await rpc(bob, "accept_friend", { their_id: alice.id });
   check("bob accepts", accepted.status, 200);
 
-  const pair = topicFor(alice.id, bob.id);
+  const pair = await topicFor(alice.id, bob.id);
   check("alice is let in", await join(alice, pair), "in");
   check("so is bob", await join(bob, pair), "in");
 
@@ -305,6 +312,26 @@ try {
     });
     check("and a watcher receives what the players put on it",
           saw?.p?.[0], "AQ==");
+
+    // A block is between two people, and watching through a mutual friend
+    // must not go around it: mallory, blocked by bob, is still alice's friend.
+    await rpc(mallory, "request_friend", { their_username: bn });
+    await rpc(bob, "accept_friend", { their_id: mallory.id });
+    await rpc(bob, "block_friend", { their_id: mallory.id });
+    const now = said(await rpc(alice, "match_watch_state", { p_match: match }))?.topic;
+    check("a block rotates the feed the blocked friend had", now !== watch, true);
+    check("and the blocked friend may not watch through the other player",
+          (await rpc(mallory, "can_watch_pair_topic", { topic: now })).body, "false");
+  }
+
+  console.log("\nending a friendship ends its channel");
+  {
+    // Realtime keeps an authorization decision for a while, so a topic made of
+    // the two ids could never be taken back from a tab that stayed open.
+    await rpc(bob, "block_friend", { their_id: alice.id });
+    check("the pair's channel is replaced", (await topicFor(alice.id, bob.id)) !== pair, true);
+    check("and the old topic is refused",
+          (await rpc(alice, "can_use_pair_topic", { topic: pair })).body, "false");
   }
 } finally {
   for (const u of users) {
