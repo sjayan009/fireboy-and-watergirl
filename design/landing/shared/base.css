@@ -111,31 +111,34 @@ h1, h2, h3, h4, p { margin: 0; }
   .btn-water:hover svg { transform: var(--nudge); }
 }
 /*
- * Play Online is alive, like the app's "Connected" dot: every 2 s the button
- * itself swells brighter and sends a glow out from its edge (the dot's own
- * ripple, 2 s ease-out, fading by 70%), and a ring of water light leaves it on
- * the same beat. It all stops while the pointer is on the button -- once
- * someone is there it has done its job -- and under reduced motion.
+ * Play Online breathes light, not size: it breathes in (the fill brightens,
+ * the edge sharpens, a glow gathers around it) and breathes out (it all fades
+ * back), and at the top of each breath a ring of water light leaves it, like
+ * the app's "Connected" dot. One 2.8 s cycle, eased in and out like a breath
+ * rather than a tick. The button never changes size. All of it stops while the
+ * pointer is on the button -- once someone is there it has done its job -- and
+ * under reduced motion.
  */
-.btn-pulse { animation: btn-live 2s ease-out infinite; }
-@keyframes btn-live {
-  0% {
-    background-color: color-mix(in srgb, var(--water) 30%, transparent);
-    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--water-text) 85%, transparent), 0 0 0 0 color-mix(in srgb, var(--water) 60%, transparent);
-  }
-  70%, 100% {
+.btn-pulse { animation: btn-breathe 2.8s ease-in-out infinite; }
+@keyframes btn-breathe {
+  0%, 100% {
     background-color: color-mix(in srgb, var(--water) 16%, transparent);
-    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--water-text) 55%, transparent), 0 0 0 .5rem color-mix(in srgb, var(--water) 0%, transparent);
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--water-text) 55%, transparent), 0 0 0 0 color-mix(in srgb, var(--water) 0%, transparent);
+  }
+  45% {
+    background-color: color-mix(in srgb, var(--water) 32%, transparent);
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--water-text) 95%, transparent), 0 0 1.5rem .25rem color-mix(in srgb, var(--water) 45%, transparent);
   }
 }
 .btn-pulse::after {
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
   box-shadow: 0 0 0 1.5px var(--water), 0 0 1rem color-mix(in srgb, var(--water) 45%, transparent);
-  opacity: 0; animation: btn-pulse 2s ease-out infinite;
+  opacity: 0; animation: btn-ring 2.8s ease-out infinite;
 }
-@keyframes btn-pulse {
-  0% { opacity: .9; transform: scale(1); }
-  70%, 100% { opacity: 0; transform: scale(1.12, 1.35); }
+@keyframes btn-ring {
+  0%, 40% { opacity: 0; transform: scale(1); }
+  45% { opacity: .85; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.12, 1.4); }
 }
 @media (hover: hover) and (pointer: fine) { .btn-pulse:hover, .btn-pulse:hover::after { animation: none; } }
 @media (prefers-reduced-motion: reduce) { .btn-pulse, .btn-pulse::after { animation: none; } }
