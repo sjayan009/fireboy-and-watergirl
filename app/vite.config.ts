@@ -140,7 +140,7 @@ Sitemap: ${SITE}/sitemap.xml
 `);
       writeFileSync(resolve(dist, "llms.txt"), `# Fireboy & Watergirl: The Forest Temple, online co-op
 
-> The 2009 Flash game Fireboy & Watergirl in the Forest Temple, recovered from its compiled SWF with no source code and rebuilt in TypeScript for the browser. Two players share one keyboard with no account, or play online from anywhere over deterministic rollback netcode (WebRTC, one frame of input delay). Free. An unofficial fan project, not affiliated with or endorsed by Oslo Albet.
+> The 2009 Flash game Fireboy & Watergirl in the Forest Temple, recovered from its compiled SWF with no source code and rebuilt in TypeScript for the browser. Two players share one keyboard with no account, or play online from anywhere over deterministic rollback netcode (WebRTC, one frame of input delay). Free. An unofficial fan project by Jayan Sirikonda, not affiliated with or endorsed by Oslo Albet.
 
 ## Play
 - [Play](${SITE}/): landing page; local two-player needs no account, online play needs a free account (13+)
