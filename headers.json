@@ -1,10 +1,4 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "npm run build",
-  "installCommand": "npm ci --include=dev",
-  "outputDirectory": "dist",
-  "framework": null,
-  "github": { "silent": true },
   "headers": [
     {
       "source": "/extracted/assets/(.*)",
@@ -13,7 +7,10 @@
           "key": "Cache-Control",
           "value": "public, max-age=31536000, immutable"
         },
-        { "key": "X-Robots-Tag", "value": "noindex, nofollow" }
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
       ]
     },
     {
@@ -32,10 +29,22 @@
           "key": "Content-Security-Policy",
           "value": "default-src 'self'; script-src 'self'; style-src 'self'; style-src-elem 'self' 'sha256-VMQTkPHMY8rvPOczWlEeu9poHrp+Y+b9IfATFZOuIpg='; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' https://hkuhkzcnwircqcmxurxi.supabase.co wss://hkuhkzcnwircqcmxurxi.supabase.co; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains" },
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "Referrer-Policy", "value": "no-referrer" },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
         {
           "key": "Permissions-Policy",
           "value": "camera=(), microphone=(), geolocation=(), interest-cohort=()"

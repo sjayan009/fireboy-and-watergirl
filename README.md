@@ -74,7 +74,7 @@ art are static files on a CDN and anybody who has the URL can fetch them; the
 enforced in the database rather than only on the screen that asks for the code —
 a session that has not answered its own factor is refused by every policy — but
 neither of those restricts who can download the game. If that matters, it has to
-be a deployment-level control (Vercel's protection, or an authenticated asset
+be a deployment-level control (Cloudflare Access, or an authenticated asset
 route), and there is not one today.
 
 Two-factor has ten single-use recovery codes, minted and hashed in the database

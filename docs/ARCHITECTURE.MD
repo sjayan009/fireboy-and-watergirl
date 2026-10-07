@@ -1069,20 +1069,20 @@ flowchart TB
         PR["worker-image — on demand<br/>docker build"]
     end
     WORKERS["Workers Git integration — builds on main push<br/>npm run build, wrangler deploy --assets=./dist"]
-    VERCEL["Vercel — branch Preview<br/>PathManager and test hooks only there"]
+    PREVIEW["Workers preview URL — non-main branches<br/>PathManager and test hooks only there"]
     LIVE["Static origin + CSP, X-Robots-Tag: noindex"]
     SUPA[("Supabase project")]
     VM["Free Linux VM — docker compose up worker"]
 
     PUSH --> FAST
     PUSH --> WORKERS --> LIVE
-    PUSH -. branch preview .-> VERCEL
+    PUSH -. branch preview .-> PREVIEW
     PUSH --> DEP
     DEP -->|"npm run db:migrate"| SUPA
     DEP -->|"poll /version.txt until it is THIS commit"| LIVE
     FULL --> SUPA
     HOSTED --> SUPA
-    REMOTE --> VERCEL
+    REMOTE --> PREVIEW
     REMOTE --> SUPA
     KA --> SUPA
     PR -.->|"image, installed by hand"| VM
@@ -1108,7 +1108,7 @@ deploy that has genuinely lost its configuration still fails rather than shippin
 a bundle pointed at nowhere. Production source maps are off (`FBWG_SOURCEMAPS=1`
 puts them back), because a shipped source map *is* the source.
 
-**Response headers** come from `vercel.json`: a CSP with `default-src 'self'`
+**Response headers** come from `headers.json` (shipped as `_headers`): a CSP with `default-src 'self'`
 and `connect-src` limited to `'self'` plus `*.supabase.co` (and `wss:`),
 `frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`,
 `Referrer-Policy: no-referrer`, a `Permissions-Policy` that turns camera,

@@ -108,8 +108,19 @@ export function guestScreen(host: HTMLElement): () => void {
     on(full, "click", () => document.fullscreenElement ? document.exitFullscreen() : page.requestFullscreen())];
   if (!document.fullscreenEnabled) full.hidden = true;
 
+  // A cleared level puts the results board (`Recuento`) on the stage; the glow
+  // behind it breathes out once as it arrives.
+  const stage = host.querySelector<HTMLElement>(".local-stage")!;
+  let cleared = false;
+  off.push(on(stage, "animationend", () => stage.classList.remove("is-cleared")));
+  const onFrame = (v: GameView) => {
+    const now = v.game.children.some((c: any) => c.symbol === "Recuento");
+    if (now && !cleared) stage.classList.add("is-cleared");
+    cleared = now;
+  };
+
   const view = new GameView({ canvas, assets: __ASSETS__, save: new LocalSave(GUEST_KEY),
-    onPreparationProgress: progress, onRefused: refused });
+    onPreparationProgress: progress, onRefused: refused, onFrame });
   canvas.focus();
   return () => {
     if (document.fullscreenElement) void document.exitFullscreen();
