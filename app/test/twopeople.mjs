@@ -138,6 +138,12 @@ try {
 
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
+  // FBWG_FORCE_RELAY=1 runs every section on the relay instead of whatever the
+  // machine's networking happens to allow. Which link a run gets is otherwise
+  // luck, and the relay is the path players behind strict NATs depend on.
+  if (process.env.FBWG_FORCE_RELAY) {
+    for (const ctx of [ctxA, ctxB]) await ctx.addInitScript(() => { window.RTCPeerConnection = undefined; });
+  }
   const a = await ctxA.newPage();
   const b = await ctxB.newPage();
   function watchPage(tag, p) {
@@ -538,27 +544,35 @@ try {
    * at the top of this file, which two later blocks read back. The board is the
    * thing under test, and both boards are taken down by the same code.
    */
+  //
+  // Both wrappers are NON-ENUMERABLE own properties, and that is load-bearing.
+  // The rollback snapshot walks every enumerable field of the Game and puts each
+  // one back on restore, functions included. A plain `g.StartGame = ...` was
+  // therefore simulation state: a correction that restored a snapshot taken
+  // while it was installed resurrected it on that one peer, after
+  // `playNormally` had removed it -- and that peer's next level died at frame
+  // 0 while the other's ran. That is the `desync at frame 8: a69475f3` this
+  // block reported intermittently, locally and in CI. The game was in step;
+  // the test had put its own patch inside what it was comparing.
   const endNextLevel = (page) => page.evaluate(() => {
     const g = window.__fbwg.view.game;
-    if (g.__realStartGame) return;
-    g.__realStartGame = g.StartGame;
-    g.StartGame = function (...args) {
-      const out = g.__realStartGame.apply(this, args);
+    if (Object.hasOwn(g, "StartGame")) return;
+    const real = g.StartGame;
+    Object.defineProperty(g, "StartGame", { configurable: true, writable: true, enumerable: false, value: function (...args) {
+      const out = real.apply(this, args);
       // A getter, because the level writes to this itself -- it is set from the
       // physics contact and cleared on the way in. The setter swallows both.
       Object.defineProperty(this.m_level.myContactListener, "deadFire", {
         get: () => true, set: () => {}, configurable: true,
       });
       return out;
-    };
+    } });
   });
 
   /** Put `StartGame` back, or every level after this one dies as it begins. */
   const playNormally = (page) => page.evaluate(() => {
-    const g = window.__fbwg.view.game;
-    if (!g.__realStartGame) return;
-    g.StartGame = g.__realStartGame;
-    g.__realStartGame = null;
+    // Deleting the own property uncovers the prototype's method again.
+    delete window.__fbwg.view.game.StartGame;
   });
 
   /** Wait for the results or game-over board to reach both of them. */
@@ -715,14 +729,20 @@ try {
   // game runs on wall time, and wall time buys fewer frames on a machine
   // running three browsers than on an idle one -- so a fixed wait is a bet on
   // how busy the machine is, and this test lost it.
+  //
+  // Asked of BOTH pages, never one. The peer that is ahead draws the other
+  // character from a prediction of keys still held down -- which is how alice
+  // could see bob's Fireboy at x = 22 while bob, the only one whose keyboard
+  // moves him, had got him to 15. Releasing on her say-so let go of his key
+  // early, and the real Fireboy stopped short of the line this asserts.
   for (let i = 0; i < 60; i++) {
     await a.waitForTimeout(250);
-    const far = await a.evaluate(() => {
+    const far = await Promise.all([a, b].map((p) => p.evaluate(() => {
       const lv = window.__fbwg.view.level;
       return lv ? lv.pers1.GetPosition().x > 22 && lv.pers2.GetPosition().x < 4
                 : false;
-    });
-    if (far) break;
+    })));
+    if (far.every(Boolean)) break;
   }
   await fire.keyboard.up("ArrowRight");
   await water.keyboard.up("ArrowLeft");
@@ -740,7 +760,10 @@ try {
   if (agreed) console.log(`  identical for ${agreed.frame} frames`);
 
   // Where the characters are, which is the thing a person would look at. Read
-  // in one evaluate per page so the two numbers come from one moment.
+  // in one evaluate per page so the two numbers come from one moment -- and
+  // not during a correction, which replays across ticks with the picture held
+  // still and the level itself wound back to the snapshot underneath it.
+  await until(() => window.__fbwg.view.session.recovering, (both) => both.every((r) => !r));
   const where = await Promise.all([a, b].map((p) => p.evaluate(() => {
     const lv = window.__fbwg.view.level;
     return lv ? [+lv.pers1.GetPosition().x.toFixed(1),
@@ -915,13 +938,44 @@ try {
     // begun again counts up from zero at twenty-six frames a second, so by the
     // time a poll happens to catch both peers agreeing it can already be past
     // where the old one was -- and then "did it start again" reads as no.
+    //
+    // Which way back is right depends on what broke. A dead peer connection is
+    // a dead session: the pair rebuild it, and the level starts again. A relay
+    // channel the client rejoins inside its grace period is not reported to
+    // anyone -- the pipe is replaced underneath -- so the right outcome there
+    // is that the game simply carries on: each stalled peer repeats its input
+    // until the other hears it. Before that repeat existed, both sat on
+    // "Waiting for your friend" for good, and this section said so.
+    const relay = broke === "relay";
     const back = await until(() => ({
       running: window.__fbwg.view.session?.running ?? false,
       frame: window.__fbwg.view.session?.frame ?? -1,
-    }), (both) => both[0].running && both[1].running &&
-                  both[0].frame < before[0] && both[1].frame < before[1],
+    }), (both) => both[0].running && both[1].running && (relay
+      ? both.every((x, i) => x.frame < before[i] || x.frame > before[i] + 60)
+      : both[0].frame < before[0] && both[1].frame < before[1]),
       200, 250);
-    check("both are back in a level, and it started again", back !== null, true);
+    check(relay ? "both are playing again" : "both are back in a level, and it started again",
+          back !== null, true);
+    if (!back) {
+      // Which half did not come back: the channel, the session, or the level.
+      for (const [tag, p] of [["A", a], ["B", b]]) {
+        console.log(`  [${tag}] ` + JSON.stringify(await p.evaluate(() => {
+          const v = window.__fbwg.view, s = v.session;
+          let t = s?.transport;
+          while (t?.inner) t = t.inner;
+          return {
+            session: !!s, running: s?.running ?? null, frame: s?.frame ?? null,
+            generation: s?.generation ?? null, linkDown: s?.linkDown ?? null,
+            kind: t?.kind ?? null,
+            channels: [...(window.__fbwg.lobby?.channels?.values() ?? [])]
+              .map((ch) => `${ch.topic?.slice(0, 18)}=${ch.channel?.state}`),
+            status: document.querySelector(".status")?.textContent?.slice(0, 80),
+            banner: document.querySelector(".banner")?.hidden ? null
+              : document.querySelector(".banner")?.textContent?.slice(0, 100),
+          };
+        })));
+      }
+    }
     if (back) console.log(`  restarted at frame ${back[0].frame}, ` +
                           `where they had reached ${before[0]}`);
     const together = await agree();

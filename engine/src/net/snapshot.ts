@@ -1,3 +1,4 @@
+import type { Ported } from "../ported.js";
 /**
  * Save and restore the whole simulation, so netplay can roll back.
  *
@@ -130,7 +131,7 @@ export interface SnapshotStats {
 
 export class Snapshot {
   /** Every walked object, in discovery order. The index is the reference id. */
-  private objs: any[] = [];
+  private objs: Ported[] = [];
   /** Per object: container kind, field count, and the field names for K_OBJ. */
   private kind = new Uint8Array(1024);
   private count = new Uint32Array(1024);
@@ -140,7 +141,7 @@ export class Snapshot {
   private tags = new Uint8Array(4096);
   private nums = new Float64Array(4096);
   /** Strings and functions, in field order but compacted. */
-  private others: any[] = [];
+  private others: Ported[] = [];
 
   private nObj = 0;
   private nSlot = 0;
@@ -173,7 +174,7 @@ export class Snapshot {
    * Reuses this instance's arrays, because the session keeps a ring of these
    * and re-fills them in place rather than allocating one per frame.
    */
-  capture(roots: any[]): this {
+  capture(roots: Ported[]): this {
     this.gen = ++GEN;
     this.nObj = 0;
     this.nSlot = 0;
@@ -195,7 +196,7 @@ export class Snapshot {
   }
 
   /** The reference id of an object, assigning one on first sight. */
-  private idOf(v: any): number {
+  private idOf(v: Ported): number {
     if (v.__sgen === this.gen) return v.__sid as number;
     const id = this.nObj++;
     if (v.__sgen === undefined) {
@@ -233,14 +234,14 @@ export class Snapshot {
   }
 
   /** Whether a value is a container this walk should descend into. */
-  private walkable(v: any): boolean {
+  private walkable(v: Ported): boolean {
     if (v === null || typeof v !== "object") return false;
     const c = v.constructor;
     if (c !== undefined && FOREIGN.has(c.name)) { this.foreign++; return false; }
     return true;
   }
 
-  private push(v: any): void {
+  private push(v: Ported): void {
     const s = this.nSlot++;
     if (s >= this.tags.length) this.growSlots();
     const t = typeof v;
@@ -281,7 +282,7 @@ export class Snapshot {
    * comparison per field, which is a pointer compare because property names are
    * interned.
    */
-  private fieldsOf(o: any): string[] {
+  private fieldsOf(o: Ported): string[] {
     let ks: string[] | undefined = o.__skeys;
     if (ks === undefined) {
       ks = [];
@@ -351,7 +352,7 @@ export class Snapshot {
     // Reading one field: the mirror of push(). The two cursors are why this is
     // a closure rather than a method -- `others` is compacted, so it advances
     // only on the tags that actually consumed one.
-    const value = (): any => {
+    const value = (): Ported => {
       const t = tags[p];
       const n = nums[p];
       p++;

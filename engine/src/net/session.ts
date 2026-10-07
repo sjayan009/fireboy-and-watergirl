@@ -57,7 +57,7 @@ import { Snapshot } from "./snapshot.js";
 import { type Replay, encodeInputs, parseReplay } from "../verified.js";
 import { ENGINE_VERSION } from "../version.js";
 import {
-  Command, HISTORY, Kind, decode, encodeCommand, encodeInput,
+  Command, HISTORY, Kind, MAX_PACKET, decode, encodeCommand, encodeInput,
   type InputPacket,
 } from "./protocol.js";
 
@@ -254,6 +254,28 @@ const COMMAND_LIFETIME_MS = 2000;
 const START_LIFETIME_MS = 15000;
 
 /**
+ * How often a stalled peer repeats its newest input.
+ *
+ * Input used to go out only when a new frame was scheduled, and a stalled peer
+ * schedules none -- so two peers that had both lost packets in a blip each sat
+ * waiting for the other to say something, neither ever did, and the pair froze
+ * on "Waiting for your friend" for good. Every packet carries the last HISTORY
+ * frames, so one repeat that gets through is enough to fill the gap and unstick
+ * them both. Five a second while stalled; nothing while running.
+ */
+const STALL_RESEND_MS = 200;
+
+/**
+ * How long a gap no repeat can fill is waited out before the link is called.
+ *
+ * If the other side's newest frame is more than HISTORY past the first one we
+ * are missing, nothing they will ever send again reaches back that far. The
+ * wait only allows for an older packet still in flight; after it, the honest
+ * answer is the one a dead link gets -- rebuild -- not a frozen screen.
+ */
+const UNREACHABLE_GAP_MS = 3000;
+
+/**
  * The most commands the outbox will carry at once.
  *
  * The epoch stamp below already drops the entry that used to grow without
@@ -411,6 +433,8 @@ export class NetSession {
   }[] = [];
   /** Whether the peer has sent anything at all on this generation. */
   private heard = false;
+  /** When input last went out, so a stall can repeat it. */
+  private lastInputSentAt = 0;
   /**
    * Which build of the level we are on. Bumped by every Start and Retry, which
    * both peers apply at the same frame, so both counters move together.
@@ -926,6 +950,7 @@ export class NetSession {
   }
 
   private sendInput(): void {
+    this.lastInputSentAt = this.now();
     const newest = this.nextLocal - 1;
     const bits: number[] = [];
     for (let i = 0; i < HISTORY && newest - i >= 0; i++) {
@@ -1194,13 +1219,13 @@ export class NetSession {
 
   private receive(data: Uint8Array): void {
     if (this.recovery !== null) {
-      if (this.deferredPackets.length < 256 && data.length <= 64 && this.deferredBytes + data.length <= 16384) {
+      if (this.deferredPackets.length < 256 && data.length <= MAX_PACKET && this.deferredBytes + data.length <= 16384) {
         this.deferredPackets.push(data.slice()); this.deferredBytes += data.length;
       }
       return;
     }
     if (this.bootstrapPackets !== null) {
-      if (this.bootstrapPackets.length < 256 && data.length <= 64) this.bootstrapPackets.push(data.slice());
+      if (this.bootstrapPackets.length < 256 && data.length <= MAX_PACKET) this.bootstrapPackets.push(data.slice());
       return;
     }
     const p = decode(data);
@@ -1492,6 +1517,7 @@ export class NetSession {
         // not enough to teleport anybody.
         const catchup = this.timeStep * CATCHUP_FRAMES;
         if (this.acc > catchup) this.acc = catchup;
+        this.whileStalled();
         return;
       }
       this.stalled = false;
@@ -1511,9 +1537,36 @@ export class NetSession {
     }
   }
 
+  /** Keep a stall from becoming permanent. See `STALL_RESEND_MS`. */
+  private whileStalled(): void {
+    if (this.solo || this.observer || this.linkDown || this.nextLocal === 0) return;
+    const now = this.now();
+    if (now - this.lastInputSentAt >= STALL_RESEND_MS) this.sendInput();
+    const unreachable = this.heard && this.lastRemoteFrame - (HISTORY - 1) > this.confirmed;
+    if (unreachable && this.stalledMs > UNREACHABLE_GAP_MS) {
+      this.linkDown = true;
+      this.onLinkDown?.("input from the other player was lost and cannot be resent");
+    }
+  }
+
   private ready(frame: number): boolean {
     if (this.input[this.slot][frame] === undefined) return false;
     if (this.solo) return true;
+    // Both of them start, or neither does.
+    //
+    // A level begins when each peer has drawn it, and drawing it waits on art
+    // that takes one machine longer to decode than the other. Each used to
+    // start its own clock the moment it was ready, so the quicker one ran a
+    // second or more of the level on guesses, hit the rollback ceiling, and
+    // then stalled and lurched in bursts until time sync -- five per cent at
+    // most -- had clawed the head start back, twenty seconds later. On the
+    // relay it was the whole of a short level.
+    //
+    // Each peer sends its first input as soon as it is ready, so hearing one is
+    // hearing "ready". Waiting for it costs one network hop, shown as the usual
+    // "Waiting for your friend" if it runs long. A watcher has no partner of its
+    // own to wait for: it follows whatever the two of them send.
+    if (this.rollbackOn && !this.observer && !this.heard) return false;
     if (this.rollbackOn) {
       // Running further ahead than a correction could reach back would mean
       // guessing at frames we could never fix. Waiting is the honest failure.

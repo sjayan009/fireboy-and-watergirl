@@ -42,6 +42,7 @@ import {
   DisplayObject, KeyboardEvent, MouseEvent, Keyboard, Stage,
 } from "../flash/flash.js";
 import { MODES } from "../net/session.js";
+import type { Ported } from "../ported.js";
 
 /** Which of the 32 map nodes is highlighted, 1-based like Game.cur_node. */
 const FIRST_NODE = 1;
@@ -55,11 +56,11 @@ const FIRST_NODE = 1;
  * same way. That is a small liberty: the original only ever highlighted under
  * the pointer, because it had no keyboard navigation to highlight for.
  */
-function setState(target: any, state: "up" | "over" | "down"): void {
+function setState(target: Ported, state: "up" | "over" | "down"): void {
   if (target) target.__btnState = state;
 }
 
-function dispatch(target: any): void {
+function dispatch(target: Ported): void {
   if (!target) return;
   target.dispatchEvent(new MouseEvent(MouseEvent.CLICK, target));
   // Several screens listen for MOUSE_DOWN rather than CLICK -- the pause
@@ -81,7 +82,7 @@ export type Intent =
   | { kind: "mute" }
   | { kind: "start"; mode: string; num: number };
 
-function roll(target: any, over: boolean): void {
+function roll(target: Ported, over: boolean): void {
   if (!target) return;
   setState(target, over ? "over" : "up");
   const type = over ? MouseEvent.ROLL_OVER : MouseEvent.ROLL_OUT;
@@ -99,7 +100,7 @@ export class ShellInput {
 
   private readonly introButtons = ["Starter", "Instructer", "Crediter"];
 
-  constructor(private game: any, private stage: Stage) {}
+  constructor(private game: Ported, private stage: Stage) {}
 
   // ---- intents ----------------------------------------------------------
 
@@ -119,7 +120,7 @@ export class ShellInput {
   }
 
   /** Ask about the button, then dispatch it if nobody claimed it. */
-  private click(target: any): void {
+  private click(target: Ported): void {
     if (!target) return;
     if (this.intentHandler) {
       const intent = this.intentFor(target);
@@ -136,8 +137,8 @@ export class ShellInput {
    * boards reuse `RetryBtn` and `ToMenuBtn` between them -- so identity is the
    * only test that cannot quietly match the wrong thing after a rebuild.
    */
-  private intentFor(target: any): Intent | null {
-    const g = this.game as any;
+  private intentFor(target: Ported): Intent | null {
+    const g = this.game as Ported;
 
     if (g.m_muter && target === g.m_muter.muteBtn) return { kind: "mute" };
 
@@ -147,7 +148,7 @@ export class ShellInput {
       if (target === g.m_pauseMenu.endGameBtn) return { kind: "quit" };
     }
 
-    const board: any = this.overlay();
+    const board: Ported = this.overlay();
     const inner = board && (board.GOboard || board.Rboard);
     if (inner) {
       if (target === inner.RetryBtn) return { kind: "retry" };
@@ -174,33 +175,33 @@ export class ShellInput {
     return !!node && node.parent === this.game;
   }
 
-  private overlay(): any {
+  private overlay(): Ported {
     // Boards are added last, so they sit on top and own the keyboard.
-    for (const c of [...(this.game as any).children].reverse()) {
-      if ((c as any).GOboard || (c as any).Rboard) return c;
+    for (const c of [...(this.game as Ported).children].reverse()) {
+      if ((c as Ported).GOboard || (c as Ported).Rboard) return c;
     }
     return null;
   }
 
   private screen(): string {
-    if (this.has((this.game as any).instr)) return "instructions";
-    if (this.has((this.game as any).crd)) return "credits";
+    if (this.has((this.game as Ported).instr)) return "instructions";
+    if (this.has((this.game as Ported).crd)) return "credits";
     if (this.overlay()) return "board";
-    if (this.has((this.game as any).m_mainMenu)) return "map";
-    if (this.has((this.game as any).m_introMenu)) return "intro";
-    if (this.has((this.game as any).m_level)) return "game";
+    if (this.has((this.game as Ported).m_mainMenu)) return "map";
+    if (this.has((this.game as Ported).m_introMenu)) return "intro";
+    if (this.has((this.game as Ported).m_level)) return "game";
     return "none";
   }
 
   /** The clip for a map node: node 15 is the button named "b_1_13". */
-  private nodeButton(node: number): any {
-    const g = this.game as any;
+  private nodeButton(node: number): Ported {
+    const g = this.game as Ported;
     const name = g.Translation && g.Translation[node - 1];
     return name && g.m_mainMenu ? g.m_mainMenu["b_" + name] : null;
   }
 
   private unlocked(node: number): boolean {
-    const g = this.game as any;
+    const g = this.game as Ported;
     const stats = g.The_cookie && g.The_cookie.data && g.The_cookie.data.stats;
     return !!stats && stats[node - 1] >= 0;
   }
@@ -217,7 +218,7 @@ export class ShellInput {
    * so a near neighbour beats a far one pointing the same way.
    */
   private step(dx: number, dy: number): void {
-    const g = this.game as any;
+    const g = this.game as Ported;
     const adj = g.Adjacencies;
     if (!adj) return;
     const from = this.nodeButton(this.nodeSel);
@@ -248,7 +249,7 @@ export class ShellInput {
 
   /** Re-highlight after the map is rebuilt, e.g. on returning from a level. */
   syncMap(): void {
-    const g = this.game as any;
+    const g = this.game as Ported;
     if (!this.has(g.m_mainMenu)) return;
     if (!this.unlocked(this.nodeSel)) this.nodeSel = FIRST_NODE;
     roll(this.nodeButton(this.nodeSel), true);
@@ -258,7 +259,7 @@ export class ShellInput {
 
   /** Returns true if the shell consumed the key. */
   keyDown(code: number, key: string): boolean {
-    const g = this.game as any;
+    const g = this.game as Ported;
 
     // The mute button is reachable wherever it exists.
     if (key === "m" && this.has(g.m_muter)) {
@@ -292,7 +293,7 @@ export class ShellInput {
   }
 
   private introKey(code: number): boolean {
-    const buttons = (this.game as any).m_introMenu.Buttons;
+    const buttons = (this.game as Ported).m_introMenu.Buttons;
     if (code === Keyboard.UP || code === Keyboard.DOWN) {
       const d = code === Keyboard.UP ? -1 : 1;
       const n = this.introButtons.length;
@@ -307,7 +308,7 @@ export class ShellInput {
   }
 
   private mapKey(code: number): boolean {
-    const g = this.game as any;
+    const g = this.game as Ported;
     switch (code) {
       case Keyboard.LEFT:  this.step(-1, 0); return true;
       case Keyboard.RIGHT: this.step(1, 0); return true;
@@ -325,7 +326,7 @@ export class ShellInput {
   }
 
   private boardKey(code: number, key: string): boolean {
-    const board: any = this.overlay();
+    const board: Ported = this.overlay();
     const inner = board.GOboard || board.Rboard;
     if (!inner) return false;
     if (key === "r" && inner.RetryBtn) {
@@ -345,7 +346,7 @@ export class ShellInput {
    * have no keyboard equivalent in the original because they were clicked.
    */
   private gameKey(code: number, _key: string): boolean {
-    const g = this.game as any;
+    const g = this.game as Ported;
     const paused = g.m_level && g.m_level.pause === true;
     if (paused && g.m_pauseMenu) {
       if (code === Keyboard.UP || code === Keyboard.DOWN) {
@@ -364,7 +365,7 @@ export class ShellInput {
   // ---- mouse ------------------------------------------------------------
 
   /** The button the pointer is currently over, so ROLL_OUT can be paired. */
-  private hovered: any = null;
+  private hovered: Ported = null;
 
   /**
    * Move the pointer. `target` is whatever the renderer hit-tested, or null.
@@ -374,7 +375,7 @@ export class ShellInput {
    * the keyboard selection follows along -- pick a node with the mouse and the
    * arrow keys carry on from there rather than jumping back.
    */
-  pointerMove(target: any): boolean {
+  pointerMove(target: Ported): boolean {
     if (target === this.hovered) return !!target;
     if (this.hovered) roll(this.hovered, false);
     this.hovered = target;
@@ -386,7 +387,7 @@ export class ShellInput {
   }
 
   /** Press whatever the pointer is over, and show the down art. */
-  pointerDown(target: any): boolean {
+  pointerDown(target: Ported): boolean {
     if (!target) return false;
     // Flash sends the roll first if the press is the pointer's first contact.
     if (this.hovered !== target) this.pointerMove(target);
@@ -417,11 +418,11 @@ export class ShellInput {
     this.pressed = null;
   }
 
-  private pressed: any = null;
+  private pressed: Ported = null;
 
   /** Keep the keyboard cursor on whatever the mouse just picked. */
-  private syncSelectionTo(target: any): void {
-    const g = this.game as any;
+  private syncSelectionTo(target: Ported): void {
+    const g = this.game as Ported;
     const name: string = target.name || "";
     if (name.startsWith("b_") && g.Translation) {
       const i = g.Translation.indexOf(name.slice(2));
@@ -438,7 +439,7 @@ export class ShellInput {
 
   /** Which control is highlighted, for the harness readout. */
   get selection(): string {
-    const g = this.game as any;
+    const g = this.game as Ported;
     switch (this.screen()) {
       case "intro": return this.introButtons[this.introSel];
       case "map":

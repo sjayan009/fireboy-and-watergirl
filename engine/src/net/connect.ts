@@ -70,7 +70,7 @@ export async function connect(
     // Everything else here is a reason to fall back to the relay. Being
     // cancelled is not: somebody pressed Cancel, and quietly handing them a
     // working relay session instead is the opposite of what they asked for.
-    if (opts.signal?.aborted) throw new Error("cancelled");
+    if (opts.signal?.aborted) throw new Error("cancelled", { cause: e });
     return {
       transport: rendezvous,
       kind: "relay",

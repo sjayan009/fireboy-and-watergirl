@@ -30,6 +30,7 @@ import { level, resetClock, tickClock } from "./game/game.js";
 import { hostLevel } from "./game/headless.js";
 import { Event, advanceTree, enterFrameTree, SoundBus } from "./flash/flash.js";
 import { hashLevel, applyInput } from "./net/hash.js";
+import type { Ported } from "./ported.js";
 
 const GOLDEN = fileURLToPath(new URL("../test/leveldigests.json", import.meta.url));
 
@@ -66,7 +67,7 @@ console.log(`all 32 levels, ${FRAMES} frames each`);
 
 for (const [mode, num] of LEVELS) {
   resetClock();
-  const lv: any = new (level as any)(mode, num);
+  const lv: Ported = new (level as Ported)(mode, num);
   const host = hostLevel(lv);
   // The bus is a module-level queue; left to fill it would grow for the whole
   // run and tell us nothing.
@@ -88,7 +89,7 @@ for (const [mode, num] of LEVELS) {
     // `ended` covers both dying and finishing. Either way the world stops
     // moving, so carry on in a fresh one.
     if (live.ended && f < FRAMES - 1) {
-      live = new (level as any)(mode, num);
+      live = new (level as Ported)(mode, num);
       shell = hostLevel(live);
       lives++;
     }

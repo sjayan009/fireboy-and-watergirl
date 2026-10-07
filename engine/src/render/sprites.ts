@@ -28,6 +28,7 @@ import { assetUrl } from "../asseturl.js";
 import { assetRevision, assetContentRevision, createAssetOwner, imageAsset } from "./assets.js";
 import { VisualSnapshots, type VisualMode, type VisualTransform } from "./interpolation.js";
 import { ScratchPool, TileCache, intersect, union, transformed, type TileRect, type CachedTile } from "./tiles.js";
+import type { Ported } from "../ported.js";
 
 export interface ChildPlacement {
   name: string;
@@ -95,7 +96,7 @@ export interface ButtonSet {
 
 /** A clickable button, placed on the stage. */
 export interface ButtonHit {
-  node: any;
+  node: Ported;
   /** The hit box in the button's own coordinates. */
   box: { x: number; y: number; w: number; h: number };
   /** Button coordinates -> stage coordinates. */
@@ -145,7 +146,7 @@ function decompose(m: number[]): Xform {
  * than silently drawing the wrong art.
  */
 function placementFor(geom: FrameGeom | undefined,
-                      child: any): ChildPlacement | undefined {
+                      child: Ported): ChildPlacement | undefined {
   if (!geom) return undefined;
   const i = child.__place;
   if (i != null) {
@@ -301,7 +302,7 @@ export class SpriteRenderer {
     if (waitForAll) await Promise.allSettled([...this.loadingWork]);
   }
 
-  private spriteFor(node: any): SpriteInfo | null {
+  private spriteFor(node: Ported): SpriteInfo | null {
     const id = node.spriteId;
     if (id != null) {
       const s = this.manifest.sprites[String(id)];
@@ -388,17 +389,17 @@ export class SpriteRenderer {
                     local: number, reconcile = false, now = performance.now()): void {
     this.capturedContent = new WeakMap(); this.capturedSnapshots = snapshots;
     if (!reconcile) snapshots.begin();
-    const scene = (root as any).m_level;
+    const scene = (root as Ported).m_level;
     // Death replaces/hides clips; rollback may restore them in the same capture
     // sequence. Include life state and forget hidden art immediately.
     const life = (scene?.myContactListener?.deadFire ? 1 : 0) |
       (scene?.myContactListener?.deadWater ? 2 : 0) | (scene?.ended ? 4 : 0);
-    const forget = (node: any): void => {
+    const forget = (node: Ported): void => {
       if (!node) return;
       snapshots.forget(node);
       for (const child of node.children ?? []) forget(child);
     };
-    const visit = (node: any, parent: object | null, place?: ChildPlacement,
+    const visit = (node: Ported, parent: object | null, place?: ChildPlacement,
                    localTree = false, worldScale = 1, parentSnap = false,
                    discreteTree = false): void => {
       if (!node || node.visible === false || node.alpha <= 0) { forget(node); return; }
@@ -453,7 +454,7 @@ export class SpriteRenderer {
    */
   warm(root: DisplayObject): void {
     const seen = new Set<number>();
-    const visit = (node: any): void => {
+    const visit = (node: Ported): void => {
       if (!node || node.visible === false) return;
       const sprite = this.spriteFor(node);
       if (sprite && !seen.has(sprite.id)) {
@@ -475,7 +476,7 @@ export class SpriteRenderer {
    * Resolve a child's transform: the manifest's per-frame matrix wins, except
    * for properties the game has written to since construction.
    */
-  private childXform(child: any, place: ChildPlacement): Xform {
+  private childXform(child: Ported, place: ChildPlacement): Xform {
     let fromFrame = this.placements.get(place);
     if (!fromFrame) { fromFrame = decompose(place.m); this.placements.set(place, fromFrame); }
     let out = this.transforms.get(child);
@@ -489,7 +490,7 @@ export class SpriteRenderer {
     return out;
   }
 
-  private resolvedTransform(node: any, place?: ChildPlacement): Xform {
+  private resolvedTransform(node: Ported, place?: ChildPlacement): Xform {
     let t: Xform;
     if (place) t = this.childXform(node, place);
     else {
@@ -502,7 +503,7 @@ export class SpriteRenderer {
     return t;
   }
 
-  private drawNode(ctx: CanvasRenderingContext2D, node: any,
+  private drawNode(ctx: CanvasRenderingContext2D, node: Ported,
                    xform?: Xform, flags = 0): void {
     this.stats.nodeVisits++;
     if (!node || node.visible === false) return;
@@ -564,7 +565,7 @@ export class SpriteRenderer {
    * restore it; this only paints. Split out so a clip that masks itself can
    * paint its content into one layer and its mask child into another.
    */
-  private drawContent(ctx: CanvasRenderingContext2D, node: any,
+  private drawContent(ctx: CanvasRenderingContext2D, node: Ported,
                       skipMask: boolean): void {
     // A Bitmap standing in for a rasterised subtree (see BitmapData.draw):
     // draw what was rasterised, under the matrix it was drawn with.
@@ -671,7 +672,7 @@ export class SpriteRenderer {
     const ctx = this.probeCtx();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-    const visit = (node: any, xform?: Xform): void => {
+    const visit = (node: Ported, xform?: Xform): void => {
       if (!node || node.visible === false || node.isMask) return;
       if ((node.alpha ?? 1) <= 0) return;
 
@@ -807,7 +808,7 @@ export class SpriteRenderer {
    * is no line breaking here -- if that ever changes it will be visibly wrong
    * rather than subtly so.
    */
-  private drawText(ctx: CanvasRenderingContext2D, node: any): void {
+  private drawText(ctx: CanvasRenderingContext2D, node: Ported): void {
     for (const deps of this.dependencies) deps.set("@renderer-fonts", this.fontRevision);
     const text = String(node.text ?? "");
     if (!text) return;
@@ -834,7 +835,7 @@ export class SpriteRenderer {
    * `ctx.filter`. Cached per node and transform, because the terrain's glow is
    * full-screen and static.
    */
-  private drawFiltered(ctx: CanvasRenderingContext2D, node: any): void {
+  private drawFiltered(ctx: CanvasRenderingContext2D, node: Ported): void {
     const t = ctx.getTransform();
     const character = node.name === "pers1" || node.name === "pers2";
     const scale = Math.hypot(t.a, t.b) || 1;
@@ -880,7 +881,7 @@ export class SpriteRenderer {
     if (hit) this.blit(ctx, hit.canvas, hit.rect, character ? t.e : 0, character ? t.f : 0);
   }
 
-  private poseKey(node: any, includePresentation = false): string {
+  private poseKey(node: Ported, includePresentation = false): string {
     let key = `${node.currentFrame},${node.visible},${node.alpha},${node.symbol},${node.spriteId},${node.__btnState},${node.text ?? ""},${node.fontId},${node.size},${node.textColor},${node.align},${cssFilter(node.filters)}`;
     const sprite = this.spriteFor(node);
     const geom = sprite?.geom[Math.min(Math.max(node.currentFrame ?? 1, 1), sprite.frames) - 1];
@@ -910,7 +911,7 @@ export class SpriteRenderer {
    * Only the rope masks use it -- `level.as` sets `ropeMask.height` to the
    * distance between the anchors, and that is what makes the rope grow.
    */
-  private applyHeight(node: any, t: Xform): void {
+  private applyHeight(node: Ported, t: Xform): void {
     const h = node.height;
     if (typeof h !== "number" || !Number.isFinite(h)) return;
     const sprite = this.spriteFor(node);
@@ -927,7 +928,7 @@ export class SpriteRenderer {
    * scratch layers are the stage size and drawn at the current transform, the
    * same way drawMasked works.
    */
-  private drawSelfMasked(ctx: CanvasRenderingContext2D, node: any): void {
+  private drawSelfMasked(ctx: CanvasRenderingContext2D, node: Ported): void {
     this.stats.selfMaskCalls++;
     const t = ctx.getTransform();
     const mask = node.__clipMask;
@@ -943,7 +944,7 @@ export class SpriteRenderer {
    * `ctx` still holds the PARENT transform, so node and mask are drawn in the
    * same space -- each applying its own x/y exactly once.
    */
-  private drawMasked(ctx: CanvasRenderingContext2D, node: any,
+  private drawMasked(ctx: CanvasRenderingContext2D, node: Ported,
                      xform?: Xform): void {
     // CreateGround builds this immutable texture/mask pair once per level.
     // Its 300+ tile mask used to be traversed and composited every draw, even
@@ -972,7 +973,7 @@ export class SpriteRenderer {
   }
 
   private id(node: object): number { let id = this.ids.get(node); if (!id) { id = this.nextId++; this.ids.set(node, id); } return id; }
-  private structuralKey(node: any): string {
+  private structuralKey(node: Ported): string {
     const revision = this.visualSnapshots === this.capturedSnapshots && this.visualSnapshots ? this.capturedContent.get(node) : undefined;
     if (revision != null) return `observed:${this.id(node)}:${revision}`;
     if (this.contentDescriptors.has(node) || node.name === "GroundMC" || node.name === "GroundMask" || node.symbol === "texture1") {
@@ -980,14 +981,14 @@ export class SpriteRenderer {
     }
     return this.poseKey(node);
   }
-  private observeContent(node: any): number {
+  private observeContent(node: Ported): number {
     const signature = this.poseKey(node), previous = this.contentDescriptors.get(node);
     const revision = previous ? previous.revision + (signature === previous.signature ? 0 : 1) : 1;
     this.contentDescriptors.set(node, { signature, revision }); this.capturedContent.set(node, revision);
     return revision;
   }
   private adoptScene(root: DisplayObject): void {
-    const scene = (root as any).m_level ?? root;
+    const scene = (root as Ported).m_level ?? root;
     if (scene === this.scene) return;
     if (this.scene) {
       this.assetEpoch++; this.owner.release(); this.owner = createAssetOwner({ priority: "near" });
@@ -1064,12 +1065,12 @@ export class SpriteRenderer {
     } finally { maskLayer.release(); layer.release(); }
   }
 
-  private sampledMatrix(node: any, parent: DOMMatrix, xform?: Xform): DOMMatrix {
+  private sampledMatrix(node: Ported, parent: DOMMatrix, xform?: Xform): DOMMatrix {
     const base = xform ?? this.resolvedTransform(node);
     const t = this.visualSnapshots?.sample(node, base, this.visualAlpha, this.visualNow) ?? base;
     return parent.translate(t.x, t.y).rotate(t.rot).scale(t.sx, t.sy);
   }
-  private padFilter(rect: TileRect, filters: any[], scale: number): TileRect {
+  private padFilter(rect: TileRect, filters: Ported[], scale: number): TileRect {
     let pad = 2;
     for (const f of filters ?? []) {
       if (!f || f.inner || f.knockout) continue;
@@ -1079,7 +1080,7 @@ export class SpriteRenderer {
     return { x: rect.x - pad, y: rect.y - pad, w: rect.w + 2 * pad, h: rect.h + 2 * pad };
   }
   private boundsDepth = 0;
-  private nodeBounds(node: any, parent: DOMMatrix, xform?: Xform, flags = 0): TileRect | null {
+  private nodeBounds(node: Ported, parent: DOMMatrix, xform?: Xform, flags = 0): TileRect | null {
     const empty = { x: 0, y: 0, w: 0, h: 0 };
     if (!node || node.visible === false || (node.alpha ?? 1) <= 0 || (node.isMask && !(flags & 1))) return empty;
     // Cyclic/unknown authoring falls back to a correct stage-sized surface.
@@ -1100,7 +1101,7 @@ export class SpriteRenderer {
       return bounds;
     } finally { this.boundsDepth--; }
   }
-  private contentBounds(node: any, matrix: DOMMatrix, skipMask: boolean): TileRect | null {
+  private contentBounds(node: Ported, matrix: DOMMatrix, skipMask: boolean): TileRect | null {
     // Canvas backends rasterize oblique image edges differently when a draw is
     // clipped into a translated small surface. Keep exact stage-space output
     // for those cases until a browser-independent equivalence is established.
@@ -1149,7 +1150,7 @@ export class SpriteRenderer {
   }
 
   /** Narrow allowlist of authored one-frame terrain/anchor art. Dynamic paths always use traversal. */
-  private drawStatic(ctx: CanvasRenderingContext2D, node: any): boolean {
+  private drawStatic(ctx: CanvasRenderingContext2D, node: Ported): boolean {
     if (!this.optimizations.staticCommands) return false;
     const name = node.symbol ?? node.name ?? "";
     if (!/^(GroundBox\w*|GroundTri\w*|GroundMask|LeverBase|PulleyAnchor2?)$/.test(name)) return false;
@@ -1160,7 +1161,7 @@ export class SpriteRenderer {
       this.stats.staticMisses++;
       const parts: { image: HTMLImageElement; matrix: DOMMatrix; alpha: number; x: number; y: number; source?: FrameGeom["source"] }[] = [];
       const dependencies = new Map<string, number>(); this.dependencies.push(dependencies);
-      const compile = (n: any, matrix: DOMMatrix, alpha: number, root = false): boolean => {
+      const compile = (n: Ported, matrix: DOMMatrix, alpha: number, root = false): boolean => {
         this.stats.staticValidationVisits++;
         if (!n || n.visible === false || (n.alpha ?? 1) <= 0 || (!root && n.isMask)) return true;
         if (n.mask || n.__clipMask || n.bitmapData || n instanceof TextField || hasVisibleFilter(n.filters) || this.buttons?.buttons[String(n.spriteId)]) return false;

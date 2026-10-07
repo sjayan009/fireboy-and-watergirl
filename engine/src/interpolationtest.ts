@@ -7,6 +7,7 @@ import { SpriteRenderer } from "./render/sprites.js";
 import { Sprite, TextField } from "./flash/flash.js";
 import { Game, resetClock } from "./game/game.js";
 import { GameHost } from "./net/gamehost.js";
+import type { Ported } from "./ported.js";
 
 const pose = (x = 0, y = 0, rot = 0) => ({ x, y, sx: 1, sy: 1, rot });
 const root = Object.freeze({}), local = Object.freeze({}), remote = Object.freeze({});
@@ -198,7 +199,7 @@ assert.equal(descendants.sample(limb, { ...pose(12), sx: -1 }, 0, 0).x, 12, "mir
 
 function replay(rendering: boolean): string[] {
   resetClock();
-  const game = new (Game as any)(), host = new GameHost(game), renderer = new SpriteRenderer(manifest, "unused");
+  const game = new (Game as Ported)(), host = new GameHost(game), renderer = new SpriteRenderer(manifest, "unused");
   const visuals = new VisualSnapshots({ rollbackSmoothing: true, localDescendantInterpolation: true, now: () => 0 });
   host.start("adventure", 1);
   const hashes = [];
@@ -207,7 +208,7 @@ function replay(rendering: boolean): string[] {
     const before = host.hash();
     if (rendering) {
       renderer.captureTransforms(game, visuals, 3);
-      const visit = (n: any): void => {
+      const visit = (n: Ported): void => {
         for (let sample = 0; sample <= 6; sample++) {
           const output = visuals.sample(n, pose(n.x, n.y, n.rotation), sample / 6, frame * 1000 / 26);
           visuals.recordPresented(n, output);

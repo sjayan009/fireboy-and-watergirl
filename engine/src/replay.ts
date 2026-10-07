@@ -12,11 +12,12 @@ import { level } from "./game/game.js";
 import { hostLevel } from "./game/headless.js";
 import { Event, advanceTree } from "./flash/flash.js";
 import { hashLevel, applyInput } from "./net/hash.js";
+import type { Ported } from "./ported.js";
 
 const [mode = "adventure", num = "1", log = ""] = process.argv.slice(2);
 const bits = log ? log.split(",").map(Number) : [];
 
-const lv: any = new (level as any)(mode, Number(num));
+const lv: Ported = new (level as Ported)(mode, Number(num));
 hostLevel(lv);
 const marks: string[] = [];
 for (let i = 0; i < bits.length; i++) {

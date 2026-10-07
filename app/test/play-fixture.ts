@@ -21,7 +21,7 @@ const fixture = {
   board: [] as {rank:number; a_username:string; b_username:string; medal?:number; best_time_str:string; is_mine:boolean}[],
   standing: [] as {node:number; rank:number; entries:number}[],
 };
-(window as any).socialFixture = fixture;
+Object.assign(window, { socialFixture: fixture });
 Object.assign(auth(), { stage: "in", user: { id: owner }, profile: { id: owner, username: "Temple explorer" }, session: null });
 // Same response boundary as PostgREST, without contacting a real database.
 const chain = (data: unknown) => new Proxy(Promise.resolve({ data, error: null }), {
@@ -34,15 +34,17 @@ const sharedMap = [
   { node: 1, medal: 3, best_time_s: 41, best_time_str: "00:41" },
   { node: 2, medal: 1, best_time_s: 122, best_time_str: "02:02" },
 ];
-(supabase as any).from = (table: string) => chain(table === "friendships" ? peers.map(p => ({ user_a: owner, user_b: p.id, status: "accepted" })) : table === "profiles" ? peers : table === "pair_progress" ? sharedMap : []);
-(supabase as any).rpc = async (name: string, args: any = {}) => {
+type RpcArgs = { p_node?: number; their_id?: string; their_username?: string };
+Object.assign(supabase, { from: (table: string) => chain(table === "friendships" ? peers.map(p => ({ user_a: owner, user_b: p.id, status: "accepted" })) : table === "profiles" ? peers : table === "pair_progress" ? sharedMap : []) });
+Object.assign(supabase, { rpc: async (name: string, args: RpcArgs = {}) => {
   fixture.calls.push(name);
   if (fixture.fail === name) return {data:null,error:{message:"Test connection interrupted"}};
   if (name === "list_friends") return {data:peers.map(p=>({...p})),error:null};
   if (name === "leaderboard_standing") return {data:fixture.standing,error:null};
   if (name === "leaderboard") {
-    const data = fixture.board.map(r=>({...r, medal: r.medal ?? 3, best_time_str: `${args.p_node}:00`}));
-    await new Promise(resolve=>setTimeout(resolve,fixture.boardDelay[args.p_node] ?? 0));
+    const node = args.p_node ?? 0;
+    const data = fixture.board.map(r=>({...r, medal: r.medal ?? 3, best_time_str: `${node}:00`}));
+    await new Promise(resolve=>setTimeout(resolve,fixture.boardDelay[node] ?? 0));
     return {data,error:null};
   }
   const index = peers.findIndex(p => p.id === args.their_id);
@@ -51,9 +53,10 @@ const sharedMap = [
     peers[index] = {...peers[index], status:name === "block_friend" ? "blocked" : "accepted", blockedByMe:name === "block_friend",ourMove:false,theirMove:false};
   }
   if (name === "request_friend") {
-    const existing = peers.find(p=>p.username.toLowerCase() === args.their_username.toLowerCase());
+    const wanted = (args.their_username ?? "").toLowerCase();
+    const existing = peers.find(p=>p.username.toLowerCase() === wanted);
     if (existing?.ourMove) Object.assign(existing,{status:"accepted",ourMove:false,theirMove:false});
-    else if (!existing) peers.push({id:`00000000-0000-4000-8000-${String(100+peers.length).padStart(12,"0")}`,username:args.their_username,status:"pending",ourMove:false,theirMove:true,blockedByMe:false});
+    else if (!existing) peers.push({id:`00000000-0000-4000-8000-${String(100+peers.length).padStart(12,"0")}`,username:args.their_username ?? "",status:"pending",ourMove:false,theirMove:true,blockedByMe:false});
     // The FRIENDSHIP row, not an empty array.
     //
     // `request_friend` is declared `returns public.friendships`, and `request`
@@ -63,25 +66,26 @@ const sharedMap = [
     // the crossed one this file asserts becomes a friendship. That is what it
     // had been answering since the `user_a` check was added, and the drift was
     // invisible because the fixture was never taught the new shape.
-    const them = peers.find(p=>p.username.toLowerCase() === args.their_username.toLowerCase())!;
+    const them = peers.find(p=>p.username.toLowerCase() === wanted)!;
     return {data:{user_a:owner < them.id ? owner : them.id,user_b:owner < them.id ? them.id : owner,status:them.status,requested_by:owner},error:null};
   }
   return {data:[],error:null};
-};
-(PairChannel as any).open = (id: string) => {
+} });
+Object.assign(PairChannel, { open: (id: string) => {
   // Both endpoints run the real Lobby, GameView and batched transport. Only
   // the remote channel and account database are replaced by local fixtures.
   const bus = side ? new BroadcastChannel("fbwg-test-pair") : null;
-  const handlers = new Map<string, Set<(data: any) => void>>();
+  type Listener = (data: unknown) => void;
+  const handlers = new Map<string, Set<Listener>>();
   if (bus) bus.onmessage = ({ data }) => { for (const fn of handlers.get(data.event) ?? []) fn(data.value); };
   const send = (event: string, value: unknown) => bus?.postMessage({ event, value });
   return Promise.resolve(new Proxy({}, {
   get(_target, key) {
     if (key === "then") return undefined;
     if (key === "close") return () => { bus?.close(); return Promise.resolve(); };
-    if (key === "onPresence") return (fn: any) => { fn([{ userId: id, username: "Friend", activity: "in_lobby" }]); return () => {}; };
-    if (key === "onStatus") return (fn: any) => { fn("SUBSCRIBED"); return () => {}; };
-    if (typeof key === "string" && key.startsWith("on")) return (fn: any) => {
+    if (key === "onPresence") return (fn: Listener) => { fn([{ userId: id, username: "Friend", activity: "in_lobby" }]); return () => {}; };
+    if (key === "onStatus") return (fn: Listener) => { fn("SUBSCRIBED"); return () => {}; };
+    if (typeof key === "string" && key.startsWith("on")) return (fn: Listener) => {
       const event = key.slice(2).toLowerCase();
       const set = handlers.get(event) ?? new Set(); handlers.set(event,set); set.add(fn);
       return () => set.delete(fn);
@@ -91,8 +95,8 @@ const sharedMap = [
     return () => () => {};
   },
   }));
-};
-if (side) (window as any).RTCPeerConnection = undefined; // Exercise forced relay deterministically.
+} });
+if (side) Object.assign(window, { RTCPeerConnection: undefined }); // Exercise forced relay deterministically.
 const fixtureHost = document.getElementById("app")!;
 const screen = new URLSearchParams(location.search).get("screen");
 if (screen === "watch") {

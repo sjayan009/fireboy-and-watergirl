@@ -78,6 +78,9 @@ class Link {
     this.queue = this.queue.filter((p) => p.at > this.now);
     for (const p of due) this.handlers[p.to]?.(p.data);
   }
+
+  /** Cut the wire, or mend it. A blackout is not the same as steady loss. */
+  setLoss(loss: number): void { this.loss = loss; }
 }
 
 interface Peer { session: NetSession; host: LevelHost; }
@@ -268,22 +271,37 @@ console.log("\na re-simulated frame makes no sound");
   // time: every queued event carries the simulation frame that produced it, so
   // a replayed frame slipping through shows up as a frame number below one
   // already heard, which is exactly what a doubled sound is.
+  //
+  // Per peer. Both sessions here share one process-wide SoundBus, and each
+  // speaker is a different machine in real life: the two of them begin the
+  // level a network hop apart, so their sounds interleave a frame or two out of
+  // step without either of them ever going backwards. Mixing the two streams
+  // read that as doubled sound.
   const link = new Link(75, 20, 0.05, 13);
   const peers = start(link, true);
   SoundBus.drain();
-  run(link, peers, 300, twitchy);
-  const heard = SoundBus.drain();
-
-  let backwards = 0;
-  let high = -1;
-  for (const e of heard) {
-    if (e.frame < high) backwards++;
-    else high = e.frame;
+  const heard: { frame: number }[][] = [[], []];
+  for (let i = 0; i < 300; i++) {
+    for (const s of [0, 1] as Slot[]) peers[s].session.setLocalInput(twitchy(s, i));
+    link.advance(STEP_MS);
+    for (const s of [0, 1] as Slot[]) {
+      peers[s].session.tick(STEP);
+      heard[s].push(...SoundBus.drain());
+    }
   }
+
+  const backwards = heard.map((events) => {
+    let n = 0, high = -1;
+    for (const e of events) {
+      if (e.frame < high) n++;
+      else high = e.frame;
+    }
+    return n;
+  });
   console.log(`  ${peers[0].session.rollbacks} corrections re-ran frames ` +
-              `already heard, across ${heard.length} sounds`);
-  check("nothing is heard for a frame already played", backwards, 0);
-  check("and something was actually played", heard.length > 100, true);
+              `already heard, across ${heard[0].length} sounds`);
+  check("nothing is heard for a frame already played", backwards, [0, 0]);
+  check("and something was actually played", heard[0].length > 100, true);
 }
 
 console.log("\npause and retry still travel the channel");
@@ -356,6 +374,65 @@ console.log("\na peer that runs too far ahead waits rather than guessing wildly"
   converge(link, peers);
   check("digests match once both are ticking again",
         peers[0].host.hash() === peers[1].host.hash(), true);
+}
+
+console.log("\na blip that loses everything both ways does not freeze the pair");
+{
+  // What a relay channel being closed and rejoined looks like from in here:
+  // for a second and a half nothing gets through in either direction, then
+  // everything does again. Both peers run ahead into the window, stall, and
+  // -- because a stalled peer schedules no frames -- used to stop sending as
+  // well. Each waited for the other to speak first, for ever.
+  const link = new Link(40, 5, 0, 21);
+  const peers = start(link, true);
+  run(link, peers, 120, held);
+  link.setLoss(1);
+  run(link, peers, 40, held, 120);
+  link.setLoss(0);
+  const before = [peers[0].session.frame, peers[1].session.frame];
+  run(link, peers, 120, held, 160);
+  console.log(`  stalled at frames ${before.join(" and ")}, ` +
+              `now on ${peers[0].session.frame} and ${peers[1].session.frame}`);
+  check("both carry on once the wire is back",
+        peers[0].session.frame > before[0] + 60 && peers[1].session.frame > before[1] + 60, true);
+  converge(link, peers);
+  check("and are still playing the same game",
+        peers[0].host.hash() === peers[1].host.hash(), true);
+  check("without calling the link dead",
+        [peers[0].session.linkDown, peers[1].session.linkDown], [false, false]);
+}
+
+console.log("\nboth first inputs lost at the start does not freeze the pair");
+{
+  // A level starts for real only once each peer has heard the other's first
+  // input -- which is a packet, and packets get lost. The case that matters is
+  // the one where BOTH are: neither peer has heard anything, neither runs a
+  // frame, so neither schedules one, and neither would ever send again.
+  const link = new Link(40, 0, 0, 23);
+  const peers = pair(link, true);
+  link.setLoss(1);
+  peers[0].session.requestStart("adventure", 1);   // its Start and first input: lost
+  link.advance(60);
+  link.setLoss(0);
+  peers[0].session.tick(0);                        // a repeat of the Start gets out
+  link.setLoss(1);                                 // and the wire goes again
+  link.advance(60);                                // the Start lands; the reply is lost
+  check("both started the level", [peers[0].session.running, peers[1].session.running], [true, true]);
+  run(link, peers, 20, held);
+  check("and neither runs it before hearing the other",
+        [peers[0].session.frame, peers[1].session.frame], [0, 0]);
+  link.setLoss(0);
+  run(link, peers, 60, held, 20);
+  check("they start once something gets through",
+        peers[0].session.frame > 30 && peers[1].session.frame > 30, true);
+  converge(link, peers);
+  // Compared by history, not by the state at one instant: having started a
+  // network hop apart, they can sit a frame or two apart at any moment, which
+  // is the start working and not a disagreement.
+  const upto = Math.min(peers[0].session.frame, peers[1].session.frame);
+  check("together",
+        [peers[0].session.log.slice(0, upto).join() === peers[1].session.log.slice(0, upto).join(),
+         peers[0].session.desyncs + peers[1].session.desyncs], [true, 0]);
 }
 
 console.log("\n" + (failures === 0
