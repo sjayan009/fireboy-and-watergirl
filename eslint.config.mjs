@@ -37,10 +37,11 @@
  * one at a time with a reason each, below, rather than by lowering the whole
  * configuration until it was quiet.
  *
- * The `no-explicit-any` warnings are left standing on purpose. There are about
- * a hundred and fifty and almost all of them are the ported game's display list,
- * which genuinely has no type; a suppression would hide the handful that are
- * not.
+ * The tree is clean of warnings too. The ported game genuinely has no types,
+ * so handwritten code reaches it through one named alias, `Ported`
+ * (engine/src/ported.ts), the only place `any` is allowed. Everything else was
+ * given a real type, so a new `any` warning is a new hole, not the port. Run
+ * `npx eslint . --max-warnings 0` to hold that line.
  */
 import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
@@ -69,6 +70,8 @@ export default tseslint.config(
   {
     ignores: [
       "**/node_modules/**",
+      // Local agent worktrees: whole second copies of the repo, never in CI.
+      ".claude/**",
       ".cache/**",
       "**/dist/**",
       "dist/**",

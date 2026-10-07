@@ -33,6 +33,7 @@ import { Command } from "./net/protocol.js";
 import { Transport } from "./net/transport.js";
 import { getSaveStore, setSaveStore, type SaveStore } from "./game/save.js";
 import type { Intent } from "./game/shellinput.js";
+import type { Ported } from "./ported.js";
 
 /** The original stage: 39*20*0.8 + 16 = 640, 29*20*0.8 + 16 = 480. */
 export const STAGE_W = 640;
@@ -128,7 +129,7 @@ export interface JoinOptions {
 }
 
 export class GameView {
-  readonly game: any;
+  readonly game: Ported;
   readonly shell: ShellInput;
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -191,7 +192,7 @@ export class GameView {
   private suspensionPause = false;
   private muted = false;
   private frame = 0;
-  private lastLevel: any = null;
+  private lastLevel: Ported = null;
   /** Movement keys currently held, for the session's three bits. */
   private held = new Set<string>();
   private listeners: (() => void)[] = [];
@@ -221,7 +222,7 @@ export class GameView {
     const previous = getSaveStore();
     if (o.save) setSaveStore(() => o.save!);
     try {
-      this.game = new (Game as any)();
+      this.game = new (Game as Ported)();
     } finally {
       setSaveStore(previous);
     }
@@ -598,7 +599,7 @@ export class GameView {
    * coordinates have to come back through that scale before they mean anything
    * to the display list.
    */
-  private pick(e: PointerEvent): any {
+  private pick(e: PointerEvent): Ported {
     if (!this.sprites) return null;
     const r = this.canvas.getBoundingClientRect();
     return this.sprites.hitTest(
@@ -915,7 +916,7 @@ export class GameView {
   }
 
   /** The level currently on screen, or null -- `m_level` outlives its level. */
-  get level(): any {
+  get level(): Ported {
     const lv = this.game.m_level;
     return lv && lv.parent ? lv : null;
   }

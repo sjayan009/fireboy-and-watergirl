@@ -9,6 +9,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { level } from "./game/game.js";
 import { hostLevel } from "./game/headless.js";
+import type { Ported } from "./ported.js";
 
 const LEVELS = new URL("../../extracted/levels/", import.meta.url);
 const SOLID = new Set([1, -1, -2, -3, -4]);
@@ -25,8 +26,8 @@ for (const key of keys) {
                        Number(key.slice(key.lastIndexOf("-") + 1))];
   const grid = JSON.parse(readFileSync(new URL(key + ".json", LEVELS), "utf8")).grid;
 
-  let lv: any, threw = "";
-  try { lv = new (level as any)(mode, num); hostLevel(lv); }
+  let lv: Ported, threw = "";
+  try { lv = new (level as Ported)(mode, num); hostLevel(lv); }
   catch (e) { threw = (e as Error).message; }
   if (threw) { console.log(`${key}: constructor THREW: ${threw}`); continue; }
 
@@ -34,7 +35,7 @@ for (const key of keys) {
   const covered = new Set<string>();
   for (let b = lv.m_world.GetBodyList(); b; b = b.GetNext()) {
     for (let s = b.GetShapeList(); s; s = s.GetNext()) {
-      const poly: any = s;
+      const poly: Ported = s;
       if (!poly.m_vertices || !poly.m_vertexCount) continue;
       let cx = 0, cy = 0;
       for (let i = 0; i < poly.m_vertexCount; i++) {

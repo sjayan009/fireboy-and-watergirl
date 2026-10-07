@@ -8,7 +8,7 @@
 
 import { emblem } from "./brand.js";
 
-type Attrs = Record<string, unknown>;
+type Attrs = Record<string, string | number | boolean | null | undefined | ((e: Event) => unknown)>;
 type Child = Node | string | null | undefined | false;
 
 export function el<K extends keyof HTMLElementTagNameMap>(
@@ -20,7 +20,7 @@ export function el<K extends keyof HTMLElementTagNameMap>(
     if (k === "class") node.className = String(v);
     else if (k === "html") node.innerHTML = String(v);
     else if (k.startsWith("on") && typeof v === "function") {
-      on(node, k.slice(2).toLowerCase(), v as (e: Event) => unknown);
+      on(node, k.slice(2).toLowerCase(), v);
     } else if (k === "value" && node instanceof HTMLInputElement) {
       node.value = String(v);
     } else node.setAttribute(k, v === true ? "" : String(v));
@@ -75,12 +75,11 @@ export function clear(node: HTMLElement): HTMLElement {
 export function field(label: string, attrs: Attrs = {}): HTMLLabelElement {
   const input = el("input", { autocomplete: "off", ...attrs });
   const wrap = el("label", { class: "field" }, el("span", {}, label), input);
-  (wrap as any).input = input;
-  return wrap as HTMLLabelElement;
+  return wrap;
 }
 
 export function inputOf(label: HTMLLabelElement): HTMLInputElement {
-  return (label as any).input as HTMLInputElement;
+  return label.querySelector("input")!;
 }
 
 /**

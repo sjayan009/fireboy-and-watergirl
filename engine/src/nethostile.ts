@@ -20,7 +20,7 @@
  *     exists to disambiguate.
  */
 import {
-  Link, converge, held, pair, replay, run, start,
+  Link, converge, held, pair, replay, run, start, type Peer,
 } from "./netlink.js";
 import { BODY_HISTORY, Command, Kind, decode, encodeInput } from "./net/protocol.js";
 import { Rng } from "./net/rng.js";
@@ -40,7 +40,7 @@ function check(what: string, got: unknown, want: unknown): void {
  * frames" and "they are on the same frame and disagree about it" are completely
  * different problems, and the first is usually the test's fault.
  */
-function agreed(peers: any): string {
+function agreed(peers: [Peer, Peer]): string {
   const [a, b] = peers;
   if (a.session.frame !== b.session.frame) {
     return `different frames: ${a.session.frame} vs ${b.session.frame}`;

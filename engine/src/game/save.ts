@@ -1,3 +1,4 @@
+import type { Ported } from "../ported.js";
 /**
  * Progress storage, shaped exactly like the SharedObject it replaces.
  *
@@ -34,7 +35,7 @@
 
 export interface SaveStore {
   /** The bag the ported code reads and writes. */
-  data: any;
+  data: Ported;
   /** SharedObject.flush(); persist whatever `data` now holds. */
   flush(): void;
   /**
@@ -66,11 +67,11 @@ const NODES = 32;
  * usable. Anything unrecognised becomes the default for that slot rather than
  * an error, because the alternative on this path is a game that will not start.
  */
-export function normaliseSave(loaded: unknown): { data: any; repaired: boolean } {
+export function normaliseSave(loaded: unknown): { data: Ported; repaired: boolean } {
   let repaired = false;
-  const src: Record<string, any> =
+  const src: Record<string, unknown> =
     loaded && typeof loaded === "object" && !Array.isArray(loaded)
-      ? loaded as Record<string, any>
+      ? loaded as Record<string, unknown>
       : (loaded === undefined || loaded === null ? {} : (repaired = true, {}));
 
   const numbers = (key: string, fallback: number,
@@ -135,7 +136,7 @@ export function normaliseSave(loaded: unknown): { data: any; repaired: boolean }
 
 /** localStorage-backed, for solo play in one browser. */
 class LocalSave implements SaveStore {
-  data: any;
+  data: Ported;
   lastError: string | null = null;
 
   constructor(private key: string) {
@@ -183,7 +184,7 @@ class LocalSave implements SaveStore {
 
 /** In-memory, for Node tests and for a peer whose progress lives elsewhere. */
 class MemorySave implements SaveStore {
-  data: any = normaliseSave(null).data;
+  data: Ported = normaliseSave(null).data;
   lastError: string | null = null;
   flush(): void {}
 }

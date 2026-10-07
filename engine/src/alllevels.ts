@@ -11,16 +11,17 @@ import { readFileSync, readdirSync } from "node:fs";
 import { level } from "./game/game.js";
 import { hostLevel } from "./game/headless.js";
 import { Event, advanceTree } from "./flash/flash.js";
+import type { Ported } from "./ported.js";
 
 const LEVELS = new URL("../../extracted/levels/", import.meta.url);
 
-function boot(mode: string, num: number): any {
-  const lv = new (level as any)(mode, num);
+function boot(mode: string, num: number): Ported {
+  const lv = new (level as Ported)(mode, num);
   hostLevel(lv);          // deadFire reaches for a Game above the level
   return lv;
 }
 
-function shapeCount(world: any): number {
+function shapeCount(world: Ported): number {
   let n = 0;
   for (let b = world.GetBodyList(); b; b = b.GetNext()) {
     for (let s = b.GetShapeList(); s; s = s.GetNext()) n++;
@@ -28,13 +29,13 @@ function shapeCount(world: any): number {
   return n;
 }
 
-function step(lv: any): void {
+function step(lv: Ported): void {
   advanceTree(lv);
   lv.Update(new Event(Event.ENTER_FRAME));
 }
 
 /** Tiles in the extracted grid that CreateGround turns into collision shapes. */
-function solidTiles(grid: any[][]): number {
+function solidTiles(grid: Ported[][]): number {
   let n = 0;
   for (const row of grid) {
     for (const v of row) {

@@ -24,6 +24,7 @@ import { GameHost } from "./net/gamehost.js";
 import { NetSession } from "./net/session.js";
 import { NullTransport } from "./net/transport.js";
 import { Command } from "./net/protocol.js";
+import type { Ported } from "./ported.js";
 
 let failures = 0;
 
@@ -34,7 +35,7 @@ function check(what: string, got: unknown, want: unknown): void {
               (ok ? "" : ` (expected ${JSON.stringify(want)})`));
 }
 
-const game: any = new (Game as any)();
+const game: Ported = new (Game as Ported)();
 
 /** One simulation step, exactly as the browser host runs it. */
 function step(n = 1): void {
@@ -45,12 +46,12 @@ function step(n = 1): void {
   }
 }
 
-function click(target: any): void {
+function click(target: Ported): void {
   target.dispatchEvent(new MouseEvent(MouseEvent.CLICK, target));
   target.dispatchEvent(new MouseEvent(MouseEvent.MOUSE_DOWN, target));
 }
 
-const symbols = () => game.children.map((c: any) => c.symbol).filter(Boolean);
+const symbols = () => game.children.map((c: Ported) => c.symbol).filter(Boolean);
 
 console.log("boot");
 check("starts on the intro menu", symbols(), ["IntroMenu"]);
@@ -96,7 +97,7 @@ check("a best time was saved",
       /^\d\d:\d\d$/.test(game.The_cookie.data.timesString[0]), true);
 
 console.log("\nresults -> back to the map");
-const board = game.children.filter((c: any) => c.symbol === "Recuento").pop();
+const board = game.children.filter((c: Ported) => c.symbol === "Recuento").pop();
 click(board.Rboard.ToMenuBtn);
 step(20);
 check("back on the map", symbols(), ["MainMenu"]);
@@ -121,9 +122,9 @@ console.log("\nthe buttons that change shared state, and the ones that do not");
   const seen: Intent[] = [];
   const off = shell.onIntent((i) => { seen.push(i); return true; });
 
-  const press = (target: any) => { shell.pointerDown(target); shell.pointerUp(); };
+  const press = (target: Ported) => { shell.pointerDown(target); shell.pointerUp(); };
 
-  const board = game.children.filter((c: any) => c.symbol === "GameOvero").pop();
+  const board = game.children.filter((c: Ported) => c.symbol === "GameOvero").pop();
   const level = game.m_level;
   press(board.GOboard.RetryBtn);
   step(20);
@@ -173,7 +174,7 @@ console.log("\nthe buttons that change shared state, and the ones that do not");
   // is made of is the same either way, and the thing under test is which INTENT
   // its button carries, not the twelve minutes of play in front of it.
   seen.length = 0;
-  const results: any = new (Recuento as any)();
+  const results: Ported = new (Recuento as Ported)();
   game.addChild(results);
   press(results.Rboard.ToMenuBtn);
   check("the results board's continue is a quit, like the other board's",
@@ -231,13 +232,13 @@ console.log("\nthe command the hook sends, applied");
     return false;
   });
 
-  const press = (target: any) => { shell.pointerDown(target); shell.pointerUp(); };
+  const press = (target: Ported) => { shell.pointerDown(target); shell.pointerUp(); };
   /** Let the session run, which is what applies a command a window ahead. */
   const run = (n: number) => { for (let i = 0; i < n; i++) session.tick(1 / 26); };
   const boards = () =>
-    game.children.filter((c: any) => c.Rboard || c.GOboard).length;
+    game.children.filter((c: Ported) => c.Rboard || c.GOboard).length;
   const maps = () =>
-    game.children.filter((c: any) => c.symbol === "MainMenu").length;
+    game.children.filter((c: Ported) => c.symbol === "MainMenu").length;
 
   // The block above finished on the intro menu. Back to the map, on the page's
   // own clock -- between levels nothing is shared and the session is not
@@ -260,7 +261,7 @@ console.log("\nthe command the hook sends, applied");
   run(45);
   check("finishing it puts the results board up", boards(), 1);
 
-  const results = game.children.filter((c: any) => c.Rboard).pop();
+  const results = game.children.filter((c: Ported) => c.Rboard).pop();
   press(results.Rboard.ToMenuBtn);
   run(30);
   check("continue leaves the level", session.running, false);
@@ -279,7 +280,7 @@ console.log("\nthe command the hook sends, applied");
   run(80);
   check("dying puts the game-over board up", boards(), 1);
 
-  const over = game.children.filter((c: any) => c.GOboard).pop();
+  const over = game.children.filter((c: Ported) => c.GOboard).pop();
   const died = game.m_level;
   press(over.GOboard.RetryBtn);
   run(30);
@@ -290,7 +291,7 @@ console.log("\nthe command the hook sends, applied");
 
   // And a level started while a board is somehow still up -- the third caller,
   // and the one a watcher joining mid-match goes through.
-  const stray: any = new (Recuento as any)();
+  const stray: Ported = new (Recuento as Ported)();
   game.addChild(stray);
   host.start("adventure", 1);
   check("starting a level sweeps a board away as well", boards(), 0);

@@ -15,6 +15,7 @@ import { level } from "./game/game.js";
 import { hostLevel } from "./game/headless.js";
 import { Event, advanceTree } from "./flash/flash.js";
 import { hashLevel, applyInput } from "./net/hash.js";
+import type { Ported } from "./ported.js";
 
 const EXPECTED = "aba863c1";
 const CHECKPOINTS: Record<number, string> = {
@@ -26,7 +27,7 @@ const CHECKPOINTS: Record<number, string> = {
 const log = readFileSync(new URL("../scriptlog.txt", import.meta.url), "utf8");
 const bits = log.trim().split(",").map(Number);
 
-const lv: any = new (level as any)("adventure", 1);
+const lv: Ported = new (level as Ported)("adventure", 1);
 // deadFire's frame script calls up into Game; give it something to reach.
 const host = hostLevel(lv);
 let bad = 0;

@@ -92,7 +92,7 @@ function rootCertificate() {
       `no CA certificate to verify the database against at ${path}. ` +
       "Supabase publishes it as prod-ca-2021.crt (dashboard: Project " +
       "Settings -> Database -> SSL Configuration); point SUPABASE_DB_CA at a " +
-      `different one if this project uses another. (${e.message})`);
+      `different one if this project uses another. (${e.message})`, { cause: e });
   }
 }
 
