@@ -29,12 +29,13 @@ import { hashLevel, applyInput } from "./net/hash.js";
 import { setSaveStore } from "./game/save.js";
 import { GameHost } from "./net/gamehost.js";
 import { Snapshot, verify } from "./net/snapshot.js";
+import type { Ported } from "./ported.js";
 
 const log = readFileSync(new URL("../scriptlog.txt", import.meta.url), "utf8");
 const BITS = log.trim().split(",").map(Number);
 
 /** One simulation step, in the same order both SessionHosts use. */
-function step(lv: any, bits: number): void {
+function step(lv: Ported, bits: number): void {
   tickClock();
   applyInput(lv, bits);
   advanceTree(lv);
@@ -43,7 +44,7 @@ function step(lv: any, bits: number): void {
 }
 
 function build(mode: string, num: number) {
-  const lv: any = new (level as any)(mode, num);
+  const lv: Ported = new (level as Ported)(mode, num);
   const host = hostLevel(lv);
   return { lv, host };
 }
@@ -56,7 +57,7 @@ function build(mode: string, num: number) {
  * along as a plain number because it lives in a module variable, out of reach
  * of any walk.
  */
-function roots(host: any): any[] {
+function roots(host: Ported): Ported[] {
   return [host];
 }
 
@@ -258,7 +259,7 @@ console.log("\nthe shell is state too, and none of it is a host object");
   // A level is the easy case. The snapshot the browser actually takes covers
   // the entire Game -- menus, pause tray, results board, the save -- and that
   // is where a host object could be hiding.
-  const game: any = new (Game as any)();
+  const game: Ported = new (Game as Ported)();
   // With a level running, because that is when a snapshot is ever taken and
   // because a Game sitting on its menus is a hundred objects, not a graph.
   new GameHost(game).start("adventure", 1);
@@ -283,10 +284,10 @@ console.log("\na save store's machinery must not roll back with it");
   // and a pending timer handle restored to a stale value is a timer that never
   // fires and progress that silently stops being saved.
   let machinery = 0;
-  const data: any = { stats: [1, 2, 3] };
+  const data = { stats: [1, 2, 3] };
   const store = { data, flush(): void { machinery++; } };
   setSaveStore(() => store);
-  const game: any = new (Game as any)();
+  const game: Ported = new (Game as Ported)();
   setSaveStore(null);
 
   const snap = new Snapshot().capture([game]);

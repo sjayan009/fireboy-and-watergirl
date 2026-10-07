@@ -92,8 +92,8 @@ export class AudioPlayer {
   resume(): void {
     if (this.gone) return;
     if (!this.ctx) {
-      const Ctor = (globalThis as any).AudioContext ??
-                   (globalThis as any).webkitAudioContext;
+      const g = globalThis as typeof globalThis & { webkitAudioContext?: typeof AudioContext };
+      const Ctor = g.AudioContext ?? g.webkitAudioContext;
       if (!Ctor) return;
       this.ctx = new Ctor();
       this.gain = this.ctx!.createGain();

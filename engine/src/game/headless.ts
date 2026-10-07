@@ -16,6 +16,7 @@
  * something a test can assert rather than something to eyeball.
  */
 import { Sprite } from "../flash/flash.js";
+import type { Ported } from "../ported.js";
 
 export class HeadlessHost extends Sprite {
   gameOvers = 0;
@@ -26,7 +27,7 @@ export class HeadlessHost extends Sprite {
 }
 
 /** Put `lv` under a headless host and return the host. */
-export function hostLevel(lv: any): HeadlessHost {
+export function hostLevel(lv: Ported): HeadlessHost {
   const host = new HeadlessHost();
   host.addChild(lv);
   return host;

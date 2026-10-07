@@ -19,16 +19,17 @@ import { level } from "./game/game.js";
 import { hostLevel } from "./game/headless.js";
 import { b2Vec2 } from "./box2d/box2d.js";
 import { Event, advanceTree } from "./flash/flash.js";
+import type { Ported } from "./ported.js";
 
 const LEVELS = new URL("../../extracted/levels/", import.meta.url);
 
-function boot(mode: string, num: number): any {
-  const lv = new (level as any)(mode, num);
+function boot(mode: string, num: number): Ported {
+  const lv = new (level as Ported)(mode, num);
   hostLevel(lv);
   return lv;
 }
 
-function step(lv: any, n = 6): void {
+function step(lv: Ported, n = 6): void {
   for (let i = 0; i < n; i++) {
     advanceTree(lv);
     lv.Update(new Event(Event.ENTER_FRAME));
@@ -55,7 +56,7 @@ console.log(`adventure-01 has ${red.length} red and ${blue.length} blue ` +
             `diamonds`);
 
 let failures = 0;
-function check(label: string, got: unknown, want: unknown): void {
+function check(label: string, got: number | string | boolean, want: number | string | boolean): void {
   const ok = got === want;
   if (!ok) failures++;
   console.log(`  ${ok ? "ok  " : "FAIL"} ${label}: ${got}` +

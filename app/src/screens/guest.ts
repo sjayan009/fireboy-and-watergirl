@@ -19,6 +19,7 @@ import tokens from "@landing/shared/tokens.css?inline";
 import base from "@landing/shared/base.css?inline";
 import local from "../ui/guest.css?inline";
 import { el, on } from "../ui/dom.js";
+import type { Ported } from "@engine/ported.js";
 
 export const GUEST_KEY = "FBCookie:guest";
 
@@ -114,7 +115,7 @@ export function guestScreen(host: HTMLElement): () => void {
   let cleared = false;
   off.push(on(stage, "animationend", () => stage.classList.remove("is-cleared")));
   const onFrame = (v: GameView) => {
-    const now = v.game.children.some((c: any) => c.symbol === "Recuento");
+    const now = v.game.children.some((c: Ported) => c.symbol === "Recuento");
     if (now && !cleared) stage.classList.add("is-cleared");
     cleared = now;
   };

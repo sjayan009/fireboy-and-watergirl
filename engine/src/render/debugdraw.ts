@@ -10,6 +10,7 @@
  */
 import { b2Shape } from
   "../box2d/box2d.js";
+import type { Ported } from "../ported.js";
 
 export const PPU = 20;              // pixels per world unit (tile)
 export const WORLD_COLS = 39;
@@ -20,7 +21,7 @@ export const WORLD_ROWS = 29;
  * things the game never names, like diamonds -- the SWF library symbol of the
  * MovieClip attached to the body.
  */
-function colorFor(shapeData: any, bodyName: string,
+function colorFor(shapeData: Ported, bodyName: string,
                   symbol: string): [string, string] {
   const s = typeof shapeData === "string" ? shapeData : "";
   if (s === "fire") return ["#ff5722", "#ff8a65"];
@@ -52,7 +53,7 @@ export interface DrawOptions {
   showGrid?: boolean;
 }
 
-export function draw(ctx: CanvasRenderingContext2D, lv: any,
+export function draw(ctx: CanvasRenderingContext2D, lv: Ported,
                      opts: DrawOptions = {}): void {
   const w = WORLD_COLS * PPU;
   const h = WORLD_ROWS * PPU;
@@ -74,7 +75,7 @@ export function draw(ctx: CanvasRenderingContext2D, lv: any,
     ctx.stroke();
   }
 
-  for (let b: any = lv.m_world.GetBodyList(); b; b = b.GetNext()) {
+  for (let b: Ported = lv.m_world.GetBodyList(); b; b = b.GetNext()) {
     const pos = b.GetPosition();
     const angle = b.GetAngle();
     const ud = b.GetUserData();
@@ -89,7 +90,7 @@ export function draw(ctx: CanvasRenderingContext2D, lv: any,
     if (ud && "parent" in ud && ud.parent === null) continue;
     if (ud && ud.visible === false) continue;
 
-    for (let s: any = b.GetShapeList(); s; s = s.GetNext()) {
+    for (let s: Ported = b.GetShapeList(); s; s = s.GetNext()) {
       const [stroke, fill] = colorFor(s.GetUserData(), bodyName, symbol);
       ctx.save();
       ctx.translate(pos.x * PPU, pos.y * PPU);
@@ -99,7 +100,7 @@ export function draw(ctx: CanvasRenderingContext2D, lv: any,
       ctx.lineWidth = 1;
 
       if (s.GetType() === b2Shape.e_polygonShape) {
-        const poly = s as any;
+        const poly = s as Ported;
         const verts = poly.m_vertices;
         const n = poly.m_vertexCount;
         ctx.beginPath();
@@ -112,7 +113,7 @@ export function draw(ctx: CanvasRenderingContext2D, lv: any,
         ctx.fill();
         ctx.stroke();
       } else if (s.GetType() === b2Shape.e_circleShape) {
-        const c = s as any;
+        const c = s as Ported;
         ctx.beginPath();
         ctx.arc(c.m_localPosition.x * PPU, c.m_localPosition.y * PPU,
                 c.m_radius * PPU, 0, Math.PI * 2);
