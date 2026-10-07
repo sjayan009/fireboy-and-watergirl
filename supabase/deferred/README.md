@@ -21,7 +21,7 @@ the release it was waiting for is live.
 ## Moving one in
 
 1. Confirm the client that stopped depending on the old behaviour is actually
-   live -- `curl https://fireboy-and-watergirl-official.vercel.app/version.txt`
+   live -- `curl https://fireboy-and-watergirl.sjayan009.workers.dev/version.txt`
    against the commit that shipped it, not against what `main` says.
 2. `git mv supabase/deferred/<file>.sql supabase/migrations/<file>.sql`
 3. Delete the transitional code the file's header names, if it is somewhere a

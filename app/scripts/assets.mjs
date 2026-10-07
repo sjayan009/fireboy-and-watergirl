@@ -247,10 +247,10 @@ console.log(`character atlases: ${atlasPages.reduce((n, page) => n + page.frames
  * -- and if they do not, the check quietly passes against the OLD deployment
  * and vouches for a page nobody just changed. A commit is not a guess.
  *
- * Workers Builds, Pages, Vercel, and CI supply the SHA. A local build says so.
+ * Workers Builds, Pages and CI supply the SHA. A local build says so.
  */
 await writeFile(resolve(ROOT, "dist/version.txt"),
-                (process.env.WORKERS_CI_COMMIT_SHA || process.env.CF_PAGES_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA ||
+                (process.env.WORKERS_CI_COMMIT_SHA || process.env.CF_PAGES_COMMIT_SHA ||
                  process.env.GITHUB_SHA || "local") + "\n");
 
 console.log(

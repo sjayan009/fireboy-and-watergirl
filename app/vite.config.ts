@@ -113,12 +113,10 @@ function extractedAssets(): Plugin {
 /**
  * The production origin, for the few things that must be absolute: the
  * canonical link, social cards, the sitemap and llms.txt. Everything a person
- * clicks stays relative. SITE_URL wins (a custom domain); on Vercel the
- * project's production domain is supplied to every build.
+ * clicks stays relative. SITE_URL wins (a custom domain); otherwise it is the
+ * Cloudflare Workers address.
  */
-const SITE = (process.env.SITE_URL
-  || (process.env.VERCEL_PROJECT_PRODUCTION_URL && `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`)
-  || "https://fbwg-online-multiplayer.vercel.app").replace(/\/$/, "");
+const SITE = (process.env.SITE_URL || "https://fireboy-and-watergirl.sjayan009.workers.dev").replace(/\/$/, "");
 
 const PAGES = ["", "developers/", "developers/netcode.html", "developers/recovery.html",
   "developers/architecture.html", "legal/privacy.html", "legal/terms.html"];
@@ -180,7 +178,7 @@ export default defineConfig(({ command }) => ({
      *
      * The deploy looks for an output directory named `dist` relative to the
      * project root, and the project root is the repository. Pointing
-     * `outputDirectory` at `app/dist` in vercel.json did not survive that --
+     * the output directory at `app/dist` did not survive that --
      * the build produced 27 MB in the right place and the deploy looked in
      * another one. Building where the DEFAULT already looks removes a setting
      * that has to be right rather than making it right.
