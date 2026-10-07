@@ -99,40 +99,49 @@ h1, h2, h3, h4, p { margin: 0; }
 :where(.icon-btn, .seg button, .watch-replay, .nav-links a, .devnav a) { transition: transform 100ms var(--ease-out), background-color var(--press) var(--ease), color var(--press) var(--ease); }
 .btn-s { --h: 2.25rem; padding: 0 .875rem; font-size: .9375rem; border-radius: .5rem; }
 /*
- * Ember and water, like the two players. The water button is tinted rather
- * than filled so it stays second in rank: one saturated action per screen.
- * Its arrow nudges the way it points on hover (--nudge).
+ * Ember and water, like the two players. Both are tinted rather than filled,
+ * each in its own element (--c the fill, --ct the text and edge).
+ *
+ * The arrow answers the pointer once, the way it points: 3px out on hover
+ * (--nudge), 2px further the instant it is pressed (--push), back the same way
+ * on leave. One move, held, never looped -- the hover is already the person's
+ * attention. Under reduced motion it stays put; the fill change says enough.
  */
-.btn-water { --nudge: translateY(2px); color: var(--water-text); background: color-mix(in srgb, var(--water) 16%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--water-text) 55%, transparent); }
-.btn-water svg { transition: transform var(--settle) var(--ease); }
-.btn-online { --nudge: translateX(2px); }
+.btn-water { --c: var(--water); --ct: var(--water-text); --nudge: translateY(3px); --push: translateY(5px); }
+.btn-fire, .btn-online { --nudge: translateX(3px); --push: translateX(5px); }
+.btn-fire { --c: var(--fire); --ct: var(--fire-text); }
+.btn-water, .btn-fire { color: var(--ct); background: color-mix(in srgb, var(--c) 16%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ct) 55%, transparent); }
+.btn-water svg, .btn-fire svg { transition: transform 200ms var(--ease-out); }
 @media (hover: hover) and (pointer: fine) {
-  .btn-water:hover { background: color-mix(in srgb, var(--water) 26%, transparent); }
-  .btn-water:hover svg { transform: var(--nudge); }
+  .btn-water:hover, .btn-fire:hover { background: color-mix(in srgb, var(--c) 26%, transparent); }
+  .btn-water:hover svg, .btn-fire:hover svg { transform: var(--nudge); }
 }
+.btn-water:active svg, .btn-fire:active svg { transform: var(--push); transition-duration: var(--press); }
+@media (prefers-reduced-motion: reduce) { .btn-water svg, .btn-fire svg { transform: none !important; } }
 /*
- * Play Online breathes light, not size: it breathes in (the fill brightens,
- * the edge sharpens, a glow gathers around it) and breathes out (it all fades
- * back), and at the top of each breath a ring of water light leaves it, like
- * the app's "Connected" dot. One 2.8 s cycle, eased in and out like a breath
- * rather than a tick. The button never changes size. All of it stops while the
- * pointer is on the button -- once someone is there it has done its job -- and
- * under reduced motion.
+ * Play Online and Play Locally breathe light, not size: they breathe in (the
+ * fill brightens, the edge sharpens, a glow gathers around it) and breathe out
+ * (it all fades back), and at the top of each breath a ring of light leaves
+ * it, like the app's "Connected" dot. One 2.8 s cycle, eased in and out like a
+ * breath rather than a tick, in the button's own element (--c, --ct). The
+ * button never changes size. All of it stops while the pointer is on the
+ * button -- once someone is there it has done its job -- and under reduced
+ * motion.
  */
 .btn-pulse { animation: btn-breathe 2.8s ease-in-out infinite; }
 @keyframes btn-breathe {
   0%, 100% {
-    background-color: color-mix(in srgb, var(--water) 16%, transparent);
-    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--water-text) 55%, transparent), 0 0 0 0 color-mix(in srgb, var(--water) 0%, transparent);
+    background-color: color-mix(in srgb, var(--c) 16%, transparent);
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ct) 55%, transparent), 0 0 0 0 color-mix(in srgb, var(--c) 0%, transparent);
   }
   45% {
-    background-color: color-mix(in srgb, var(--water) 32%, transparent);
-    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--water-text) 95%, transparent), 0 0 1.5rem .25rem color-mix(in srgb, var(--water) 45%, transparent);
+    background-color: color-mix(in srgb, var(--c) 32%, transparent);
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ct) 95%, transparent), 0 0 1.5rem .25rem color-mix(in srgb, var(--c) 45%, transparent);
   }
 }
 .btn-pulse::after {
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  box-shadow: 0 0 0 1.5px var(--water), 0 0 1rem color-mix(in srgb, var(--water) 45%, transparent);
+  box-shadow: 0 0 0 1.5px var(--c), 0 0 1rem color-mix(in srgb, var(--c) 45%, transparent);
   opacity: 0; animation: btn-ring 2.8s ease-out infinite;
 }
 @keyframes btn-ring {

@@ -11,32 +11,24 @@ const expected = process.env.FBWG_EXPECTED_SHA;
 const repetitions = Number(process.env.FBWG_REPETITIONS ?? "1");
 const apiKey = process.env.BROWSERBASE_API_KEY;
 const projectId = process.env.BROWSERBASE_PROJECT_ID;
-const shareUrl = process.env.FBWG_VERCEL_SHARE_URL;
 assert(/^[0-9a-f]{40}$/i.test(expected ?? ""), "expected full commit SHA required");
 assert(Number.isInteger(repetitions) && repetitions >= 1 && repetitions <= 2,
   "repetitions must be 1 or 2");
 assert(apiKey && projectId, "Browserbase repository secrets missing");
 const preview = new URL(site);
 assert.equal(preview.protocol, "https:", "Preview must use HTTPS");
-assert(/^fireboy-and-watergirl-official-[a-z0-9-]+\.vercel\.app$/i.test(preview.hostname),
-  "Preview host is not the known Vercel project");
+// A Workers preview URL: a version or branch alias in front of this Worker on
+// this account's own workers.dev subdomain, and nothing else.
+assert(/^[a-z0-9-]+-fireboy-and-watergirl\.sjayan009\.workers\.dev$/i.test(preview.hostname),
+  "Preview host is not a preview of this Worker");
 assert.equal(preview.pathname, "/", "Preview URL must be an origin");
 assert(!preview.username && !preview.password && !preview.search && !preview.hash && !preview.port,
   "Preview URL must not contain credentials, query, fragment, or port");
 const origin = preview.origin + "/";
-assert(shareUrl, "temporary Vercel Preview share secret missing");
-const share = new URL(shareUrl);
-assert.equal(share.origin, preview.origin, "share link is for a different Preview");
-assert.equal(share.pathname, "/", "share link must target the Preview origin");
-assert(!share.username && !share.password && !share.hash && !share.port &&
-  [...share.searchParams.keys()].join() === "_vercel_share" &&
-  /^[A-Za-z0-9]+$/.test(share.searchParams.get("_vercel_share") ?? ""),
-"invalid temporary Vercel share link");
 
 async function versionGate(context) {
   const probe = await context.newPage();
   try {
-    await probe.goto(shareUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
     const response = await probe.goto(new URL("/version.txt", origin).href,
       { waitUntil: "domcontentloaded", timeout: 15000 });
     assert.equal(response?.status(), 200, "Preview version endpoint unavailable");
@@ -235,9 +227,7 @@ try {
   assert.notEqual(result.network[0].publicIP, result.network[1].publicIP,
     "browser peers have the same public egress IP");
   console.log(`independent public egress: ${result.network[0].publicIP} / ${result.network[1].publicIP}`);
-  // The share link grants each isolated browser context short-lived access to
-  // this protected Preview; neither context inherits the other's cookie.
-  await Promise.all(pages.map(page => page.goto(shareUrl,
+  await Promise.all(pages.map(page => page.goto(origin,
     { waitUntil: "domcontentloaded", timeout: 20000 })));
   const suffix = `${Date.now()}_${randomBytes(5).toString("hex")}`;
   const alice = await makeUser("a", suffix);
@@ -271,7 +261,6 @@ try {
 } catch (error) {
   // A CDP connection error can include its credential-bearing WebSocket URL.
   let safe = String(error.message ?? error).replaceAll(apiKey, "[redacted]")
-    .replaceAll(shareUrl, "[redacted Preview share URL]")
     .replace(/wss:\/\/\S+/g, "[redacted CDP URL]");
   for (const value of privateTestValues) safe = safe.replaceAll(value, "[redacted test credential]");
   result.error = safe;

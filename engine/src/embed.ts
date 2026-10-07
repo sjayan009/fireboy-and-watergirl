@@ -275,8 +275,11 @@ export class GameView {
     // The little icon follows, because `showMute` re-asserts it after every
     // tick. It is in the snapshot and gets rewound like everything else; it is
     // simply written again, which is safe precisely because nothing reads it.
+    //
+    // Solo too: the ported handler would write `Game.Muted` and SoundMixer,
+    // `showMute` would put `Game.Muted` back next tick, and every later press
+    // would mute again -- silence that no click could undo.
     if (intent.kind === "mute") {
-      if (!s) return false;
       this.setMuted(!this.muted);
       return true;
     }

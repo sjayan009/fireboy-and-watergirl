@@ -19,7 +19,7 @@ Read-only Supabase connector checks against the repository's production project 
 | Accepting verifier engine versions | 0 |
 | Ranked attempts / retained replay payload | 0 / 0 bytes |
 | GitHub repository visibility | `private`, verified through repository metadata |
-| Existing Vercel project | `fireboy-and-watergirl-official`, linked to this repository on a `hobby` team |
+| Existing Vercel project | `fbwg-online-multiplayer`, linked to this repository on a `hobby` team |
 | Selected Cloudflare destination | `fireboy-and-watergirl.sjayan009.workers.dev`; dashboard Workers plan **Free, $0, Current plan** |
 | Existing Worker deployment type | Dashboard confirms static assets only; runtime variables, Logpush, Tail Workers and triggers unavailable |
 | Configured SMTP provider | Supabase SMTP host is `smtp-relay.brevo.com`; authenticated Brevo dashboard shows **Free, 300 emails/day** |

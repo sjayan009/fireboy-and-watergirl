@@ -12,29 +12,49 @@ body:has(#app.guest-host) { background-image: none; }
 /* Full Screen hides on phones, where the header has room for one button. */
 @media (max-width: 560px) { .local .nav-end .btn-ghost { display: none; } }
 .local-main {
-  display: grid; align-content: center; justify-items: center; gap: 1rem;
-  padding: .75rem var(--gutter) 1rem;
+  display: grid; align-content: center; justify-items: center; gap: 1.75rem;
+  padding: 1.25rem var(--gutter) 1rem;
 }
 
 /*
  * The stage: as large as the window allows at 4:3, leaving only what the nav
- * (3.7rem), the key cards (3.6rem) and the gaps between them need (11rem in
- * all). Behind it, an ember glow on Fireboy's side and a water
- * glow on Watergirl's, so the frame sits between the two players' colours.
+ * (3.7rem), the key cards (3.6rem) and the gaps between them need (12rem in
+ * all). Behind it, a rounded box of light .625rem larger on every side, with a
+ * clean edge rather than a blur:
+ * ember on Fireboy's side, water on Watergirl's, the pause key's lavender top
+ * and bottom, each blending into the next all the way round.
+ *
+ * Clearing a level breathes it out once: the box swells and floods lavender
+ * (::after), then settles back. `.is-cleared` is set by guest.ts.
  */
 .local-stage {
   position: relative; isolation: isolate;
-  width: min(100%, calc((100dvh - 11rem) * 4 / 3)); min-width: min(100%, 20rem);
+  width: min(100%, calc((100dvh - 12rem) * 4 / 3)); min-width: min(100%, 20rem);
   aspect-ratio: 4 / 3;
   animation: local-in 520ms var(--ease-out) both;
 }
-.local-stage::before {
-  content: ""; position: absolute; inset: -12% -8%; z-index: -1; pointer-events: none;
-  background:
-    radial-gradient(50% 60% at 12% 55%, var(--glow-fire), transparent 70%),
-    radial-gradient(50% 60% at 88% 55%, var(--glow-water), transparent 70%);
-  filter: blur(24px);
+.local-stage::before, .local-stage::after {
+  content: ""; position: absolute; inset: -.625rem; z-index: -1; pointer-events: none;
+  border-radius: 1.625rem;
 }
+.local-stage::before {
+  /* A mesh of the players' and the pause key's own colours: ember and water
+     glow in from their sides over a lavender ground and fade into it, so the
+     colours run into each other everywhere rather than meeting at a seam.
+     80% so it sits a little softer than the solid key colours. */
+  opacity: .8;
+  background:
+    radial-gradient(75% 110% at 0% 50%, var(--fire) 15%, transparent 85%),
+    radial-gradient(75% 110% at 100% 50%, var(--water) 15%, transparent 85%),
+    var(--pause);
+}
+.local-stage::after { opacity: 0; background: color-mix(in srgb, var(--pause) 55%, transparent); }
+.local-stage.is-cleared::before { animation: local-breathe 1.6s var(--ease-out); }
+.local-stage.is-cleared::after { animation: local-flood 1.6s var(--ease-out); }
+/* The swell stops at the nav's bottom line: .local-main's top padding (1.25rem)
+   is exactly how far the box can grow before it crosses it. */
+@keyframes local-breathe { 35% { inset: -1.25rem; border-radius: 2.25rem; filter: brightness(1.6); } }
+@keyframes local-flood { 35% { opacity: 1; inset: -1.25rem; border-radius: 2.25rem; } }
 .local-stage canvas {
   display: block; width: 100%; height: 100%; outline: none; touch-action: none;
   border-radius: 1rem; border: 1px solid var(--edge);
@@ -117,5 +137,8 @@ body:has(#app.guest-host) { background-image: none; }
 @media (prefers-reduced-motion: reduce) {
   .local-stage, .local-controls { animation-name: local-fade; }
   .local kbd.is-down { transform: none; }
+  .local-stage.is-cleared::before { animation: none; }
+  .local-stage.is-cleared::after { animation-name: local-glow; }
 }
 @keyframes local-fade { from { opacity: 0; } }
+@keyframes local-glow { 35% { opacity: 1; } }

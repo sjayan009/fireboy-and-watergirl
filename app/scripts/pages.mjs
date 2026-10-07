@@ -10,8 +10,8 @@ assertStaticHosting(JSON.parse(await readFile(resolve(root, "wrangler.json"), "u
 for (const project of [root, resolve(root, "app")]) {
   if (existsSync(join(project, "functions"))) throw new Error("Pages Functions are prohibited in this static-only deployment");
 }
-const config = JSON.parse(await readFile(resolve(root, "vercel.json"), "utf8"));
-// Keep the existing audited headers in one source while supporting both static hosts.
+const config = JSON.parse(await readFile(resolve(root, "headers.json"), "utf8"));
+// The audited headers live in one source, headers.json, and ship as `_headers`.
 const headers = config.headers.map(rule => rule.source.replace("(.*)", "*") + "\n" + rule.headers.map(h => `  ${h.key}: ${h.value}`).join("\n")).join("\n\n") + "\n";
 await writeFile(join(dist, "_headers"), headers);
 // Hash routing needs no redirect or server function. Root index.html is sufficient.
