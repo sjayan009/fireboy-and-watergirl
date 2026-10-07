@@ -266,7 +266,7 @@ console.log("\nand the For Developers pages are there and can run");
 /*
  * The page that has to work when nothing else did.
  *
- * `404.html` is copied out of `public/` and served by Vercel for any path that
+ * `404.html` is copied out of `public/` and served by Cloudflare for any path that
  * matches nothing. It is checked here rather than trusted because everything
  * about it is easy to break silently: rename the file and the platform quietly
  * falls back to its own generic page, and nobody notices until somebody
@@ -294,10 +294,10 @@ console.log("\nand there is a 404 page that can actually run");
     check("it offers a way back", /href="\/"/.test(live));
     check("and asks not to be indexed", /noindex/.test(page));
     // The CSP allows inline <style> by hash only, and this page's one block is
-    // the hash it names. Edit the CSS without updating vercel.json and the page
-    // renders unstyled on both hosts -- so the build refuses instead.
+    // the hash it names. Edit the CSS without updating headers.json and the page
+    // renders unstyled -- so the build refuses instead.
     const styles = [...live.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]);
-    const csp = JSON.parse(readFileSync(join(DIST, "..", "vercel.json"), "utf8"))
+    const csp = JSON.parse(readFileSync(join(DIST, "..", "headers.json"), "utf8"))
       .headers.flatMap((h) => h.headers)
       .find((h) => h.key === "Content-Security-Policy")?.value ?? "";
     check("and its one <style> is the one the CSP names by hash",

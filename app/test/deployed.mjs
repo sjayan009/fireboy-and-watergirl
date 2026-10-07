@@ -3,7 +3,7 @@
  *
  * `production.mjs` serves the built `dist/` from a throwaway Node server on
  * localhost. That proves the ARTEFACT is good and says nothing about the thing
- * in front of it: the CDN, the headers `vercel.json` asks for, how an unknown
+ * in front of it: the CDN, the headers `headers.json` asks for, how an unknown
  * path is answered, TLS, and a Content-Security-Policy that is only enforced on
  * a real origin. Every one of those can be wrong while the bundle is perfect --
  * and three deployments in a row were.
@@ -76,8 +76,8 @@ check("supabase is reachable under the csp, and only this project",
 check("and inline <style> elements are refused",
       /style-src-elem 'self' 'sha256-/.test(h(root, "content-security-policy") ?? ""), true);
 check("X-Frame-Options", h(root, "x-frame-options"), "DENY");
-// Vercel adds HSTS by itself; the Cloudflare origin only sends what `_headers`
-// lists, which is generated from vercel.json -- so it is stated there for both.
+// The Cloudflare origin only sends what `_headers` lists, which is generated
+// from headers.json -- so HSTS has to be stated there.
 check("HSTS for two years",
       (h(root, "strict-transport-security") ?? "").includes("max-age=63072000"), true);
 check("X-Content-Type-Options", h(root, "x-content-type-options"), "nosniff");

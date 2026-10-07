@@ -89,7 +89,7 @@ and the gate it opened are gone now -- `20260910000000_open_the_gate` and
 into CI is the reason this section exists.)
 
 Applying them automatically buys that back and introduces one rule in its place.
-**Vercel builds on push and the workflow starts on the same push, so the two
+**Cloudflare Workers builds on push and the workflow starts on the same push, so the two
 race.** `deployed` migrates before it waits, which is the best ordering
 available, but it cannot stop a build finishing first — so for a few seconds
 either release may be talking to either schema.

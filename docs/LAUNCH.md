@@ -19,8 +19,8 @@ the owner can take: accounts, consoles, posting.
 - **AI search**: `llms.txt`, and `<noscript>` text so crawlers that don't run
   JavaScript (GPTBot, ClaudeBot, PerplexityBot, link previews) see more than
   an empty `<div>`.
-- Absolute URLs come from `SITE_URL`, falling back to Vercel's
-  `VERCEL_PROJECT_PRODUCTION_URL`. Set `SITE_URL` when a custom domain lands.
+- Absolute URLs come from `SITE_URL`, falling back to the Cloudflare Workers
+  address. Set `SITE_URL` when a custom domain lands.
 
 ## Before marketing
 
@@ -30,9 +30,10 @@ the owner can take: accounts, consoles, posting.
    GitHub. The Terms promise prompt removal on request. Keep that promise if
    asked, and keep a version that does not depend on their assets (the
    For Developers pages) in mind as the fallback.
-2. **Drop "official" from the address.** `fireboy-and-watergirl-official` reads
-   as an impersonation claim. Buy a neutral domain (~$10–15/yr), add it in
-   Vercel, set `SITE_URL`, and redirect the old host.
+2. **Drop "official" from the address.** Done 2026-10-06:
+   `fireboy-and-watergirl-official` read as an impersonation claim, so the
+   project moved to `fbwg-online-multiplayer.vercel.app` and the old host was
+   removed. A bought domain would still need adding in Cloudflare and `SITE_URL`.
 3. **Google OAuth consent screen**: add the Privacy Policy and Terms URLs, and
    the new domain as an authorized domain.
 4. **Supabase Auth**: add the new domain to Site URL and Redirect URLs.

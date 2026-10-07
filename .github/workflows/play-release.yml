@@ -20,10 +20,6 @@ on:
         description: Full commit SHA, required for remote
         required: false
         type: string
-      share_url:
-        description: Vercel share URL for the Preview, required for remote
-        required: false
-        type: string
       repetitions:
         description: One or two fresh remote games
         required: false
@@ -56,14 +52,12 @@ jobs:
     if: inputs.gate == 'remote' && vars.FBWG_ZERO_DOLLAR_ACTIONS == '1' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
-      deployments: read
       id-token: write
     uses: ./.github/workflows/network-remote.yml
     with:
       preview_url: ${{ inputs.preview_url }}
       expected_sha: ${{ inputs.expected_sha }}
       repetitions: ${{ inputs.repetitions }}
-      share_url: ${{ inputs.share_url }}
     secrets:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
