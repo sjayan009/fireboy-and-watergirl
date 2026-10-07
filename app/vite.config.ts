@@ -118,8 +118,10 @@ function extractedAssets(): Plugin {
  */
 const SITE = (process.env.SITE_URL || "https://fireboy-and-watergirl.sjayan009.workers.dev").replace(/\/$/, "");
 
-const PAGES = ["", "developers/", "developers/netcode.html", "developers/recovery.html",
-  "developers/architecture.html", "legal/privacy.html", "legal/terms.html"];
+// Extensionless: Workers answers `/x.html` with a redirect to `/x`, and a
+// sitemap entry that redirects is one Google reports and does not index.
+const PAGES = ["", "developers/", "developers/netcode", "developers/recovery",
+  "developers/architecture", "legal/privacy", "legal/terms"];
 
 function discovery(): Plugin {
   return {
@@ -145,13 +147,13 @@ Sitemap: ${SITE}/sitemap.xml
 
 ## For Developers
 - [Overview](${SITE}/developers/): how a Flash game with no source became online co-op, with the numbers
-- [Netcode](${SITE}/developers/netcode.html): rollback netcode running live: prediction, correction, re-simulation
-- [Recovery](${SITE}/developers/recovery.html): taking the SWF apart and rebuilding levels, art and audio
-- [Architecture](${SITE}/developers/architecture.html): determinism across browser engines, security, testing
+- [Netcode](${SITE}/developers/netcode): rollback netcode running live: prediction, correction, re-simulation
+- [Recovery](${SITE}/developers/recovery): taking the SWF apart and rebuilding levels, art and audio
+- [Architecture](${SITE}/developers/architecture): determinism across browser engines, security, testing
 
 ## Legal
-- [Privacy Policy](${SITE}/legal/privacy.html)
-- [Terms](${SITE}/legal/terms.html)
+- [Privacy Policy](${SITE}/legal/privacy)
+- [Terms](${SITE}/legal/terms)
 `);
     },
   };
