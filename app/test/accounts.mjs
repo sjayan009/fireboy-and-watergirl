@@ -161,6 +161,23 @@ const errorText = (page) =>
  * the summary is what a person does; a test that reached into the closed
  * section instead would be exercising markup nobody can touch.
  */
+/**
+ * Answer the 13+ screen, which sign-up shows before its form.
+ *
+ * Through the page, as a person would: two selects and Continue. It stores only
+ * whether the answer passed, in this context's localStorage, so a fresh page
+ * from `newPage` asks again -- and Google's button on either screen waits on
+ * the same answer, because Google makes accounts as well as signing them in.
+ */
+const passAgeGate = async (page) => {
+  const picks = page.locator(".age-row select");
+  if (!(await picks.count())) return;
+  await picks.nth(0).selectOption("1");
+  await picks.nth(1).selectOption("2000");
+  await page.click("button[type=submit]:has-text('Continue')");
+  await page.waitForSelector("input[type=email]");
+};
+
 const openSetting = async (page, name) => {
   const row = page.locator(`.settings-group:has(.settings-name:text-is("${name}"))`);
   if (!await row.evaluate((d) => d.open)) await row.locator("summary").click();
@@ -175,6 +192,7 @@ try {
     const page = await newPage();
     await page.goto(URL_ + "#/signup", { waitUntil: "load" });
     await page.waitForSelector("text=Make an Account");
+    await passAgeGate(page);
 
     const fill = async (email, pw, again) => {
       await page.fill("input[type=email]", email);
@@ -214,6 +232,7 @@ try {
     const signUpWith = async (address) => {
       await page.goto(URL_ + "#/signup", { waitUntil: "load" });
       await page.waitForSelector("text=Make an Account");
+      await passAgeGate(page);
       await page.fill("input[type=email]", address);
       const pws = page.locator("input[type=password]");
       await pws.nth(0).fill(`pw_${stamp}_trial!A`);
@@ -573,6 +592,8 @@ try {
       return route.abort();
     });
 
+    await page.goto(URL_ + "#/signup", { waitUntil: "load" });
+    await passAgeGate(page);
     for (const [screen, hash] of [["sign-in", "#/login"],
                                   ["sign-up", "#/signup"]]) {
       authorize = null;

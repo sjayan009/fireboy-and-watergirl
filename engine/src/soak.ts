@@ -22,6 +22,7 @@ import { hostLevel } from "./game/headless.js";
 import { Event, advanceTree, enterFrameTree, SoundBus } from "./flash/flash.js";
 import { hashLevel, applyInput } from "./net/hash.js";
 import { Snapshot, verify } from "./net/snapshot.js";
+import type { Ported } from "./ported.js";
 
 verify(true);
 
@@ -51,7 +52,7 @@ function input(f: number): number {
  */
 function run(mode: string, num: number): { marks: string[]; lives: number } {
   resetClock();
-  let lv: any = new (level as any)(mode, num);
+  let lv: Ported = new (level as Ported)(mode, num);
   hostLevel(lv);
   SoundBus.drain();
 
@@ -66,7 +67,7 @@ function run(mode: string, num: number): { marks: string[]; lives: number } {
     SoundBus.drain();
     if ((f + 1) % EVERY === 0) marks.push(hashLevel(lv));
     if (lv.ended && f < FRAMES - 1) {
-      lv = new (level as any)(mode, num);
+      lv = new (level as Ported)(mode, num);
       hostLevel(lv);
       lives++;
     }
@@ -107,7 +108,7 @@ for (const [mode, num] of LEVELS) {
 // One snapshot at the end, purely to make the run assert something about the
 // thing `verify(true)` was turned on for.
 {
-  const lv: any = new (level as any)("adventure", 1);
+  const lv: Ported = new (level as Ported)("adventure", 1);
   const host = hostLevel(lv);
   for (let i = 0; i < 200; i++) {
     tickClock();

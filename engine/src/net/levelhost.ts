@@ -14,10 +14,11 @@ import { applyInput, hashLevel } from "./hash.js";
 import { hostLevel, HeadlessHost } from "../game/headless.js";
 import { SessionHost } from "./session.js";
 import { Snapshot } from "./snapshot.js";
+import type { Ported } from "../ported.js";
 
 export class LevelHost implements SessionHost {
   /** The running level, or null before the first start. */
-  lv: any = null;
+  lv: Ported = null;
   /** Counts the GameOver and Recuent that deadFire and WaterGirlStairs fire. */
   shell: HeadlessHost | null = null;
   private mode = "adventure";
@@ -26,7 +27,7 @@ export class LevelHost implements SessionHost {
   start(mode: string, num: number): void {
     this.mode = mode;
     this.num = num;
-    this.lv = new (level as any)(mode, num);
+    this.lv = new (level as Ported)(mode, num);
     this.shell = hostLevel(this.lv);
   }
 

@@ -12,6 +12,7 @@ import {
 import { applyInput, hashLevel } from "./hash.js";
 import { MODES, SessionHost } from "./session.js";
 import { Snapshot } from "./snapshot.js";
+import type { Ported } from "../ported.js";
 
 /**
  * Take down the results or game-over board, as the click that reached the
@@ -31,14 +32,14 @@ import { Snapshot } from "./snapshot.js";
  * The same predicate `ShellInput.overlay()` uses, so the two cannot disagree
  * about what a board is.
  */
-function closeBoards(g: any): void {
+function closeBoards(g: Ported): void {
   for (const c of [...g.children]) {
     if (c.GOboard || c.Rboard) g.removeChild(c);
   }
 }
 
 export class GameHost implements SessionHost {
-  constructor(private game: any, private onConfirmed?: (frame: number) => void,
+  constructor(private game: Ported, private onConfirmed?: (frame: number) => void,
     private preparing?: () => void, private prepared?: () => boolean) {}
   confirmed(frame: number): void { this.onConfirmed?.(frame); }
   ready(): boolean { return this.prepared?.() ?? true; }

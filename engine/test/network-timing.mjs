@@ -55,7 +55,10 @@ for (const hz of rates) {
     if (notice === null && session.stalledMs >= 2000) notice = session.stalledMs;
   }
   assert.ok(notice >= 2000 && notice <= 2000 + 1000 / hz + 0.001);
-  assert.equal(session.frame, 30);
+  // Zero, not the rollback window. A peer that has never heard its partner's
+  // first input does not start the level at all -- it used to run thirty frames
+  // of guesses first, which is the head start the start barrier removes.
+  assert.equal(session.frame, 0);
   stallNotices.push({ hz, noticeMs: notice });
 }
 

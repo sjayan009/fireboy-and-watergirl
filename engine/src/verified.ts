@@ -5,6 +5,7 @@ import { SoundBus } from "./flash/flash.js";
 import { GameHost } from "./net/gamehost.js";
 import { Command } from "./net/protocol.js";
 import { ENGINE_VERSION } from "./version.js";
+import type { Ported } from "./ported.js";
 
 export interface Replay {
   version: 1; engine: string; mode: string; num: number; frames: number;
@@ -21,8 +22,8 @@ export function encodeInputs(bits: readonly number[]): string {
   return btoa(s);
 }
 /** Reads the actual result board, never the personal-best save. */
-export function completedResult(game: any, frames: number): VerifiedResult | null {
-  const board = game.children.find((c: any) => c.Rboard)?.Rboard;
+export function completedResult(game: Ported, frames: number): VerifiedResult | null {
+  const board = game.children.find((c: Ported) => c.Rboard)?.Rboard;
   if (!board || board.Result.F.visible) return null;
   const medal = board.Result.A.visible ? 3 : board.Result.B.visible ? 2 : board.Result.C.visible ? 1 : 0;
   if (!medal) return null;
@@ -38,13 +39,14 @@ export function completedResult(game: any, frames: number): VerifiedResult | nul
   if (seconds < 3 || seconds > 5999) return null;
   return { node: game.cur_node, medal, seconds, frames };
 }
+const isInteger = (x: unknown): x is number => Number.isInteger(x);
 export function parseReplay(text: string): Replay {
   if (text.length > 1024 * 1024) throw new Error("Replay exceeds size limit");
   const value: unknown = JSON.parse(text);
   if (!Array.isArray(value) || value.length !== 7) throw new Error("Invalid replay");
-  const [version, engine, mode, num, frames, inputs, commands] = value as any[];
+  const [version, engine, mode, num, frames, inputs, commands] = value as unknown[];
   const levels: Record<string, number> = { adventure: 17, puzzle: 9, speed: 6 };
-  if (version !== 1 || engine !== ENGINE_VERSION || typeof mode !== "string" || !Object.hasOwn(levels, mode) || !Number.isInteger(num) || num < 1 || num > levels[mode] || !Number.isInteger(frames) || frames < 1 || frames > MAX_REPLAY_FRAMES || typeof inputs !== "string" || inputs.length !== Math.ceil(frames / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(inputs) || !Array.isArray(commands) || commands.length > 2048) throw new Error("Unsupported or invalid replay");
+  if (version !== 1 || engine !== ENGINE_VERSION || typeof mode !== "string" || !Object.hasOwn(levels, mode) || !isInteger(num) || num < 1 || num > levels[mode] || !isInteger(frames) || frames < 1 || frames > MAX_REPLAY_FRAMES || typeof inputs !== "string" || inputs.length !== Math.ceil(frames / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(inputs) || !Array.isArray(commands) || commands.length > 2048) throw new Error("Unsupported or invalid replay");
   let previous = -1, previousAction = -1;
   for (const c of commands) {
     if (!Array.isArray(c) || c.length !== 4 || !c.every(Number.isInteger) || c[0] < 0 || c[0] >= frames || c[0] < previous || c[1] !== Command.Pause || ![0,1].includes(c[2]) || c[3] !== 0) throw new Error("Invalid gameplay commands");
@@ -62,10 +64,10 @@ export function verifyReplay(text: string): VerifiedResult {
   if (bits.length !== r.frames || bits.some(b => b > 63)) throw new Error("Invalid inputs");
   const old = getSaveStore();
   const store = new MemorySave();
-  let game: any;
+  let game: Ported;
   setSaveStore(() => store);
   resetClock();
-  try { game = new (Game as any)(); } finally { setSaveStore(old); }
+  try { game = new (Game as Ported)(); } finally { setSaveStore(old); }
   const host = new GameHost(game);
   host.start(r.mode, r.num);
   let command = 0;
@@ -81,7 +83,7 @@ export function verifyReplay(text: string): VerifiedResult {
       if (f + 1 !== r.frames) throw new Error("Replay completion boundary disagrees");
       return result;
     }
-    if (game.children.some((c: any) => c.GOboard)) throw new Error("Level failed");
+    if (game.children.some((c: Ported) => c.GOboard)) throw new Error("Level failed");
   }
   throw new Error("Level did not complete");
 }

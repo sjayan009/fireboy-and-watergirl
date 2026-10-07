@@ -97,6 +97,18 @@ const TRAILER_MAGIC = 0xa7;
 /** Fixed part of a trailer: magic, advantage, sent, echo, held, m, checksum. */
 const TRAILER_FIXED = 15;
 
+/**
+ * The largest packet `encodeInput` or `encodeCommand` can produce: a full input
+ * packet, header and body history plus a timing trailer carrying the rest.
+ *
+ * Anything that holds packets aside to process later sizes its filter by this,
+ * never by a literal. A literal 64 was written when packets were at most that,
+ * and outlived the trailer that took a full one to 65 -- after which every
+ * mid-level input packet was silently dropped from a spectator's catch-up
+ * buffer, and the spectator froze for good on the first frame it never got.
+ */
+export const MAX_PACKET = 18 + BODY_HISTORY + TRAILER_FIXED + EXTRA_HISTORY;
+
 /** Things other than movement that change shared state. */
 export const enum Command {
   /** Begin a level. `a` = mode index, `b` = level number. */

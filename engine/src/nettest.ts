@@ -16,7 +16,8 @@
  */
 import { NetSession, Slot } from "./net/session.js";
 import { Transport } from "./net/transport.js";
-import { Command } from "./net/protocol.js";
+import { Command, MAX_PACKET, encodeInput } from "./net/protocol.js";
+import { canonicalReplay } from "./verified.js";
 import { LevelHost } from "./net/levelhost.js";
 import { Rng } from "./net/rng.js";
 
@@ -394,6 +395,62 @@ console.log("\nsomebody watching sees the same game");
         eyes.log.slice(0, eyes.frame).join() ===
         peers[0].session.log.slice(0, eyes.frame).join(), true);
   check("with nobody desyncing", eyes.desyncs, 0);
+}
+
+console.log("\nsomebody who starts watching mid-level catches up and keeps up");
+{
+  // The other way in, and the one people actually use: the pair are already
+  // playing, and the watcher is handed a snapshot of the confirmed history to
+  // replay. The pair do not wait for that replay. Everything they send while it
+  // runs is held aside and applied after -- and it has to be ALL of it,
+  // because their packets only repeat the last HISTORY frames. A watcher that
+  // drops what arrives during a catch-up longer than that has a hole no later
+  // packet can fill, and freezes on the first frame of it for good.
+  check("a full input packet fits what a catch-up holds aside",
+        encodeInput({ kind: 1, slot: 0, epoch: 1, frame: 99, bits: new Array(32).fill(5),
+                      hashFrame: 0, hash: 0,
+                      timing: { advantage: 0, sent: 1, echo: 1, held: 0 } }).length <= MAX_PACKET,
+        true);
+
+  const link = new Link(40, 0, 0);
+  const peers = pair(link, 3);
+  peers[0].session.requestStart("adventure", 1);
+  link.advance(STEP_MS);
+  run(link, peers, 400, scripted);
+
+  const seat = new LevelHost();
+  const eyes = new NetSession({
+    slot: 0, observer: true, host: seat,
+    transport: {
+      rttMs: null,
+      send() { /* a watcher says nothing */ },
+      onMessage(fn) { link.watch(fn); },
+      close() {},
+    },
+  });
+  // The newest frame the pair have confirmed, which is what a snapshot carries.
+  let from = peers[0].session.frame;
+  while (from > 1 && !peers[0].session.replay(from)) from--;
+  const text = canonicalReplay(peers[0].session.replay(from)!);
+  // Long enough to yield partway (it replays in chunks), and the pair play on
+  // through the gap -- further than HISTORY frames -- before it finishes.
+  const loading = eyes.loadConfirmedReplay(text, peers[0].session.generation);
+  run(link, peers, 60, scripted);
+  await loading;
+  for (let i = 0; i < 300; i++) {
+    for (const s of [0, 1] as Slot[]) peers[s].session.setLocalInput(scripted(s, i));
+    link.advance(STEP_MS);
+    peers[0].session.tick(STEP);
+    peers[1].session.tick(STEP);
+    eyes.tick(STEP);
+  }
+  console.log(`  caught up from frame ${from}; the pair are on ${peers[0].session.frame}, ` +
+              `the watcher on ${eyes.frame}`);
+  check("the watcher got past what was sent during its catch-up",
+        eyes.frame > from + 60, true);
+  check("and ran the same game",
+        eyes.log.slice(0, eyes.frame).join() ===
+        peers[0].session.log.slice(0, eyes.frame).join(), true);
 }
 
 console.log("\na Start that is lost completely still gets there");

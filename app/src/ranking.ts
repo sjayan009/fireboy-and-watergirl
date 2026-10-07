@@ -3,6 +3,7 @@ import { auth } from "./auth.js";
 import type { NetSession } from "@engine/net/session.js";
 import { canonicalReplay, completedResult } from "@engine/verified.js";
 import { ENGINE_VERSION } from "@engine/version.js";
+import type { Ported } from "@engine/ported.js";
 
 interface RankedWrite { key: string; owner: string; attempt: string; digest: string; replay: string | null; at: number }
 /**
@@ -90,7 +91,7 @@ export class Ranking {
     // A failed registration permits ordinary play and cannot publish a ranking.
     await this.registration(context,session).id.catch(() => {});
   }
-  observe(context: Context, session: NetSession, game: any, confirmedFrame?: number): void {
+  observe(context: Context, session: NetSession, game: Ported, confirmedFrame?: number): void {
     if (!session.running || this.closed || auth().user?.id !== this.owner) return;
     if (!context.eligible) return;
     const run = this.registration(context,session);

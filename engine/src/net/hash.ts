@@ -1,3 +1,4 @@
+import type { Ported } from "../ported.js";
 /**
  * Deterministic state hashing.
  *
@@ -48,7 +49,7 @@ export class Hasher {
  * Hash the simulation state of a level: every body's transform and velocity,
  * plus the game-visible counters that live outside Box2D.
  */
-export function hashLevel(lv: any): string {
+export function hashLevel(lv: Ported): string {
   const h = new Hasher();
   let bodies = 0;
   for (let b = lv.m_world.GetBodyList(); b; b = b.GetNext()) {
@@ -71,20 +72,20 @@ export function hashLevel(lv: any): string {
 
   // door animation frames gate level completion, so they are state too
   for (const nm of ["finish1", "finish2"]) {
-    const d: any = lv.SlidersAndRots?.getChildByName?.(nm);
+    const d: Ported = lv.SlidersAndRots?.getChildByName?.(nm);
     h.int(d ? d.currentFrame : 0);
   }
   return h.hex;
 }
 
 /** The six input bits, packed. This is the entire per-frame netcode payload. */
-export function packInput(lv: any): number {
+export function packInput(lv: Ported): number {
   return (lv.l_pressed ? 1 : 0) | (lv.r_pressed ? 2 : 0) |
          (lv.u_pressed ? 4 : 0) | (lv.l_pressed2 ? 8 : 0) |
          (lv.r_pressed2 ? 16 : 0) | (lv.u_pressed2 ? 32 : 0);
 }
 
-export function applyInput(lv: any, bits: number): void {
+export function applyInput(lv: Ported, bits: number): void {
   lv.l_pressed = (bits & 1) !== 0;
   lv.r_pressed = (bits & 2) !== 0;
   lv.u_pressed = (bits & 4) !== 0;
