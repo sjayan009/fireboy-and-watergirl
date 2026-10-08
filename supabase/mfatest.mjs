@@ -111,9 +111,11 @@ async function makeUser(tag) {
     body: JSON.stringify({ email, password, email_confirm: true }),
   })).json();
   if (!created.id) throw new Error("could not create a user");
+  // The secret key, because Supabase lets it past Turnstile and a test
+  // cannot solve one.
   const s = await (await fetch(`${URL_}/auth/v1/token?grant_type=password`, {
     method: "POST",
-    headers: { apikey: PUB, "content-type": "application/json" },
+    headers: { apikey: SECRET, "content-type": "application/json" },
     body: JSON.stringify({ email, password }),
   })).json();
   const u = { id: created.id, email, password, token: s.access_token, tag };
@@ -171,9 +173,11 @@ async function answer(token, factorId, secret) {
 
 /** Another password sign-in: a second, separate `aal1` session. */
 async function signInAgain(user) {
+  // The secret key, because Supabase lets it past Turnstile and a test
+  // cannot solve one.
   return (await (await fetch(`${URL_}/auth/v1/token?grant_type=password`, {
     method: "POST",
-    headers: { apikey: PUB, "content-type": "application/json" },
+    headers: { apikey: SECRET, "content-type": "application/json" },
     body: JSON.stringify({ email: user.email, password: user.password }),
   })).json()).access_token;
 }

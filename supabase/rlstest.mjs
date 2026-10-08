@@ -95,9 +95,11 @@ async function makeUser(tag) {
   const cu = await created.json();
   if (!cu.id) throw new Error("could not create a user: " + JSON.stringify(cu));
 
+  // The secret key, because Supabase lets it past Turnstile and a test
+  // cannot solve one.
   const signin = await fetch(`${URL_}/auth/v1/token?grant_type=password`, {
     method: "POST",
-    headers: { apikey: PUB, "content-type": "application/json" },
+    headers: { apikey: SECRET, "content-type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
   const s = await signin.json();

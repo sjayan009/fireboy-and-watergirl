@@ -30,8 +30,10 @@ async function makePlayer(tag) {
     method: "POST", headers: h,
     body: JSON.stringify({ email, password, email_confirm: true }),
   })).json();
+  // The secret key, because Supabase lets it past Turnstile and a test
+  // cannot solve one.
   const t = await (await fetch(`${API}/auth/v1/token?grant_type=password`, {
-    method: "POST", headers: { apikey: PUB, "content-type": "application/json" },
+    method: "POST", headers: { apikey: S, "content-type": "application/json" },
     body: JSON.stringify({ email, password }),
   })).json();
   // A profile, because `assert_allowed` wants one.

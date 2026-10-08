@@ -4,6 +4,8 @@
  */
 declare const __SUPABASE_URL__: string;
 declare const __SUPABASE_KEY__: string;
+/** Cloudflare Turnstile's public site key; empty means no widget. */
+declare const __TURNSTILE_SITE_KEY__: string;
 
 /**
  * A JSON array of RTCIceServer, or an empty string for the built-in STUN pair.

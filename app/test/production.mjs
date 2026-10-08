@@ -20,6 +20,7 @@ import { existsSync } from "node:fs";
 import { extname, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { env } from "../../supabase/connect.mjs";
+import { passCaptcha } from "./captcha.mjs";
 import { resolveUnder } from "../../safepath.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -116,9 +117,11 @@ try {
     body: JSON.stringify({ email, password, email_confirm: true }),
   })).json();
   users.push(created.id);
+  // The secret key, because Supabase lets it past Turnstile and a test
+  // cannot solve one.
   const token = (await (await fetch(`${API}/auth/v1/token?grant_type=password`, {
     method: "POST",
-    headers: { apikey: PUB, "content-type": "application/json" },
+    headers: { apikey: SECRET, "content-type": "application/json" },
     body: JSON.stringify({ email, password }),
   })).json()).access_token;
   await fetch(`${API}/rest/v1/rpc/claim_username`, {
@@ -129,6 +132,7 @@ try {
   });
 
   const page = await browser.newPage();
+  await passCaptcha(page.context(), API, SECRET, (path) => { failures++; console.log(`  FAIL no Turnstile token sent to ${path}`); });
   const problems = [];
   const missing = [];
   page.on("pageerror", (err) => problems.push(err.message));
