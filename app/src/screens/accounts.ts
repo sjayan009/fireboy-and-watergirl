@@ -9,11 +9,13 @@ import {
   arrivedByResetLink, auth, claimUsername, redeemRecoveryCode,
   resendVerification, retryAuth,
   sendPasswordReset, setPassword, signIn, signInWithGoogle, signOut, signUp,
-  listFactors, verifyTotp,
+  listFactors, verifyEmailCode, verifyTotp,
 } from "../auth.js";
 import {
   card, el, field, form, googleButton, inputOf, link, note, orDivider,
 } from "../ui/dom.js";
+import { codeClock, codeField, tryCode } from "../ui/code.js";
+import { captcha } from "../captcha.js";
 import { go, rerender } from "../router.js";
 import { ageCleared, ageGate } from "../age.js";
 
@@ -25,7 +27,7 @@ const google = () => googleButton(async () => {
 const agreement = () => note("By making an account you agree to the ",
   link("Terms", "legal/terms.html"), " and the ", link("Privacy Policy", "legal/privacy.html"), ".");
 
-export function signUpScreen(host: HTMLElement): void {
+export function signUpScreen(host: HTMLElement): void | (() => void) {
   if (!ageCleared()) {
     host.append(card("Make an Account", ageGate(rerender),
       note("Already have one? ", link("Sign In", "#/login"))));
@@ -37,6 +39,7 @@ export function signUpScreen(host: HTMLElement): void {
                                  minlength: 8, autocomplete: "new-password" });
   const again = field("Repeat password", { type: "password", required: true,
                                            autocomplete: "new-password" });
+  const human = captcha();
 
   host.append(card("Make an Account",
     google(),
@@ -44,6 +47,7 @@ export function signUpScreen(host: HTMLElement): void {
     form({
       submit: "Sign Up",
       children: [email, pw, again],
+      captcha: human.node,
       onSubmit: async () => {
         if (inputOf(pw).value !== inputOf(again).value) {
           throw new Error("Those two passwords are not the same.");
@@ -52,13 +56,16 @@ export function signUpScreen(host: HTMLElement): void {
           throw new Error("Use at least 8 characters.");
         }
         const address = inputOf(email).value.trim();
-        const { existing } = await signUp(address, inputOf(pw).value);
+        const { existing } = await signUp(address, inputOf(pw).value,
+                                          await human.token());
         awaiting = address;
         awaitingExisting = existing;
+        awaitingSince = Date.now();
         go("/verify");
       },
       footer: el("div", {}, agreement(), note("Already have one? ", link("Sign In", "#/login"))),
     })));
+  return human.remove;
 }
 
 /**
@@ -79,7 +86,7 @@ let trouble = "";
 
 export function reportSignInTrouble(why: string): void { trouble = why; }
 
-export function loginScreen(host: HTMLElement): void {
+export function loginScreen(host: HTMLElement): () => void {
   const email = field("Email", { type: "email", required: true,
                                  autocomplete: "email" });
   const pw = field("Password", { type: "password", required: true,
@@ -102,6 +109,7 @@ export function loginScreen(host: HTMLElement): void {
   // sign-in next to the way to abandon signing in altogether.
   const forgot = el("p", { class: "field-aside" },
     link("Forgot password?", "#/reset"));
+  const human = captcha();
 
   host.append(card("Sign In",
     refused,
@@ -110,8 +118,10 @@ export function loginScreen(host: HTMLElement): void {
     form({
       submit: "Sign In",
       children: [email, pw, forgot],
+      captcha: human.node,
       onSubmit: async () => {
-        await signIn(inputOf(email).value.trim(), inputOf(pw).value);
+        await signIn(inputOf(email).value.trim(), inputOf(pw).value,
+                     await human.token());
       },
       // Below a rule, because this is where the screen stops being about
       // signing in. Somebody with no account cannot use anything above it, and
@@ -119,6 +129,7 @@ export function loginScreen(host: HTMLElement): void {
       footer: el("div", { class: "after-form" },
         el("a", { class: "secondary", href: "#/signup" }, "Make an Account")),
     })));
+  return human.remove;
 }
 
 /**
@@ -140,16 +151,38 @@ export function loginScreen(host: HTMLElement): void {
 let awaiting = "";
 /** Whether that address turned out to already have an account. */
 let awaitingExisting = false;
+/** When its code was sent, for the clock; 0 when this page does not know. */
+let awaitingSince = 0;
 
-export function verifyScreen(host: HTMLElement): void {
-  const address = awaiting || auth().user?.email || "";
+export function verifyScreen(host: HTMLElement): () => void {
+  const known = awaiting || auth().user?.email || "";
   const existing = awaitingExisting;
+  // A reload forgets the address, and so does arriving from another device.
+  // Asking for it again is all either needs: the code is useless without it.
+  const email = known ? null : field("Email", { type: "email", required: true,
+                                                autocomplete: "email" });
+  const address = () => known || inputOf(email!).value.trim();
+  const code = codeField();
+  inputOf(code).autofocus = !!known;
+  const human = captcha();
+
+  const startOver = async (e: Event) => {
+    e.preventDefault();
+    awaiting = "";
+    awaitingExisting = false;
+    awaitingSince = 0;
+    // Signing out matters only when there IS a session; after a plain
+    // sign-up there is none, and this is simply the way back.
+    if (auth().session) await signOut(); else go("/signup");
+  };
 
   host.append(card("Check your email",
-    note(address
-      ? `A link is on its way to ${address}. Follow it and you are in.`
-      : "A link is on its way. Follow it and you are in."),
-    note("It can take a minute, and it does sometimes land in spam."),
+    // The address and the way to change it, side by side: the link acts on
+    // the thing it is next to.
+    known
+      ? note("We sent a code to ", el("strong", {}, known), ". ",
+             el("a", { href: "#", onclick: startOver }, "Change"))
+      : note("Enter the address you signed up with and the code we sent it."),
     // The one sentence that serves both people without telling either about
     // the other.
     //
@@ -165,45 +198,95 @@ export function verifyScreen(host: HTMLElement): void {
              ", including with Google if that is how you made it.")
       : null,
     form({
-      submit: "Send it again",
-      children: [],
+      submit: "Continue",
+      children: [email, code,
+        codeClock(awaitingSince || null, async () => {
+          if (!address()) throw new Error("Enter your email first.");
+          await resendVerification(address(), await human.token());
+          awaitingSince = Date.now();
+        })],
+      captcha: human.node,
       onSubmit: async () => {
-        if (!address) throw new Error("No address to send to. Start again.");
-        await resendVerification(address);
+        await tryCode(code, (c) => verifyEmailCode("signup", address(), c));
+        // The session is in. The router moves on when the stage changes.
+        awaiting = "";
+        awaitingExisting = false;
+        awaitingSince = 0;
       },
-      footer: el("p", { class: "note" },
-        el("a", { href: "#", onclick: async (e: Event) => {
-          e.preventDefault();
-          awaiting = "";
-          awaitingExisting = false;
-          // Signing out matters only when there IS a session; after a plain
-          // sign-up there is none, and this is simply the way back.
-          if (auth().session) await signOut(); else go("/signup");
-        } }, "Use a different address")),
+      footer: note("It can take a minute, and it does sometimes land in spam."),
     })));
-}
-
-export function resetScreen(host: HTMLElement): void {
-  const email = field("Email", { type: "email", required: true,
-                                 autocomplete: "email" });
-  const sent = note("If that address has an account, a reset link is on its way.");
-  sent.hidden = true;
-
-  host.append(card("Reset your password",
-    form({
-      submit: "Send a link",
-      children: [email, sent],
-      onSubmit: async () => {
-        await sendPasswordReset(inputOf(email).value.trim());
-        sent.hidden = false;
-      },
-      footer: note(link("Back to signing in", "#/login")),
-    })));
+  return human.remove;
 }
 
 /**
- * Choose a new password without the old one -- for somebody who just followed
- * a reset link, and nobody else.
+ * Forgotten password: an address, then the code mailed to it.
+ *
+ * One screen in two steps rather than two routes, because the second step is
+ * meaningless without the first and must not be reachable on its own. The
+ * code signs this tab in, and `#/password` lets it choose a new password
+ * without the old one -- see `arrivedByResetLink`.
+ */
+export function resetScreen(host: HTMLElement): () => void {
+  const email = field("Email", { type: "email", required: true,
+                                 autocomplete: "email" });
+  // One widget per step: moving a widget's iframe to the next step's form
+  // would reload it out from under Turnstile.
+  const human = captcha();
+  const widgets = [human];
+  const back = () => note(link("Back to signing in", "#/login"));
+
+  const askForCode = (address: string, sentAt: number) => {
+    const code = codeField();
+    const again = captcha();
+    widgets.push(again);
+    host.replaceChildren(card("Enter the code",
+      // Worded so it does not say whether the address has an account.
+      note("If ", el("strong", {}, address), " has an account, a code is on its way. ",
+           // Starts the screen again rather than putting the first form back,
+           // whose Turnstile iframe would reload under the widget.
+           el("a", { href: "#", onclick: (e: Event) => {
+             e.preventDefault();
+             rerender();
+           } }, "Change")),
+      form({
+        submit: "Continue",
+        children: [code,
+          codeClock(sentAt, async () => {
+            await sendPasswordReset(address, await again.token());
+          })],
+        captcha: again.node,
+        onSubmit: async () => {
+          await tryCode(code, (c) => verifyEmailCode("recovery", address, c));
+          // The session exists now, but the app's idea of the stage catches up
+          // on its own time; `/password` would be refused while it still says
+          // "out". Settle it first.
+          await retryAuth();
+          go("/password");
+        },
+        footer: back(),
+      })));
+    inputOf(code).focus();
+  };
+
+  const first = card("Reset your password",
+    form({
+      submit: "Send a code",
+      children: [email],
+      captcha: human.node,
+      onSubmit: async () => {
+        const address = inputOf(email).value.trim();
+        await sendPasswordReset(address, await human.token());
+        askForCode(address, Date.now());
+      },
+      footer: back(),
+    }));
+  host.append(first);
+  return () => { for (const w of widgets) w.remove(); };
+}
+
+/**
+ * Choose a new password without the old one -- for somebody who just entered
+ * a reset code (or followed an older reset link), and nobody else.
  *
  * The route admits any signed-in session, because the stage cannot tell a
  * reset arrival from a tab that typed `#/password`. The session can: see
@@ -213,8 +296,8 @@ export function resetScreen(host: HTMLElement): void {
 export function passwordScreen(host: HTMLElement): void {
   if (!arrivedByResetLink()) {
     host.append(card("Choose a new password",
-      note("This page is for the link in a password-reset email, and this " +
-           "session did not arrive from one -- or arrived too long ago."),
+      note("This page is for finishing a password reset, and this session " +
+           "did not come from one -- or came from one too long ago."),
       note(auth().stage === "in"
         ? link("Change your password in Settings", "#/settings")
         : link("Back to the game", "#/play"))));
@@ -236,7 +319,7 @@ export function passwordScreen(host: HTMLElement): void {
         // Asked again at submit, not only at render: a reset tab left open
         // past the window is no longer a reset tab.
         if (!arrivedByResetLink()) {
-          throw new Error("This reset link is too old now. Ask for a new one.");
+          throw new Error("This reset is too old now. Ask for a new code.");
         }
         // Every other session ends with the reset. If that part failed the
         // password is still changed, and staying on this screen to say so

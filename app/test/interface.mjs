@@ -19,6 +19,7 @@ import { connect as netConnect } from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { env } from "../../supabase/connect.mjs";
+import { passCaptcha } from "./captcha.mjs";
 import { sweepStaleTestUsers } from "../../supabase/sweep.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -65,9 +66,11 @@ async function makeReadyUser(tag) {
   if (!created.id) throw new Error("could not create a user");
   users.push({ id: created.id });
 
+  // The secret key, because Supabase lets it past Turnstile and a test
+  // cannot solve one.
   const token = (await (await fetch(`${API}/auth/v1/token?grant_type=password`, {
     method: "POST",
-    headers: { apikey: PUB, "content-type": "application/json" },
+    headers: { apikey: SECRET, "content-type": "application/json" },
     body: JSON.stringify({ email, password }),
   })).json()).access_token;
 
@@ -162,6 +165,7 @@ try {
 
     try {
       const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      await passCaptcha(ctx, API, SECRET, (path) => { failures++; console.log(`  FAIL no Turnstile token sent to ${path}`); });
       const page = await ctx.newPage();
       const problems = [];
       page.on("pageerror", (err) => problems.push(err.message));

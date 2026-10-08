@@ -1,0 +1,15 @@
+<!--
+  The "Change email address" email. Paste into Supabase: Authentication ->
+  Emails -> Change email address. Subject: Your Fireboy & Watergirl address change code
+
+  With "Secure email change" on, this one template goes to BOTH addresses,
+  each with its own code, and the app asks for both. So it is worded for
+  either reader, and tells the owner of the old address what to do if this was
+  not them.
+-->
+<h2>Your address change code</h2>
+<p>Someone asked to move a Fireboy &amp; Watergirl account from {{ .Email }} to {{ .NewEmail }}. If that was you, enter this code on the Settings page that asked for it:</p>
+<p style="font-size:32px;font-weight:bold;letter-spacing:6px;font-family:monospace">{{ .Token }}</p>
+<p>It works once, and only for a short while. The change needs a code from each address, so it cannot finish without this one.</p>
+<p>Never share this code. We will never ask you for it.</p>
+<p>Did not ask for this? Do not enter it anywhere, and change your password: someone may have signed in to your account.</p>

@@ -12,7 +12,10 @@ import {
   generateRecoveryCodes, hasPassword, listFactors, recoveryCodesLeft,
   ReauthenticationNeeded, sendReauthenticationCode, setPassword,
   signOutOtherDevices, unenrolTotp, verifyTotp,
+  resendEmailChange, verifyEmailCode,
 } from "../auth.js";
+import { captcha, type Captcha } from "../captcha.js";
+import { codeClock, codeField, tryCode } from "../ui/code.js";
 import { supabase } from "../supabase.js";
 import { card, el, field, form, inputOf, note, on } from "../ui/dom.js";
 import { presentationPreferences, savePresentationPreferences } from "../presentation.js";
@@ -45,8 +48,11 @@ function group(title: string, value: Node | string, ...children: (Node | string)
   return row;
 }
 
-export function settingsScreen(host: HTMLElement): void {
+export function settingsScreen(host: HTMLElement): () => void {
   const profile = auth().profile;
+  // Turnstile widgets made by the rows below, taken down with the screen.
+  const widgets: Captcha[] = [];
+  const human = () => { const c = captcha(); widgets.push(c); return c; };
 
   const name = field("Username", {
     required: true, minlength: 3, maxlength: 20,
@@ -94,7 +100,8 @@ export function settingsScreen(host: HTMLElement): void {
       el("a", { href: "#/play" }, "Back to the game"))));
 
   void drawFactors(factors, twoFactorValue);
-  void drawPassword(password, passwordValue, email);
+  void drawPassword(password, passwordValue, email, human);
+  return () => { for (const w of widgets) w.remove(); };
 }
 
 function presentationSection(): HTMLElement {
@@ -124,13 +131,13 @@ function presentationSection(): HTMLElement {
  * asking for anything.
  */
 async function drawPassword(host: HTMLElement, value: HTMLElement,
-                            email: HTMLElement): Promise<void> {
+                            email: HTMLElement, human: () => Captcha): Promise<void> {
   const has = await hasPassword();
   value.textContent = has ? "Change it" : "Set a password";
-  host.replaceChildren(passwordSection(has, value));
+  host.replaceChildren(passwordSection(has, value, human));
   // The address row asks the same question -- prove the password, if there
   // is one -- so it waits for the same answer.
-  email.replaceChildren(emailSection(has));
+  email.replaceChildren(emailSection(has, human));
 }
 
 /**
@@ -204,12 +211,13 @@ function boardSection(value: HTMLElement): HTMLElement {
  * account's address (`reauthenticate`) and sends it with the new password as
  * the nonce, which Supabase checks once "Secure password change" is on.
  */
-function passwordSection(has: boolean, value: HTMLElement): HTMLElement {
+function passwordSection(has: boolean, value: HTMLElement,
+                         human: () => Captcha): HTMLElement {
   const current = field("Current password", {
     type: "password", required: true, autocomplete: "current-password",
   });
   const code = field("Code from the email", {
-    inputmode: "numeric", pattern: "[0-9]{6}", required: true,
+    inputmode: "numeric", pattern: "[0-9]{6,10}", required: true,
     autocomplete: "one-time-code",
   });
   const next = field(has ? "New password" : "Password", {
@@ -242,6 +250,9 @@ function passwordSection(has: boolean, value: HTMLElement): HTMLElement {
     el("p", { class: "note" }, ask), mailed, code);
   // A required field the browser cannot show blocks the whole form.
   if (has) inputOf(code).required = false;
+  // Proving the current password is a password sign-in, which Supabase
+  // guards with Turnstile.
+  const check = has ? human() : null;
 
   return el("div", {},
     has ? null : note("You signed in with Google, so this account has no " +
@@ -256,6 +267,7 @@ function passwordSection(has: boolean, value: HTMLElement): HTMLElement {
       // A password holder is asked for the code only if Supabase asks for it
       // (`ReauthenticationNeeded`): a session over a day old, once "Secure
       // password change" is on. Until then the code row stays out of the way.
+      captcha: check?.node,
       children: has ? [current, codeRow, next, done]
                     : [el("p", { class: "note" }, ask), mailed, code, next, done],
       onSubmit: async () => {
@@ -264,7 +276,8 @@ function passwordSection(has: boolean, value: HTMLElement): HTMLElement {
         let others: boolean;
         try {
           others = has
-            ? await changePassword(inputOf(current).value, inputOf(next).value, nonce)
+            ? await changePassword(inputOf(current).value, inputOf(next).value,
+                                   nonce, await check!.token())
             : await setPassword(inputOf(next).value, nonce);
         } catch (e) {
           if (e instanceof ReauthenticationNeeded) {
@@ -297,14 +310,14 @@ function passwordSection(has: boolean, value: HTMLElement): HTMLElement {
  * The address is where password resets go, so this is the account changing
  * hands as far as recovery is concerned: an account with a password proves it
  * first. One without -- Google only -- relies on Supabase's "Secure email
- * change", which makes the old address confirm too.
+ * change", which mails a code to the OLD address as well as the new one, and
+ * wants both.
  *
- * Says "check your email", not "done", because nothing has changed yet: the
- * link in the message is the thing that changes it, and reporting success here
- * would have somebody sign out believing an address they cannot yet sign in
- * with.
+ * Nothing changes until both codes are in, so the first step ends in "enter
+ * the codes", not "done": reporting success there would have somebody sign out
+ * believing an address they cannot yet sign in with.
  */
-function emailSection(has: boolean): HTMLElement {
+function emailSection(has: boolean, human: () => Captcha): HTMLElement {
   const current = auth().user?.email ?? "";
   const password = field("Current password", {
     type: "password", required: true, autocomplete: "current-password",
@@ -312,23 +325,77 @@ function emailSection(has: boolean): HTMLElement {
   const next = field("New email", {
     type: "email", required: true, autocomplete: "email",
   });
-  const sent = note("Check your new address for the confirmation link. " +
-                    "Nothing changes until you follow it.");
-  sent.hidden = true;
+  // Only a password proof is a protected sign-in; a Google-only account
+  // sends nothing that Supabase checks for a person.
+  const check = has ? human() : null;
+  const box = el("div", {});
 
-  return el("div", {},
-    note("Signed in as ", el("code", {}, current), "."),
+  const start = form({
+    submit: "Send codes",
+    children: has ? [password, next] : [next],
+    captcha: check?.node,
+    onSubmit: async () => {
+      const address = inputOf(next).value.trim();
+      await changeEmail(address, has ? inputOf(password).value : null,
+                        await check?.token());
+      inputOf(password).value = "";
+      // Back rebuilds the first step rather than putting this form back: a
+      // Turnstile iframe that leaves the page and returns is reloaded under
+      // the widget and stops answering.
+      box.replaceChildren(emailCodes(current, address, human,
+                                     () => box.replaceWith(emailSection(has, human))));
+    },
+  });
+  box.append(note("Signed in as ", el("code", {}, current), "."), start);
+  return box;
+}
+
+/**
+ * The second step: a code from each address.
+ *
+ * Each is checked on its own, and one that has gone through is locked rather
+ * than sent again -- the server spends it on the first try, so retrying the
+ * pair after the second was mistyped would refuse the first.
+ */
+function emailCodes(current: string, address: string, human: () => Captcha,
+                    back: () => void): HTMLElement {
+  const old = codeField(`Code sent to ${current}`);
+  const fresh = codeField(`Code sent to ${address}`);
+  inputOf(old).autofocus = true;
+  const again = human();
+  const done = new Set<HTMLLabelElement>();
+  const box = el("div", {});
+
+  const prove = async (wrap: HTMLLabelElement, to: string) => {
+    if (done.has(wrap)) return;
+    await tryCode(wrap, (c) => verifyEmailCode("email_change", to, c));
+    done.add(wrap);
+    inputOf(wrap).disabled = true;
+  };
+
+  box.append(
+    note("Enter the code from each inbox. Nothing changes until both are in."),
     form({
-      submit: "Send the confirmation",
-      children: has ? [password, next, sent] : [next, sent],
+      submit: "Change address",
+      children: [old, fresh,
+        codeClock(Date.now(), async () => {
+          done.clear();
+          inputOf(old).disabled = false;
+          inputOf(fresh).disabled = false;
+          await resendEmailChange(address, await again.token());
+        })],
+      captcha: again.node,
       onSubmit: async () => {
-        sent.hidden = true;
-        await changeEmail(inputOf(next).value.trim(),
-                          has ? inputOf(password).value : null);
-        inputOf(password).value = "";
-        sent.hidden = false;
+        await prove(old, current);
+        await prove(fresh, address);
+        box.replaceChildren(note("Done. You sign in with ", el("code", {}, address),
+                                 " from now on."));
       },
+      footer: el("p", { class: "note" },
+        el("a", { href: "#", onclick: (e: Event) => { e.preventDefault(); back(); } },
+          "Use a different address")),
     }));
+  return box;
 }
 
 /**

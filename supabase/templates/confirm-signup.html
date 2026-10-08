@@ -1,0 +1,17 @@
+<!--
+  The "Confirm signup" email. Paste into Supabase: Authentication -> Emails ->
+  Confirm signup. Subject: Your Fireboy & Watergirl code
+
+  A code and deliberately no link. A link is only half of the old bug: it
+  signed in the browser that opened it, which was often not the one waiting
+  for it. It is also worse for security here. Mail scanners (Outlook Safe
+  Links and the like) fetch every link in a message, and fetching Supabase's
+  link spends the token -- which is the same token as this code -- so the
+  person would type a code that a robot had already used up.
+-->
+<h2>Your code</h2>
+<p>Enter this on the Fireboy &amp; Watergirl page that asked for it:</p>
+<p style="font-size:32px;font-weight:bold;letter-spacing:6px;font-family:monospace">{{ .Token }}</p>
+<p>It works once, and only for a short while. If it runs out, ask for a new one on the same page.</p>
+<p>Never share this code. We will never ask you for it, by email, chat or anywhere else.</p>
+<p>Did not sign up? Ignore this email. Nothing happens without the code.</p>
