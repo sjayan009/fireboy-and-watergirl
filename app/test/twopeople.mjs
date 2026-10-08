@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { env } from "../../supabase/connect.mjs";
+import { passCaptcha } from "./captcha.mjs";
 import { sweepStaleTestUsers } from "../../supabase/sweep.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -138,6 +139,7 @@ try {
 
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
+  for (const ctx of [ctxA, ctxB]) await passCaptcha(ctx, API, SECRET, (path) => { failures++; console.log(`  FAIL no Turnstile token sent to ${path}`); });
   // FBWG_FORCE_RELAY=1 runs every section on the relay instead of whatever the
   // machine's networking happens to allow. Which link a run gets is otherwise
   // luck, and the relay is the path players behind strict NATs depend on.

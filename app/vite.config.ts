@@ -47,6 +47,15 @@ function publicEnv(): Record<string, string> {
   return {
     __SUPABASE_URL__: JSON.stringify(url),
     __SUPABASE_KEY__: JSON.stringify(key),
+    // Public by design: it is in every page Turnstile protects. The widget
+    // only accepts the production hostname, so for local development put
+    // Cloudflare's always-pass test key, TURNSTILE_SITE_KEY=
+    // 1x00000000000000000000AA, in .env.local -- production's Supabase will
+    // still refuse its token, so sign in with Google there, or point at a
+    // local stack. The tests stand in for the widget; see app/test/captcha.mjs.
+    __TURNSTILE_SITE_KEY__: JSON.stringify(process.env.TURNSTILE_SITE_KEY ??
+                                           file.TURNSTILE_SITE_KEY ??
+                                           "0x4AAAAAAFRvAi7vD7_w0Tvh"),
     // Static ICE is public STUN only. Short-lived TURN is fetched at runtime.
     __ICE_SERVERS__: JSON.stringify(freeIceServers(pick("ICE_SERVERS"))),
     __PATH_MANAGER__: JSON.stringify(pick("FBWG_PATH_MANAGER") === "1"),

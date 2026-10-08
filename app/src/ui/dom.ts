@@ -95,10 +95,17 @@ export function form(o: {
   onSubmit: () => Promise<void>;
   children: Child[];
   footer?: Child;
+  /**
+   * A Turnstile widget, kept with the button rather than among the fields:
+   * it is empty almost always, and as a field it would still take a row's
+   * worth of the form's gap.
+   */
+  captcha?: HTMLElement;
 }): HTMLFormElement {
   const error = el("p", { class: "error", role: "alert" });
   error.hidden = true;
   const button = el("button", { type: "submit", class: "primary" }, o.submit);
+  const action = o.captcha ? el("div", { class: "submit" }, button, o.captcha) : button;
 
   const node = el("form", {
     onsubmit: async (e: Event) => {
@@ -117,7 +124,7 @@ export function form(o: {
         button.textContent = was;
       }
     },
-  }, ...o.children, error, button, o.footer);
+  }, ...o.children, error, action, o.footer);
   return node;
 }
 

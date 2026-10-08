@@ -222,8 +222,13 @@ export async function startAuth(): Promise<AuthState> {
 // ---- the actions the screens call ---------------------------------------
 
 /** Supabase reports most failures as an error object rather than by throwing. */
-function fail(error: { message: string } | null): void {
-  if (error) throw new Error(error.message);
+function fail(error: { message: string; code?: string } | null): void {
+  if (!error) return;
+  // Supabase's own words here are "captcha protection: request disallowed".
+  if (error.code === "captcha_failed") {
+    throw new Error("Could not check that you are a person. Try again in a moment.");
+  }
+  throw new Error(error.message);
 }
 
 /**
@@ -262,18 +267,56 @@ function landing(intent?: string): string {
  * there is no session until the link is followed, so the stage stays `out` and
  * nothing about the auth state changes here.
  */
-export async function signUp(email: string,
-                             password: string): Promise<{ existing: boolean }> {
+export async function signUp(email: string, password: string,
+                             captchaToken?: string): Promise<{ existing: boolean }> {
   const { data, error } = await supabase.auth.signUp({
     email, password,
-    options: { emailRedirectTo: landing() },
+    options: { emailRedirectTo: landing(), captchaToken },
   });
   fail(error);
   return { existing: (data.user?.identities ?? []).length === 0 };
 }
 
-export async function signIn(email: string, password: string): Promise<void> {
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+/** What an emailed code is for. Each kind is its own token on the server. */
+export type CodeKind = "signup" | "recovery" | "email_change";
+
+/**
+ * Prove an inbox with the code from the email, in the tab that asked for it.
+ *
+ * The link this replaces only signed in the browser that started the sign-up,
+ * because PKCE keeps its verifier there. Opened anywhere else -- a phone, the
+ * mail app's own browser -- it confirmed the address and signed nobody in, and
+ * the person was left on a Sign In form wondering why. A code is typed where
+ * the person already is, so the session lands in this tab, on any device.
+ *
+ * It is no easier to guess than the link was: the link's token is a hash of
+ * this same code and the address, which anyone who knows the address can
+ * compute. Guessing is held back by the server's per-IP limit on verification
+ * and by the code's length and expiry, all set in the dashboard.
+ *
+ * Every refusal reads the same, whether the code was wrong, expired, or the
+ * address has no unfinished sign-up at all, so this cannot be used to ask who
+ * has an account. The rate limit is the one failure worth naming, because it
+ * changes what the person should do next.
+ */
+export async function verifyEmailCode(kind: CodeKind, email: string,
+                                      code: string): Promise<void> {
+  const { error } = await supabase.auth.verifyOtp({ email, token: code, type: kind });
+  if (!error) return;
+  if (error.status === 429 || error.code === "over_request_rate_limit") {
+    throw new Error("Too many tries. Wait a few minutes, then try again.");
+  }
+  // A network or server failure is not a wrong code, and saying it was would
+  // send somebody back to their inbox for nothing.
+  if (!error.status || error.status >= 500) fail(error);
+  throw new Error("That code is wrong or has expired. Check the newest email, or send a new code.");
+}
+
+export async function signIn(email: string, password: string,
+                             captchaToken?: string): Promise<void> {
+  const { error } = await supabase.auth.signInWithPassword({
+    email, password, options: { captchaToken },
+  });
   fail(error);
 }
 
@@ -367,10 +410,11 @@ export async function signOut(): Promise<void> {
   await refresh(null);
 }
 
-export async function resendVerification(email: string): Promise<void> {
+export async function resendVerification(email: string,
+                                         captchaToken?: string): Promise<void> {
   const { error } = await supabase.auth.resend({
     type: "signup", email,
-    options: { emailRedirectTo: landing() },
+    options: { emailRedirectTo: landing(), captchaToken },
   });
   if (!error) return;
   // "Already confirmed" is swallowed for the same reason the sign-up screen
@@ -383,9 +427,19 @@ export async function resendVerification(email: string): Promise<void> {
   fail(error);
 }
 
-export async function sendPasswordReset(email: string): Promise<void> {
+export async function sendPasswordReset(email: string,
+                                        captchaToken?: string): Promise<void> {
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: landing("password"),
+    redirectTo: landing("password"), captchaToken,
+  });
+  fail(error);
+}
+
+/** Mail both codes for a pending address change again. */
+export async function resendEmailChange(newEmail: string,
+                                        captchaToken?: string): Promise<void> {
+  const { error } = await supabase.auth.resend({
+    type: "email_change", email: newEmail, options: { captchaToken },
   });
   fail(error);
 }
@@ -456,12 +510,13 @@ export async function sendReauthenticationCode(): Promise<void> {
  * client keeps the proof out of the way, and its session is revoked at once
  * rather than left alive on the server.
  */
-async function proveCurrentPassword(current: string): Promise<void> {
+async function proveCurrentPassword(current: string,
+                                   captchaToken?: string): Promise<void> {
   const email = state.user?.email;
   if (!email) throw new Error("not signed in");
   const scratch = scratchClient();
   const { error } = await scratch.auth.signInWithPassword({
-    email, password: current,
+    email, password: current, options: { captchaToken },
   });
   if (error) throw new Error("that is not your current password");
   // `local` still revokes the scratch session on the server; it only spares
@@ -488,8 +543,9 @@ async function proveCurrentPassword(current: string): Promise<void> {
  * is what keeps Google-only accounts able to add one.
  */
 export async function changePassword(current: string, next: string,
-                                     nonce?: string): Promise<boolean> {
-  await proveCurrentPassword(current);
+                                     nonce?: string,
+                                     captchaToken?: string): Promise<boolean> {
+  await proveCurrentPassword(current, captchaToken);
   return setPassword(next, nonce, current);
 }
 
@@ -503,13 +559,13 @@ export async function changePassword(current: string, next: string,
  * guard is Supabase's "Secure email change", which makes the OLD address
  * confirm as well.
  *
- * Nothing changes until the link is followed, so this returns having sent
- * something, not having done something, and the screen has to say so rather
- * than reporting success.
+ * Nothing changes until the emailed codes are entered -- one from each
+ * address, with "Secure email change" on -- so this returns having sent
+ * something, not having done something.
  */
-export async function changeEmail(email: string,
-                                  current: string | null): Promise<void> {
-  if (current !== null) await proveCurrentPassword(current);
+export async function changeEmail(email: string, current: string | null,
+                                  captchaToken?: string): Promise<void> {
+  if (current !== null) await proveCurrentPassword(current, captchaToken);
   const { error } = await supabase.auth.updateUser(
     { email }, { emailRedirectTo: landing("email") });
   fail(error);
