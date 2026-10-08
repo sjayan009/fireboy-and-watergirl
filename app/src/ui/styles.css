@@ -588,3 +588,19 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
 .age-row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 10px; }
 .card .pick { min-height: 44px; }
 .age-refusal { display: grid; gap: 14px; margin-top: 20px; }
+
+/*
+ * The emailed code. Monospace with tabular digits so the code does not shift
+ * as it is typed, larger than body text, and tracked out: small, dense digits
+ * are read one at a time against the email, so they want air between them.
+ */
+.card .field input.code-input { min-height: 52px; font: 600 1.5rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; letter-spacing: .3em; text-align: center; }
+/* Tucked under the code field it describes, the way .field-aside is. */
+.code-clock { margin: -6px 0 0; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 12px; }
+.code-clock .warn { color: var(--bad); }
+.link-button { min-height: 32px; padding: 0; border: 0; background: none; color: var(--water); text-decoration: underline; text-underline-offset: 3px; }
+.link-button:disabled { color: var(--dim); text-decoration: none; opacity: 1; }
+.submit { display: grid; }
+.captcha.asking { margin-top: 12px; }
+/* The status line under the clock holds no space until it has something to say. */
+.code-clock + [role=status]:empty { margin: 0; }

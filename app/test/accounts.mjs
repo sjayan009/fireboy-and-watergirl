@@ -26,6 +26,7 @@ import { createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { env } from "../../supabase/connect.mjs";
+import { passCaptcha } from "./captcha.mjs";
 import { sweepStaleTestUsers } from "../../supabase/sweep.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -140,8 +141,31 @@ try {
 const server = await startVite();
 
 /** A fresh browser context, so each account has its own storage. */
+/**
+ * Type into a code field as a person would. The field submits on its own once
+ * it holds a whole code (CODE_LENGTH in app/src/ui/code.ts) and the rest of
+ * the form is filled; anything else needs the button.
+ */
+const CODE_LENGTH = 8;
+async function enterCode(scope, value, field = scope.locator("input[autocomplete=one-time-code]").first()) {
+  await field.fill(value);
+  const whole = value.replace(/\D/g, "").length === CODE_LENGTH;
+  if (!whole || !(await scope.locator("form").first().evaluate((f) => f.checkValidity()))) {
+    await scope.locator("button[type=submit]").first().click();
+  }
+}
+
+/** Mint the codes an email would carry, without sending one. */
+async function mintCode(body) {
+  const made = await (await admin("/auth/v1/admin/generate_link", {
+    method: "POST", body: JSON.stringify(body),
+  })).json();
+  return made.email_otp;
+}
+
 async function newPage() {
   const ctx = await browser.newContext();
+  await passCaptcha(ctx, API, SECRET, (path) => { failures++; console.log(`  FAIL no Turnstile token sent to ${path}`); });
   const page = await ctx.newPage();
   page.on("pageerror", (err) => {
     failures++;
@@ -274,7 +298,77 @@ try {
     await claimForCleanup(fresh2);
     check("a new address is NOT told that",
           await page.locator("text=Nothing will arrive").count(), 0);
+
+    // How long the code has, and when another can be asked for. Supabase
+    // sends one email per address per minute, so the button says so rather
+    // than letting a press fail.
+    console.log("\nthe code says how long it has");
+    check("a clock counts down from fifteen minutes",
+          /^Expires in 1[45]:\d\d$/.test(await page.locator("[role=timer]").innerText()), true);
+    const resendButton = page.locator(".code-clock button");
+    check("and a new code waits out the minute",
+          await resendButton.isDisabled() &&
+          /^Send a new code in (1:00|0:\d\d)$/.test(await resendButton.innerText()), true);
+
+    // ---- the emailed code ------------------------------------------------
+    //
+    // The reason the code exists: a link only signed in the browser that
+    // started the sign-up, so people who opened it anywhere else were left
+    // signed out. The code is typed into THIS tab, and this tab is the one
+    // that must end up signed in.
+    console.log("\nthe code from the email signs this tab in");
+    const wrong = async (value) => {
+      await enterCode(page, value);
+      await page.waitForSelector(".error:visible", { timeout: 30000 });
+      return errorText(page);
+    };
+    check("a wrong code is refused",
+          /wrong or has expired/.test(await wrong("00000000")), true);
+    check("and is selected, so typing again replaces it",
+          await page.locator("input[autocomplete=one-time-code]").evaluate(
+            (i) => i.selectionStart === 0 && i.selectionEnd === i.value.length), true);
+    check("something that is not a code never leaves the form",
+          /8-digit number/.test(await wrong("12ab")), true);
+
+    // The real code, as the email would carry it. `generate_link` issues a
+    // fresh one for the same unfinished sign-up and returns it in plain.
+    const issued = await (await admin("/auth/v1/admin/generate_link", {
+      method: "POST",
+      body: JSON.stringify({ type: "signup", email: fresh2,
+                             password: `pw_${stamp}_trial!A` }),
+    })).json();
+    check("a code was issued", /^\d{6,10}$/.test(issued.email_otp ?? ""), true);
+    // Pasted with a space in the middle, as codes often are.
+    const half = Math.floor(issued.email_otp.length / 2);
+    await enterCode(page, `${issued.email_otp.slice(0, half)} ${issued.email_otp.slice(half)}`);
+    check("the right code lands on the username screen, in the same tab",
+          await page.waitForSelector("text=Pick a name", { timeout: 30000 })
+            .then(() => true, () => false), true);
+
+    // Spent. The same code a second time must not sign anybody in again.
+    const again = await fetch(`${API}/auth/v1/verify`, {
+      method: "POST",
+      headers: { apikey: PUB, "content-type": "application/json" },
+      body: JSON.stringify({ type: "signup", email: fresh2, token: issued.email_otp }),
+    });
+    check("a code works once", again.ok, false);
     await page.close();
+
+    // After a reload, or on another device, the screen has no address to
+    // send with the code, so it asks. And an address with no sign-up waiting
+    // is refused in exactly the words a wrong code is, or this would be a way
+    // to ask who has an account.
+    const other = await newPage();
+    await other.goto(URL_ + "#/verify", { waitUntil: "load" });
+    await other.waitForSelector("text=Check your email");
+    check("with no address known, it asks for one",
+          await other.locator("input[type=email]").count(), 1);
+    await other.fill("input[type=email]", `fbwg_nobody_${stamp}@example.com`);
+    await enterCode(other, "12345678");
+    await other.waitForSelector(".error:visible", { timeout: 30000 });
+    check("an address with no sign-up reads like a wrong code",
+          /wrong or has expired/.test(await errorText(other)), true);
+    await other.close();
   }
 
   // ---- the emailed confirmation link -------------------------------------
@@ -529,7 +623,7 @@ try {
     // password, so it is sent to Settings instead.
     console.log("\nthe reset-only password screen, from a tab that did not reset");
     await page.evaluate(() => { location.hash = "/password"; });
-    await page.waitForSelector("text=did not arrive from one", { timeout: 15000 });
+    await page.waitForSelector("text=did not come from one", { timeout: 15000 });
     check("it offers no way to set a password without the old one",
           await page.locator("input[type=password]").count(), 0);
     await page.close();
@@ -565,13 +659,103 @@ try {
     await page.click("button[type=submit]");
     await page.waitForTimeout(2000);
 
+    // The secret key, because Supabase lets it past Turnstile and a test
+    // cannot solve one.
     const signedIn = await fetch(`${API}/auth/v1/token?grant_type=password`, {
       method: "POST",
-      headers: { apikey: PUB, "content-type": "application/json" },
+      headers: { apikey: SECRET, "content-type": "application/json" },
       body: JSON.stringify({ email: u.email, password: fresh }),
     });
     check("and the new password works", (await signedIn.json()).access_token
           !== undefined, true);
+    await page.close();
+  }
+
+  // ---- the password reset code -------------------------------------------
+
+  console.log("\na password reset by code, start to finish");
+  {
+    const u = await makeUser("resetcode");
+    const page = await newPage();
+    await page.goto(URL_ + "#/reset", { waitUntil: "load" });
+    await page.fill("input[type=email]", u.email);
+    await page.click("button[type=submit]");
+    await page.waitForSelector("text=Enter the code", { timeout: 30000 });
+    check("asking sends a code and says so without saying the account exists",
+          await page.locator("text=has an account, a code is on its way").count(), 1);
+    check("with the clock running",
+          /^Expires in/.test(await page.locator("[role=timer]").innerText()), true);
+
+    await enterCode(page, "00000000");
+    await page.waitForSelector(".error:visible", { timeout: 30000 });
+    check("a wrong code is refused", /wrong or has expired/.test(await errorText(page)), true);
+
+    await enterCode(page, await mintCode({ type: "recovery", email: u.email }));
+    await page.waitForSelector("text=Choose a new password", { timeout: 30000 });
+    check("the right one lands on the new-password screen", true, true);
+
+    const fresh = `coded_${stamp}!A`;
+    const pws = page.locator("input[type=password]");
+    await pws.nth(0).fill(fresh);
+    await pws.nth(1).fill(fresh);
+    await page.click("button[type=submit]");
+    await page.waitForSelector("#stage", { timeout: 30000 }).catch(() => {});
+    // The secret key, because Supabase lets it past Turnstile and a test
+    // cannot solve one.
+    const signedIn = await (await fetch(`${API}/auth/v1/token?grant_type=password`, {
+      method: "POST",
+      headers: { apikey: SECRET, "content-type": "application/json" },
+      body: JSON.stringify({ email: u.email, password: fresh }),
+    })).json();
+    check("and the new password works", typeof signedIn.access_token, "string");
+    await page.close();
+  }
+
+  // ---- changing address by code ------------------------------------------
+
+  console.log("\nan address change needs a code from each inbox");
+  {
+    const u = await makeUser("move");
+    const moved = `fbwg_acc_moved_${stamp}@example.com`;
+    const page = await newPage();
+    await page.goto(URL_ + "#/login", { waitUntil: "load" });
+    await page.fill("input[type=email]", u.email);
+    await page.fill("input[type=password]", u.password);
+    await page.click("button[type=submit]");
+    await page.waitForSelector("text=Pick a name", { timeout: 30000 });
+    check("signing in through the form sends a Turnstile token", true, true);
+    await page.locator("form input").first().fill(`mv${stamp % 100000}`);
+    await page.click("button[type=submit]");
+    await page.waitForSelector("#stage", { timeout: 30000 });
+
+    await page.getByRole("button", { name: "Menu", exact: true }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const row = await openSetting(page, "Email");
+    await row.locator("input[type=password]").fill(u.password);
+    await row.locator("input[type=email]").fill(moved);
+    await row.locator("button[type=submit]").click();
+    await row.locator("text=Nothing changes until both are in").waitFor({ timeout: 30000 });
+    check("asking shows a code field for each address",
+          await row.locator("input[autocomplete=one-time-code]").count(), 2);
+
+    // Minted after the app asked, so these replace the ones it mailed.
+    const fromOld = await mintCode({ type: "email_change_current", email: u.email, new_email: moved });
+    const fromNew = await mintCode({ type: "email_change_new", email: u.email, new_email: moved });
+    const [oldField, newField] = [0, 1].map((i) => row.locator("input[autocomplete=one-time-code]").nth(i));
+
+    // The old address right and the new one wrong: the first is spent and
+    // must not be asked for again on the retry.
+    await oldField.fill(fromOld);
+    await enterCode(row, "00000000", newField);
+    await page.waitForSelector(".error:visible", { timeout: 30000 });
+    check("a wrong second code is refused", /wrong or has expired/.test(await errorText(page)), true);
+    check("and the first, already accepted, is kept", await oldField.isDisabled(), true);
+
+    await enterCode(row, fromNew, newField);
+    await row.locator("text=from now on").waitFor({ timeout: 30000 });
+    const after = await (await admin(`/auth/v1/admin/users/${u.id}`)).json();
+    check("both codes move the account", after.email, moved);
+    u.email = moved;
     await page.close();
   }
   // ---- Google, as far as a test can honestly reach -----------------------
@@ -650,9 +834,11 @@ try {
     // prove the opposite of what it looked like. That half is covered by the
     // real Google flow; what is pinned here is the true case and the grant.
     const u = await makeUser("haspw");
+    // The secret key, because Supabase lets it past Turnstile and a test
+    // cannot solve one.
     const tok = await (await fetch(`${API}/auth/v1/token?grant_type=password`, {
       method: "POST",
-      headers: { apikey: PUB, "content-type": "application/json" },
+      headers: { apikey: SECRET, "content-type": "application/json" },
       body: JSON.stringify({ email: u.email, password: u.password }),
     })).json();
 

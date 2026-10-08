@@ -7,6 +7,7 @@ import { dirname, resolve } from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import { LevelHost } from "../../engine/dist/net/levelhost.js";
 import { env } from "../../supabase/connect.mjs";
+import { passCaptcha } from "./captcha.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const APP = resolve(ROOT, "app");
@@ -48,7 +49,9 @@ export async function makeUser(tag, suffix) {
 }
 
 async function signInToken(user) {
-  const client = createClient(e.SUPABASE_URL, e.SUPABASE_PUBLISHABLE_KEY,
+  // The secret key, because Supabase lets it past Turnstile and a test cannot
+  // solve one.
+  const client = createClient(e.SUPABASE_URL, e.SUPABASE_SECRET_KEY,
     { auth: { persistSession: false, autoRefreshToken: false } });
   const { data, error } = await client.auth.signInWithPassword({ email: user.email, password: user.password });
   if (error || !data.session?.access_token || data.user?.id !== user.id)
@@ -324,6 +327,8 @@ async function runHostedScenario(alice, bob, sequence, label) {
   try {
     for (const user of [alice, bob]) {
       const context = await browser.newContext(); contexts.push(context);
+      await passCaptcha(context, e.SUPABASE_URL, e.SUPABASE_SECRET_KEY,
+        (path) => pageErrors.push(`no Turnstile token sent to ${path}`));
       const page = await context.newPage(); pages.push(page);
       page.on("pageerror", error => { pageErrors.push(error.name); console.error(`browser page error: ${error.name}`); });
       await pageSignIn(page, user);

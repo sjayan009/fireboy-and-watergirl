@@ -19,6 +19,7 @@
  * `--static-only` performs read-only CDN checks without creating an account.
  */
 import { env } from "../../supabase/connect.mjs";
+import { passCaptcha } from "./captcha.mjs";
 
 const SITE = (process.argv.slice(2).find(arg => !arg.startsWith("--")) ?? process.env.FBWG_URL ??
               "https://fireboy-and-watergirl.sjayan009.workers.dev")
@@ -190,9 +191,11 @@ try {
   })).json();
   if (!created.id) throw new Error(`could not create a test user: ${JSON.stringify(created)}`);
   users.push(created.id);
+  // The secret key, because Supabase lets it past Turnstile and a test
+  // cannot solve one.
   const token = (await (await fetch(`${API}/auth/v1/token?grant_type=password`, {
     method: "POST",
-    headers: { apikey: PUB, "content-type": "application/json" },
+    headers: { apikey: SECRET, "content-type": "application/json" },
     body: JSON.stringify({ email, password }),
   })).json()).access_token;
   await fetch(`${API}/rest/v1/rpc/claim_username`, {
@@ -203,6 +206,7 @@ try {
   });
 
   const page = await browser.newPage();
+  await passCaptcha(page.context(), API, SECRET, (path) => { failures++; console.log(`  FAIL no Turnstile token sent to ${path}`); });
   const problems = [];
   const blocked = [];
   const missing = [];
