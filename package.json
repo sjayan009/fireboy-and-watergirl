@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "db:migrate": "node supabase/migrate.mjs",
-    "db:test": "node supabase/rlstest.mjs && node supabase/mfatest.mjs && node supabase/hardtest.mjs && node supabase/solotest.mjs && node supabase/realtimetest.mjs",
+    "db:test": "node supabase/rlstest.mjs && node supabase/mfatest.mjs && node supabase/hardtest.mjs && node supabase/solotest.mjs && node supabase/realtimetest.mjs && node supabase/quickmatchtest.mjs",
     "engine:test": "npm --prefix engine test",
     "test:progress": "node app/test/progress-isolation.mjs && node app/test/save-delivery.mjs",
     "test:assets": "node engine/test/assets.mjs && node engine/test/font-retry.mjs && node app/test/asset-build.mjs",

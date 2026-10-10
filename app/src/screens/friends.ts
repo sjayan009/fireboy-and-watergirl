@@ -27,12 +27,19 @@ export class FriendsPanel {
   private blockedSection = el("details", { class: "blocked-friends", hidden: true }, el("summary", {}, "Blocked Friends"), this.blocked);
   private empty = note("Add a friend below to play together. You can also play on one keyboard.");
   private count = el("span", { class: "friend-count" }, "0");
+  private online = el("span", { class: "online" });
+  private toggle = el("button", { type: "button", class: "friends-toggle", "aria-expanded": "true", "aria-controls": "your-friends" },
+    el("span", { class: "chev", "aria-hidden": "true" }), "Your Friends", this.count, this.online);
+  private fold = el("div", { class: "friends-fold", id: "your-friends" });
+  private foldKey = `fbwg.friendsOpen.${auth().user?.id ?? "local"}`;
   readonly root = el("div", { class: "friends-hub" });
 
   constructor(host: HTMLElement, private options: {
     onInvite?: (friend: FriendState, slot: HTMLElement) => void;
     busy?: () => boolean;
     onChange?: (friends: FriendState[]) => void;
+    /** Shown between your friends and adding one: the Quick Match card. */
+    quickMatch?: HTMLElement;
   } = {}) {
     const name = field("Their username", { required: true, minlength: 3, maxlength: 20, autocomplete: "off", placeholder: "Exact username", spellcheck: "false" });
     const sent = el("p", { class: "note", role: "status", hidden: true });
@@ -56,11 +63,24 @@ export class FriendsPanel {
      * time. Opening this panel is nearly always "invite one of these", and
      * that answer now begins at the top of the panel; adding a friend is the
      * occasional errand, and it is one scroll away rather than in the way.
+     *
+     * The list folds, so with it closed everything else -- Quick Match and
+     * adding a friend -- is in sight without scrolling. The heading keeps the
+     * count and whether anybody is online, so folding it hides nothing you
+     * would open it to learn.
      */
-    this.root.append(el("div", { class: "social-intro" }, el("span", { class: "paired-mark", "aria-hidden": "true" }, "↗↙"),
-      el("p", {}, "Better with a friend", el("span", {}, "Find each other. Take on the temple."))),
-      this.trouble, this.incomingSection,
-      el("section", {}, el("h3", {}, "Your Friends", this.count), this.filter, this.current, this.empty),
+    this.fold.append(el("div", {}, this.filter, this.current, this.empty));
+    let open = true;
+    try { open = localStorage.getItem(this.foldKey) !== "closed"; } catch { /* optional preference */ }
+    this.setOpen(open);
+    this.toggle.addEventListener("click", () => {
+      const next = this.toggle.getAttribute("aria-expanded") !== "true";
+      this.setOpen(next);
+      try { localStorage.setItem(this.foldKey, next ? "open" : "closed"); } catch { /* optional */ }
+    });
+    this.root.append(this.trouble, this.incomingSection,
+      el("section", {}, this.toggle, this.fold),
+      ...(options.quickMatch ? [options.quickMatch] : []),
       el("section", {}, el("h3", {}, "Add a Friend"), add),
       this.outgoingSection, this.blockedSection);
     host.append(this.root);
@@ -73,6 +93,11 @@ export class FriendsPanel {
     }).catch(e => this.showError((e as Error).message));
   }
 
+  private setOpen(open: boolean): void {
+    this.toggle.setAttribute("aria-expanded", String(open));
+    if (open) delete this.fold.dataset.closed; else this.fold.dataset.closed = "";
+  }
+
   private showError(message: string): void {
     if (this.gone) return;
     this.trouble.replaceChildren(el("span", {}, message), el("button", { class: "ghost", onclick: () => { void this.lobby?.refresh(); } }, "Retry"));
@@ -81,6 +106,8 @@ export class FriendsPanel {
 
   update(friends = this.friends): void {
     if (this.gone) return;
+    // A Quick Match partner is in the lobby for the match, not a friend.
+    friends = friends.filter(f => !f.stranger);
     this.friends = friends;
     this.options.onChange?.(friends);
     if (this.lobby?.lastError) this.showError("Your friends could not refresh. Please try again.");
@@ -120,6 +147,8 @@ export class FriendsPanel {
     this.outgoingSection.hidden = !this.outgoing.children.length;
     this.blockedSection.hidden = !this.blocked.children.length;
     this.count.textContent = String(friends.filter(f => f.status === "accepted").length);
+    const here = friends.filter(f => f.status === "accepted" && f.activity !== null).length;
+    this.online.textContent = here ? `${here} online` : "None online";
     this.applyFilter();
   }
 

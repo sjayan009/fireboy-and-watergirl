@@ -319,6 +319,9 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .play-footer > .focus-hint { justify-self:center; text-align:center; }
 .play-footer .ghost { min-height:26px; padding:2px 8px; font-size:.75rem; background:transparent; border-color:transparent; box-shadow:none; }
 .save-status::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--dim); }
+/* Still, not breathing: the link pill pulses because it is live; a save is a fact. */
+.save-status[data-state='saved']::before { background:#6fd04a; }
+.save-status[data-state='error']::before { background:#ef5b4b; }
 /* Bottom right: link state, sound, fullscreen. 30px targets, above WCAG's 24. */
 .footer-controls { display:flex; align-items:center; gap:6px; justify-self:end; }
 .play-footer .footer-controls .tool { min-height:30px; padding:4px 10px; gap:6px; color:var(--ink); background:#24201a; border-color:var(--edge); box-shadow:inset 0 1px 0 #ffffff09; }
@@ -403,11 +406,23 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 .play-toast:empty { display:none; }
 
 /* One social surface. Rows are keyed; details do not disappear on refresh. */
-.social-intro { display:flex; align-items:center; gap:12px; padding:0 0 17px; border-bottom:1px solid var(--edge); }
-.social-intro p { font:600 1rem/1.3 var(--heading); letter-spacing:-.006em; margin:0; }
-.social-intro p span { display:block; margin-top:5px; color:var(--dim); font:400 .8125rem/1.4 var(--ui); letter-spacing:.006em; }
-.paired-mark { font-size:1.5rem; letter-spacing:-.4em; padding-right:.4em; color:var(--water); }
 .friends-hub section { margin-top:23px; }
+.friends-hub > section:first-of-type, .friends-hub > section[hidden] + section { margin-top:0; }
+/*
+ * Your Friends folds away, so Quick Match and Add a Friend are always in sight.
+ * The whole heading row is the button. The list folds with the grid-rows
+ * trick: a transition, so a second press mid-fold simply turns it round.
+ */
+.friends-toggle { display:flex; align-items:center; gap:8px; width:100%; min-height:40px; margin:0 0 4px; padding:0 4px 0 2px; border:0; border-radius:8px; background:transparent; color:var(--ink); font:600 .9375rem var(--ui); text-align:left; transition:background-color var(--press) var(--ease); }
+@media (hover:hover) and (pointer:fine) { .friends-toggle:hover { background:#ffffff0a; } }
+.friends-toggle .chev { flex:none; width:8px; height:8px; margin:0 4px 0 6px; border-right:2px solid var(--dim); border-bottom:2px solid var(--dim); transform:rotate(45deg) translate(-2px,-2px); transition:transform var(--settle) var(--ease); }
+.friends-toggle[aria-expanded='false'] .chev { transform:rotate(-45deg); }
+.friends-toggle .friend-count { margin-left:2px; }
+.friends-toggle .online { margin-left:auto; color:var(--dim); font:400 .75rem var(--ui); }
+.friends-fold { display:grid; grid-template-rows:1fr; transition:grid-template-rows 240ms cubic-bezier(.23,1,.32,1), opacity 200ms var(--ease); }
+.friends-fold > div { min-height:0; overflow:hidden; }
+.friends-fold[data-closed] { grid-template-rows:0fr; opacity:0; }
+.friends-fold[data-closed] > div { visibility:hidden; transition:visibility 0s 240ms; }
 .friends-hub h3 { display:flex; align-items:center; gap:8px; margin:0 0 12px; font-size:.9375rem; }
 .friend-count { color:var(--dim); font:400 .8125rem var(--ui); }
 .add-friend { gap:8px; margin-top:17px; }
@@ -604,3 +619,90 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
 .captcha.asking { margin-top: 12px; }
 /* The status line under the clock holds no space until it has something to say. */
 .code-clock + [role=status]:empty { margin: 0; }
+
+/* ---- Toolbar: each panel button wears its panel's colour ------------------
+ * Friends the blue of the paired arrows (--water), Leaderboard the gold of
+ * its trophy (--gold); the open panel's button keeps the colour as its bar.
+ */
+.play-toolbar > .tool-friends { color:var(--water); border-color:#75d5eb47; }
+.play-toolbar > .tool-leaderboard { color:var(--gold); border-color:#f0ce7b47; }
+.play-toolbar > .tool-friends[aria-expanded='true'] { color:var(--water); background:#75d5eb17; border-color:#75d5eb80; box-shadow:inset 0 -2px 0 var(--water); }
+.play-toolbar > .tool-leaderboard[aria-expanded='true'] { color:var(--gold); background:#f0ce7b17; border-color:#f0ce7b80; box-shadow:inset 0 -2px 0 var(--gold); }
+
+/* ---- Quick Match ----------------------------------------------------------- */
+.qm { margin-top:18px; padding:16px; background:#24201a; border:1px solid var(--edge); border-radius:14px; box-shadow:inset 0 1px 0 #ffffff09; overflow:hidden; }
+.qm h4 { margin:0; font:600 1rem/1.3 var(--heading); letter-spacing:-.006em; }
+.qm-sub { margin:4px 0 0; color:var(--dim); font-size:.8125rem; line-height:1.4; }
+.qm-note { margin-top:10px; }
+.qm-seg { display:grid; grid-template-columns:repeat(3,1fr); margin-top:14px; padding:3px; background:#16130f; border:1px solid #2b2620; border-radius:10px; }
+.qm-seg button { min-height:32px; border:0; background:transparent; color:var(--dim); font-size:.8125rem; font-weight:600; border-radius:7px; transition:background-color var(--settle) var(--ease), color var(--settle) var(--ease); }
+.qm-seg .fire { color:#ff9e7c; } .qm-seg .water { color:var(--water); }
+.qm-seg [aria-pressed='true'] { background:#3b342a; color:var(--ink); box-shadow:0 1px 2px #0006, inset 0 1px 0 #ffffff12; }
+.qm-go { width:100%; min-height:44px; margin-top:12px; border:0; border-radius:10px; background:var(--water); color:#0b2026; font-weight:700; font-size:.9375rem; box-shadow:inset 0 1px 0 #ffffff66, 0 2px 0 #2c6572; transition:transform 120ms var(--ease), background-color var(--press); }
+.qm-go:active:not(:disabled), .qm .ghost:active:not(:disabled) { transform:scale(.97); }
+@media (hover:hover) and (pointer:fine) { .qm-go:hover:not(:disabled) { background:#8fdff0; } }
+.qm-view { transition:opacity var(--settle) var(--ease), filter var(--settle) var(--ease), transform var(--settle) var(--ease); }
+.qm-view[data-out] { opacity:0; filter:blur(3px); transform:scale(.98); pointer-events:none; }
+.qm-words { transition:opacity 160ms var(--ease), filter 160ms var(--ease); }
+.qm-words[data-out] { opacity:0; filter:blur(2px); }
+.qm-headline { display:flex; align-items:baseline; gap:10px; }
+.qm-headline h4 { flex:1; min-width:0; }
+.qm-pct { color:var(--dim); font-size:.75rem; font-variant-numeric:tabular-nums; }
+.qm-bar { position:relative; height:6px; margin-top:10px; border-radius:3px; background:#2f2a22; overflow:hidden; }
+.qm-bar > i { position:absolute; inset:0; border-radius:3px; transform-origin:0 50%; transform:scaleX(0); background:linear-gradient(90deg, var(--fire), var(--water)); }
+.qm-bar > b { position:absolute; inset:0; width:40%; background:linear-gradient(90deg, transparent, #ffffff40, transparent); transform:translateX(-100%); }
+.qm:has(.qm-ring.searching) .qm-bar > b { animation:qm-sheen 2.2s cubic-bezier(.77,0,.175,1) infinite; }
+@keyframes qm-sheen { to { transform:translateX(260%); } }
+.qm-row { display:flex; gap:8px; margin-top:14px; }
+.qm-row > * { flex:1; margin:0; min-height:40px; }
+
+/* The stage: a ring, two comets, the emblem in halves. */
+.qm-stage { position:relative; height:132px; display:grid; place-items:center; margin:-2px 0 6px; }
+.qm-ring { --w:3px; position:relative; width:104px; height:104px; }
+.qm-ring > * { position:absolute; inset:0; border-radius:50%; }
+.qm-track { border:var(--w) solid #2f2a22; }
+.qm-orbit { will-change:transform; }
+.qm-tail, .qm-complete { -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - var(--w)), #000 calc(100% - var(--w))); mask:radial-gradient(farthest-side, transparent calc(100% - var(--w)), #000 calc(100% - var(--w))); }
+.qm-tail { position:absolute; inset:0; border-radius:50%; }
+.qm-orbit.fire .qm-tail { background:conic-gradient(from -120deg, #ff865b00 0deg, #ff865b 120deg, #0000 120deg); }
+.qm-orbit.water .qm-tail { background:conic-gradient(from 0deg, var(--water) 0deg, #75d5eb00 120deg, #0000 120deg); }
+.qm-head { position:absolute; left:50%; top:calc(var(--w) / 2); width:7px; height:7px; margin:-3.5px 0 0 -3.5px; border-radius:50%; }
+.qm-orbit.fire .qm-head { background:#ffd2bf; box-shadow:0 0 6px 2px #ff865bcc, 0 0 16px 4px #ff865b55; }
+.qm-orbit.water .qm-head { background:#e4f8fd; box-shadow:0 0 6px 2px #75d5ebcc, 0 0 16px 4px #75d5eb55; }
+.qm-ripple { border:1px solid #f2ece02e; opacity:0; }
+.qm-ring.searching .qm-ripple { animation:qm-ripple 2.6s cubic-bezier(.23,1,.32,1) infinite; }
+.qm-ring.searching .qm-ripple + .qm-ripple { animation-delay:1.3s; }
+@keyframes qm-ripple { from { transform:scale(.42); opacity:.9; } to { transform:scale(1.32); opacity:0; } }
+.qm-complete { opacity:0; transform:scale(.96); background:conic-gradient(from 180deg, var(--water), var(--fire), var(--water)); }
+.qm-ring > .qm-bloom { inset:14px; opacity:0; background:radial-gradient(closest-side, #ffe8c955, #ff865b22 55%, transparent); }
+.qm-ring > .qm-spark { inset:auto; left:50%; top:0; width:4px; height:4px; margin:-2px; opacity:0; }
+.qm-ring > .qm-emblem { inset:auto; left:50%; top:50%; width:46px; height:46px; margin:-23px; border-radius:0; }
+.qm-half { position:absolute; inset:0; will-change:transform; }
+.qm-half.fire { transform:translateX(-6px); } .qm-half.water { transform:translateX(6px); }
+.qm-half svg { display:block; width:100%; height:100%; overflow:visible; }
+.qm-half.fire svg { filter:drop-shadow(0 0 6px #ff865b55); } .qm-half.water svg { filter:drop-shadow(0 0 6px #75d5eb55); }
+.qm-inner { width:100%; height:100%; }
+.qm-ring.searching .qm-half.fire .qm-inner { transform-origin:50% 92%; animation:qm-flicker 1.9s ease-in-out infinite; }
+.qm-ring.searching .qm-half.water .qm-inner { animation:qm-bob 2.4s ease-in-out infinite; }
+@keyframes qm-flicker { 0%,100% { transform:scale(1,1) rotate(0); } 30% { transform:scale(.97,1.05) rotate(-2deg); } 60% { transform:scale(1.02,.98) rotate(1deg); } }
+@keyframes qm-bob { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-2.5px); } }
+
+/* Matched: one clean card over the game, Leave and nothing else. */
+.banner.matched-card { flex-wrap:nowrap; gap:14px; padding:14px 14px 14px 16px; background:#1e1a15e6; -webkit-backdrop-filter:blur(16px) saturate(140%); backdrop-filter:blur(16px) saturate(140%); border-color:#423b30; border-radius:14px; box-shadow:0 10px 30px #0006, inset 0 1px 0 #ffffff0d; }
+.banner.matched-card > span:first-child { flex-basis:auto; }
+.matched-pair { flex:none; display:flex; }
+.matched-pair span { display:flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:50%; font-size:.7rem; font-weight:700; border:2px solid #1e1a15; }
+.matched-pair .f { background:#ff865b2e; color:#ff9e7c; } .matched-pair .w { background:#75d5eb2e; color:var(--water); margin-left:-9px; }
+.matched-what { flex:1; min-width:0; }
+.matched-what strong { display:block; font-size:.9375rem; overflow-wrap:anywhere; }
+.matched-what p { margin:2px 0 0; color:var(--dim); font-size:.8125rem; }
+.matched-what b { font-weight:600; } .matched-what .fire { color:#ff9e7c; } .matched-what .water { color:var(--water); }
+
+@media (prefers-reduced-motion: reduce) {
+  .qm-ring.searching .qm-ripple, .qm:has(.qm-ring.searching) .qm-bar > b { animation:none; }
+  .qm-ring.searching .qm-half .qm-inner { animation:qm-glow 2s ease-in-out infinite; transform:none; }
+  @keyframes qm-glow { 50% { opacity:.7; } }
+  .qm-view, .qm-view[data-out] { transform:none; filter:none; }
+  .friends-fold, .friends-toggle .chev { transition:none; }
+}
+@media (prefers-reduced-transparency: reduce) { .banner.matched-card { background:#1e1a15; -webkit-backdrop-filter:none; backdrop-filter:none; } }
