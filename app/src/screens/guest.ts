@@ -92,7 +92,7 @@ export function guestScreen(host: HTMLElement): () => void {
           el("span", { class: "keys" },
             key("ArrowLeft", "←", "Left arrow"), key("ArrowUp", "↑", "Up arrow"), key("ArrowRight", "→", "Right arrow"))),
         el("p", { class: "local-hint" },
-          el("span", {}, key("KeyP", "P", "P"), "pauses"), el("span", {}, "Saved in this browser")),
+          el("span", {}, key("KeyP", "P", "P"), "pauses"), el("span", {}, "Saved in this browser only · An account keeps it")),
         el("div", { class: "player player-water" },
           el("span", { class: "player-name" }, "Watergirl"),
           el("span", { class: "keys" },
@@ -114,9 +114,19 @@ export function guestScreen(host: HTMLElement): () => void {
   const stage = host.querySelector<HTMLElement>(".local-stage")!;
   let cleared = false;
   off.push(on(stage, "animationend", () => stage.classList.remove("is-cleared")));
+  // Ask the browser not to evict this save, but only once there is one worth
+  // keeping: Firefox shows a permission prompt for persist(), which would be
+  // an odd greeting on page load. Asked once per browser.
+  const keepStorage = () => {
+    try {
+      if (localStorage.getItem("fbwg.persistAsked")) return;
+      localStorage.setItem("fbwg.persistAsked", "1");
+      void navigator.storage?.persist?.().catch(() => {});
+    } catch { /* storage unavailable: nothing to protect either */ }
+  };
   const onFrame = (v: GameView) => {
     const now = v.game.children.some((c: Ported) => c.symbol === "Recuento");
-    if (now && !cleared) stage.classList.add("is-cleared");
+    if (now && !cleared) { stage.classList.add("is-cleared"); keepStorage(); }
     cleared = now;
   };
 
