@@ -23,12 +23,22 @@
  *
  * Anything else is this person's own -- mute, which screen of the app they are
  * looking at, this banner -- and never travels.
+ *
+ * ## Without an account
+ *
+ * `{ guest: true }` is the same screen with nobody signed in: two players on
+ * one keyboard, saved under the guest page's own key, and NOTHING sent to the
+ * server. Everything that needs an account -- the lobby and friends, Quick
+ * Match, the leaderboard, watching, the outbox, the cloud save, the match
+ * lease, the guest-import offer -- is simply never constructed, so the match
+ * code below has nothing to run against: without a lobby there is never a
+ * match, and every path that talks to the server starts from one.
  */
 import { GameView, STAGE_W, STAGE_H } from "@engine/embed.js";
 import type { Transport } from "@engine/net/transport.js";
 import { drainOutbox, pairProgress } from "../pairsave.js";
 import { soloProgress } from "../solosave.js";
-import { guestOffer, guestOfferText, declineGuest, importGuest } from "../guestimport.js";
+import { guestOffer, guestOfferText, declineGuest, importGuest, GUEST_KEY } from "../guestimport.js";
 import type { Invite, Showing } from "../net/pairchannel.js";
 import { WatchChannel } from "../net/watchchannel.js";
 import { WatchMirror } from "../net/watch.js";
@@ -128,7 +138,7 @@ const LEAVE_MS = 140;
 /** Asked rather than assumed, and re-asked: the setting can change mid-session. */
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 
-export function playScreen(host: HTMLElement): () => void {
+export function playScreen(host: HTMLElement, { guest = false }: { guest?: boolean } = {}): () => void {
   const flow = new PlayController();
   const canvas = el("canvas", {
     id: "stage", width: STAGE_W, height: STAGE_H, tabindex: "0",
@@ -158,11 +168,11 @@ export function playScreen(host: HTMLElement): () => void {
   // solosave.ts for the key that used to be shared by everybody who signed in
   // here. `pairProgress` still wraps it: alone it is this store, and in a pair
   // it becomes the pair's shared map and hands the solo one back afterwards.
-  const solo = soloProgress();
+  const solo = soloProgress(guest ? GUEST_KEY : undefined);
   const progress = pairProgress(solo.store);
   // Whatever this browser has, merged with whatever the account has, before the
   // first frame puts a map on screen.
-  void solo.sync().then(() => {
+  if (!guest) void solo.sync().then(() => {
     if (!gone && !view.level && !progress.shared) progress.refreshSolo();
     offerGuestProgress();
   });
@@ -686,7 +696,7 @@ export function playScreen(host: HTMLElement): () => void {
   function rememberPartner(id: string): void {
     if (lastPartner === id) return;
     lastPartner = id;
-    leaderboard.invalidate();
+    leaderboard?.invalidate();
     try { localStorage.setItem(`fbwg.lastPartner.${auth().user!.id}`, id); } catch { /* optional */ }
   }
   function rememberSelection(playing: boolean): void {
@@ -856,29 +866,29 @@ export function playScreen(host: HTMLElement): () => void {
   // The partner is handed in as a getter rather than a value: the board outlives
   // any one match, and `leaderboard_standing` is a question about a PAIR.
   let lastPartner: string | null = null;
-  try { lastPartner = localStorage.getItem(`fbwg.lastPartner.${auth().user!.id}`); } catch { /* optional */ }
+  if (!guest) try { lastPartner = localStorage.getItem(`fbwg.lastPartner.${auth().user!.id}`); } catch { /* optional */ }
   // The partner is handed in as a getter rather than a value: the board outlives
   // any one match, and `leaderboard_standing` is a question about a PAIR.
-  const leaderboard = new Leaderboard(board,
+  const leaderboard = guest ? null : new Leaderboard(board,
     () => view.game.Translation as string[] | undefined,
     () => match?.friend.id ?? lastPartner);
   const shell = new PlayShell(host, {
-    canvas, name, status, mute, banner, friends: panel, times, board, connection,
+    canvas, name, status, mute, banner, friends: panel, times, board, connection, guest,
     input: (enabled) => view.setInputEnabled(enabled),
     onObstructed: obstructed => { if (obstructed && view.level && !view.watching) view.pauseForSuspension(); },
     onPanel: (panel, changed) => {
-      if (panel === "leaderboard") leaderboard.open(view.session?.selection ?? loadSelection(auth().user!.id, lastPartner ?? ""), changed);
+      if (panel === "leaderboard" && leaderboard) leaderboard.open(view.session?.selection ?? loadSelection(auth().user!.id, lastPartner ?? ""), changed);
       // `open`, not `refresh`: the panel has to be told it is visible before it
       // will fetch anything, and it points itself at the current match on the
       // way in. Reached only after construction -- the shell opens "friends".
       if (panel === "progress") progressPanel.open();
     },
-    actions: [hand, share, befriend, blockButton, leave, el("button", {
+    actions: [hand, share, befriend, blockButton, leave, ...guest ? [] : [el("button", {
       class: "ghost", onclick: async () => {
         if (match && !confirm("Sign out and leave the game?")) return;
         await signOut();
       },
-    }, "Sign out")],
+    }, "Sign out")]],
   });
   const progressPanel = new ProgressPanel(times, {
     progress,
@@ -887,7 +897,7 @@ export function playScreen(host: HTMLElement): () => void {
     partner: () => partner,
     table: () => view.game.Translation as string[] | undefined,
   });
-  const quickCard = new QuickCard({
+  const quickCard = guest ? null : new QuickCard({
     windowMs: 60000,
     onStart: role => void startQuick(role),
     onCancel: () => cancelQuick(),
@@ -895,10 +905,10 @@ export function playScreen(host: HTMLElement): () => void {
       if (!quickSearch) return;
       quickSearch.abort(); quickSearch = null;
       flow.cancel(); flow.set("idle");
-      quickCard.timedOut();
+      quickCard?.timedOut();
     },
   });
-  const friendsUI = new FriendsPanel(panel, { onInvite: showInviteForm, busy: () => match !== null || pending !== null || quickSearch !== null, quickMatch: quickCard.root });
+  const friendsUI = quickCard && new FriendsPanel(panel, { onInvite: showInviteForm, busy: () => match !== null || pending !== null || quickSearch !== null, quickMatch: quickCard.root });
   const watchList = el("section", { class: "watch-list" });
   panel.append(watchList);
   /** How many results had reached the server last time we looked. */
@@ -926,7 +936,7 @@ export function playScreen(host: HTMLElement): () => void {
     if (progress.saves !== sentResults) {
       sentResults = progress.saves;
       leaderboardCache.clear();
-      leaderboard.invalidate();
+      leaderboard?.invalidate();
       void drawBoard();
     }
     void progressPanel.refresh();
@@ -943,15 +953,15 @@ export function playScreen(host: HTMLElement): () => void {
   const takeover = el("button", { class: "ghost" }, "Take over here");
   otherTab.append(takeover);
   shell.root.querySelector("footer")!.append(otherTab);
-  const lease = new MatchLease(auth().user!.id, busy => { otherTab.hidden = !busy; }, () => {
+  const lease = guest ? null : new MatchLease(auth().user!.id, busy => { otherTab.hidden = !busy; }, () => {
     pending?.abort.abort(); flow.cancel(); endSession("Your match moved to another tab.");
     notice("session", "Your match moved to another tab.");
   });
   takeover.addEventListener("click", () => {
     takeover.disabled = true;
-    void lease.takeover().then(ok => {
+    void lease?.takeover().then(ok => {
       takeover.disabled = false;
-      if (ok) { shell.open("friends"); lease.release(); }
+      if (ok) { shell.open("friends"); lease?.release(); }
       else notice("session", "The other tab did not release the match. Close it and try again.");
     });
   });
@@ -962,7 +972,7 @@ export function playScreen(host: HTMLElement): () => void {
   on(shell.saveStatus, "click", async () => { shell.toggle("progress"); if (progress.shared) await progress.flushNow(); else await solo.sync(); drawTimes(); });
   shell.notify("Preparing the game…");
   const prepare = () => {
-    void view.prepare().then(() => { if (!gone) { shell.notify(""); void leaderboard.refresh(); } }).catch(() => {
+    void view.prepare().then(() => { if (!gone) { shell.notify(""); void leaderboard?.refresh(); } }).catch(() => {
       if (gone) return;
       notice("art", "Some game art could not be loaded.", el("button", { class: "ghost", onclick: prepare }, "Retry loading"));
       shell.open("setup");
@@ -1182,7 +1192,7 @@ export function playScreen(host: HTMLElement): () => void {
    */
   function drawTimes(): void { void progressPanel.refresh(); }
 
-  function drawBoard(): Promise<void> { return leaderboard.refresh(); }
+  function drawBoard(): Promise<void> { return leaderboard?.refresh() ?? Promise.resolve(); }
 
   // ---- the lobby ---------------------------------------------------------
 
@@ -1195,7 +1205,7 @@ export function playScreen(host: HTMLElement): () => void {
   // at your friends list.
   let unsubscribe: (() => void)[] = [];
 
-  getLobby().then((l) => {
+  if (!guest) getLobby().then((l) => {
     if (gone) return;
     lobby = l;
     // Anything a previous session could not finish saying. A pair result that
@@ -1265,8 +1275,8 @@ export function playScreen(host: HTMLElement): () => void {
 
   function drawPanel(friends: FriendState[]): void {
     shell.friends(friends.filter(f => f.status === "accepted" && f.activity !== null && !f.stranger).length);
-    quickCard.setBusy(match !== null || pending !== null);
-    friendsUI.update(friends);
+    quickCard?.setBusy(match !== null || pending !== null);
+    friendsUI?.update(friends);
     // Whose maps there are to look at. Cheap, and this is the one place the
     // friend list is known to have changed -- including somebody being removed,
     // which has to take their option away with them.
@@ -1330,7 +1340,7 @@ export function playScreen(host: HTMLElement): () => void {
     // behind it and the game started anyway.
     const stop = el("button", { class: "ghost" }, "Cancel");
     stop.addEventListener("click", () => {
-      lease.release();
+      lease?.release();
       flow.cancel();
       if (pending) { pending.abort.abort(); pending = null; }
       void progress.release();
@@ -1357,8 +1367,8 @@ export function playScreen(host: HTMLElement): () => void {
       pending = { session: null, friendId: friend.id, abort };
       drawPanel(lobby?.list ?? []);
       try {
-        if (!await lease.acquire()) throw new Error("Playing in another tab. Use Take over here to continue.");
-        if (!flow.owns(abort) || gone) { lease.release(); return; }
+        if (!await lease?.acquire()) throw new Error("Playing in another tab. Use Take over here to continue.");
+        if (!flow.owns(abort) || gone) { lease?.release(); return; }
         say.textContent = "loading your progress…";
         const preparation = Promise.all([progress.adopt(friend.id, abort.signal),
           view.prepareLevel(mode.value, Number(num.value), abort.signal)]).then(() => {});
@@ -1379,7 +1389,7 @@ export function playScreen(host: HTMLElement): () => void {
         if (!flow.owns(abort) || gone) return;
         flow.finish(abort, "configuring");
         abort.abort();
-        lease.release();
+        lease?.release();
         pending = null;
         void progress.release();
         say.textContent = (e as Error).message;
@@ -1424,7 +1434,7 @@ export function playScreen(host: HTMLElement): () => void {
     // either way. After "Play" the same button is the way back out of a
     // handshake, so it stays and only changes its name.
     no.addEventListener("click", () => {
-      lease.release();
+      lease?.release();
       // Said out loud, always. Aborting is what stops a handshake we may have
       // started; the decline is what stops THEM waiting, and in the usual case
       // -- the banner is up and the answer is no -- there is no handshake and
@@ -1454,8 +1464,8 @@ export function playScreen(host: HTMLElement): () => void {
       yes.disabled = true;
       no.textContent = "Cancel";
       try {
-        if (!await lease.acquire()) throw new Error("Playing in another tab. Use Take over here to continue.");
-        if (!flow.owns(abort) || gone) { lease.release(); return; }
+        if (!await lease?.acquire()) throw new Error("Playing in another tab. Use Take over here to continue.");
+        if (!flow.owns(abort) || gone) { lease?.release(); return; }
         // Adopted before answering, not after. Saying "ready" is what tells the
         // other side to send Start, and the level must not begin against this
         // browser's solo progress -- `Recuent` compares the run it has just
@@ -1478,7 +1488,7 @@ export function playScreen(host: HTMLElement): () => void {
         if (!flow.owns(abort) || gone) return;
         flow.finish(abort, "idle");
         abort.abort();
-        lease.release();
+        lease?.release();
         pending = null;
         void progress.release();
         say.textContent = (e as Error).message;
@@ -1515,7 +1525,7 @@ export function playScreen(host: HTMLElement): () => void {
       befriend.disabled = false;
       befriend.textContent = `Add ${quick.username} as a friend`;
       blockButton.textContent = `Block ${quick.username}`;
-      quickCard.idle();
+      quickCard?.idle();
     }
     clearNotice();
     stalling = false;
@@ -1581,7 +1591,7 @@ export function playScreen(host: HTMLElement): () => void {
     if (match || pending || quickSearch || quickPending || !lobby) return;
     const abort = flow.start("searching");
     quickSearch = abort;
-    quickCard.searching();
+    quickCard?.searching();
     drawPanel(lobby.list);
     let found: QuickMatch;
     try {
@@ -1590,12 +1600,12 @@ export function playScreen(host: HTMLElement): () => void {
       if (quickSearch === abort) quickSearch = null;
       if (gone || abort.signal.aborted) return;
       flow.finish(abort, "idle");
-      quickCard.idle((e as Error).message);
+      quickCard?.idle((e as Error).message);
       return;
     }
     if (gone || quickSearch !== abort) { void endMatch(found.partner); return; }
     quickSearch = null;
-    void quickCard.found(found.username, found.iAmFireboy);
+    void quickCard?.found(found.username, found.iAmFireboy);
     await connectQuick(found, abort);
   }
 
@@ -1630,7 +1640,7 @@ export function playScreen(host: HTMLElement): () => void {
     });
     void invited?.catch(() => {});
     try {
-      if (!await lease.acquire()) throw new Error("Playing in another tab. Use Take over here to continue.");
+      if (!await lease?.acquire()) throw new Error("Playing in another tab. Use Take over here to continue.");
       if (!flow.owns(abort) || gone) throw new Error("cancelled");
       flow.set("connecting");
       await lobby!.openMatch(found, abort.signal);
@@ -1667,12 +1677,12 @@ export function playScreen(host: HTMLElement): () => void {
     quickPending = null;
     flow.cancel(); flow.set("idle");
     pending = null;
-    lease.release();
+    lease?.release();
     void progress.release();
     void endMatch(found.partner);
     lobby?.closeMatch(found.partner);
     clearNotice();
-    quickCard.idle(message);
+    quickCard?.idle(message);
     drawPanel(lobby?.list ?? []);
   }
 
@@ -1683,7 +1693,7 @@ export function playScreen(host: HTMLElement): () => void {
       quickSearch = null;
       abort.abort();
       flow.cancel(); flow.set("idle");
-      quickCard.idle();
+      quickCard?.idle();
       drawPanel(lobby?.list ?? []);
       return;
     }
@@ -1693,7 +1703,7 @@ export function playScreen(host: HTMLElement): () => void {
       dropQuick(found, "");
       return;
     }
-    quickCard.idle();
+    quickCard?.idle();
   }
 
   /** The match card over the game: who, which character, and Leave. */
@@ -1949,7 +1959,7 @@ export function playScreen(host: HTMLElement): () => void {
    */
   function endSession(why: string): void {
     consent?.close(); consent = null; watchGeneration++;
-    lease.release();
+    lease?.release();
     if (departure !== null) { clearTimeout(departure); departure = null; }
     if (!match) return;
     // Held, because the announcement below is addressed BY topic and the topic
@@ -2017,10 +2027,10 @@ export function playScreen(host: HTMLElement): () => void {
   // has gone. Neither is guaranteed, which is why the result is also written to
   // a durable outbox -- see `pairsave.ts`.
   const onHide = (event: PageTransitionEvent) => {
-    progress.beacon();
+    if (!guest) progress.beacon();
     void solo.sync();
     if (event.persisted) { view.pauseForSuspension(); view.setRunning(false); return; }
-    lease.release();
+    lease?.release();
     rebuilding?.abort();
     if (view.session) view.leave();
   };
@@ -2028,7 +2038,7 @@ export function playScreen(host: HTMLElement): () => void {
   const onShow = (event: PageTransitionEvent) => {
     if (!event.persisted) return;
     if (!match) { view.setRunning(true); return; }
-    void lease.acquire().then(acquired => {
+    void lease?.acquire().then(acquired => {
       if (gone) return;
       if (!acquired) endSession("Your match moved to another tab.");
       view.setRunning(true);
@@ -2063,11 +2073,11 @@ export function playScreen(host: HTMLElement): () => void {
     if (leaving !== null) { clearTimeout(leaving); leaving = null; }
     if (departure !== null) { clearTimeout(departure); departure = null; }
     shell.destroy();
-    friendsUI.destroy();
-    leaderboard.destroy();
+    friendsUI?.destroy();
+    leaderboard?.destroy();
     progressPanel.destroy();
     consent?.close(); consent = null; watchGeneration++;
-    lease.close();
+    lease?.close();
     // One last push, then stop. Leaving the screen is the most likely moment
     // for a level finished seconds ago to still be sitting in the settle timer.
     void solo.sync();
