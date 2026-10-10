@@ -205,7 +205,9 @@ console.log("\nthe download is the size it should be");
   // The 17-improvement implementation adds bounded renderer/resource caches,
   // manifest preparation, coherent recovery and durable saving (~846 kB total).
   // Preserve a measured ceiling with20 kB headroom; see IMPLEMENTATION_RESULTS_17.md.
-  const BUDGET = 860_000;
+  // Quick Match adds the matchmaking flow, the card and its search animation
+  // (~24 kB, ~884 kB total); the ceiling moves with it and keeps its headroom.
+  const BUDGET = 905_000;
   console.log(`  ${(bytes / 1000).toFixed(0)} kB of javascript and css ` +
               `across ${code.length} files`);
   check(`under the ${BUDGET / 1000} kB budget`, bytes < BUDGET,
