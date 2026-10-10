@@ -259,6 +259,7 @@ try {
   console.log("\nand a third person, who knows only alice");
   const carol = await makeUser("c");
   const ctxC = await browser.newContext();
+  await passCaptcha(ctxC, API, SECRET, (path) => { failures++; console.log(`  FAIL no Turnstile token sent to ${path}`); });
   const c = await ctxC.newPage();
   c.on("pageerror", (err) => {
     failures++;

@@ -45,6 +45,9 @@ import { MatchSharing, type SharingState } from "../sharing.js";
 import { QoeRecorder } from "../net/qoe.js";
 import { networkFlags } from "../net/flags.js";
 import { presentationPreferences, PRESENTATION_CHANGED } from "../presentation.js";
+import { QuickCard } from "../ui/quickcard.js";
+import { endMatch, findPartner, touchMatch, TOUCH_MS, type QuickMatch, type Role } from "../quickmatch.js";
+import { block as blockPlayer, request as requestFriend } from "../friends.js";
 
 const MUTE_KEY = "fbwg.muted";
 
@@ -183,6 +186,11 @@ export function playScreen(host: HTMLElement): () => void {
   hand.hidden = true;
   const share = el("button", { class: "ghost" }, "Let friends watch");
   share.hidden = true;
+  // A Quick Match partner is somebody you may want to keep, or never see again.
+  const befriend = el("button", { class: "ghost" }, "Add as a friend");
+  befriend.hidden = true;
+  const blockButton = el("button", { class: "ghost danger-text" }, "Block");
+  blockButton.hidden = true;
   // The banner carries the things somebody has to answer -- an invitation, a
   // lost connection -- so it is assertive where the status line is polite.
   const banner = el("div", {
@@ -357,7 +365,17 @@ export function playScreen(host: HTMLElement): () => void {
      * to the inviter while the banner still said otherwise.
      */
     chooser: string;
+    /** Set when the server paired the two of you rather than an invitation. */
+    quick?: QuickMatch;
   } | null = null;
+  /** A Quick Match search in flight. */
+  let quickSearch: AbortController | null = null;
+  /** A Quick Match found and being connected, until the game begins. */
+  let quickPending: { found: QuickMatch; abort: AbortController } | null = null;
+  /** Renews the live match on the server; it lapses two minutes after the last. */
+  let quickTouch: ReturnType<typeof setInterval> | null = null;
+  /** Where the partner's invitation goes while this side waits for it. */
+  let quickInvite: ((invite: Invite, from: FriendState) => void) | null = null;
   /** Set while the link is being rebuilt, so nothing tries twice at once. */
   let rebuilding: AbortController | null = null;
   /**
@@ -804,7 +822,7 @@ export function playScreen(host: HTMLElement): () => void {
     // feed, but being watched is not one of two people's decision to make: the
     // other player flips the same switch and both are told.
     set(share, consent?.consent ? (sharing ? "Stop letting friends watch" : "Cancel sharing request") : "Let friends watch",
-        match === null);
+        match === null || !!match.quick);
   }
 
   /** Put the pick where the pair has just agreed it goes. */
@@ -851,7 +869,7 @@ export function playScreen(host: HTMLElement): () => void {
       // way in. Reached only after construction -- the shell opens "friends".
       if (panel === "progress") progressPanel.open();
     },
-    actions: [hand, share, leave, el("button", {
+    actions: [hand, share, befriend, blockButton, leave, el("button", {
       class: "ghost", onclick: async () => {
         if (match && !confirm("Sign out and leave the game?")) return;
         await signOut();
@@ -865,7 +883,18 @@ export function playScreen(host: HTMLElement): () => void {
     partner: () => partner,
     table: () => view.game.Translation as string[] | undefined,
   });
-  const friendsUI = new FriendsPanel(panel, { onInvite: showInviteForm, busy: () => match !== null || pending !== null });
+  const quickCard = new QuickCard({
+    windowMs: 60000,
+    onStart: role => void startQuick(role),
+    onCancel: () => cancelQuick(),
+    onTimeout: () => {
+      if (!quickSearch) return;
+      quickSearch.abort(); quickSearch = null;
+      flow.cancel(); flow.set("idle");
+      quickCard.timedOut();
+    },
+  });
+  const friendsUI = new FriendsPanel(panel, { onInvite: showInviteForm, busy: () => match !== null || pending !== null || quickSearch !== null, quickMatch: quickCard.root });
   const watchList = el("section", { class: "watch-list" });
   panel.append(watchList);
   /** How many results had reached the server last time we looked. */
@@ -875,6 +904,8 @@ export function playScreen(host: HTMLElement): () => void {
     const waiting = progress.shared ? progress.waiting : solo.pending;
     shell.saveStatus.textContent = error ? "Retry needed" : waiting ? "Saving…" : solo.localOnly && !progress.shared ? "Saved on device" : "Saved to Cloud";
     shell.saveStatus.title = error ?? "Your progress";
+    // The dot says it at a glance: green once it is in the cloud, red when it is not.
+    shell.saveStatus.dataset.state = error ? "error" : waiting ? "saving" : solo.localOnly && !progress.shared ? "local" : "saved";
   };
   // Labelled now, not on the first save: until something changed, the footer
   // went on saying the bare "Saved" the shell is built with.
@@ -965,6 +996,7 @@ export function playScreen(host: HTMLElement): () => void {
     shell.showNotice();
     noticed = { kind, text };
     showBanner();
+    banner.classList.remove("matched-card");
     clear(banner);
     banner.append(el("span", {}, text), ...extra,
       el("button", { class: "ghost", onclick: () => clearNotice() }, "Dismiss"));
@@ -986,6 +1018,7 @@ export function playScreen(host: HTMLElement): () => void {
     if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
     noticed = null;
     showBanner();
+    banner.classList.remove("matched-card");
     clear(banner);
   }
 
@@ -1200,7 +1233,8 @@ export function playScreen(host: HTMLElement): () => void {
   });
 
   function drawPanel(friends: FriendState[]): void {
-    shell.friends(friends.filter(f => f.status === "accepted" && f.activity !== null).length);
+    shell.friends(friends.filter(f => f.status === "accepted" && f.activity !== null && !f.stranger).length);
+    quickCard.setBusy(match !== null || pending !== null);
     friendsUI.update(friends);
     // Whose maps there are to look at. Cheap, and this is the one place the
     // friend list is known to have changed -- including somebody being removed,
@@ -1325,6 +1359,12 @@ export function playScreen(host: HTMLElement): () => void {
   }
 
   function showInvite(invite: Invite, from: FriendState): void {
+    // A Quick Match partner's invitation is the one this side is waiting for,
+    // and is answered without asking; nobody else's is, while waiting for it.
+    if (from.stranger || quickInvite) {
+      if (quickInvite) quickInvite(invite, from); else lobby?.decline(invite);
+      return;
+    }
     if (match) return;                 // already playing
     // One at a time. Two people inviting each other in the same breath used to
     // replace one banner with the other and start two games.
@@ -1419,7 +1459,7 @@ export function playScreen(host: HTMLElement): () => void {
   }
 
   /** Hand the clock to the session, and start the level if we are the host. */
-  function begin(ready: Ready, invite: Invite): void {
+  function begin(ready: Ready, invite: Invite, quick?: QuickMatch): void {
     if (gone) { ready.transport.close(); return; }
     shell.invite(false);
     shell.notify("");
@@ -1435,8 +1475,17 @@ export function playScreen(host: HTMLElement): () => void {
     match = {
       friend: ready.friend, invite, slot: ready.slot, iInvited: ready.host,
       chooser,
+      quick: quick ?? (match?.invite.session === invite.session ? match.quick : undefined),
     };
-    consent ??= new MatchSharing(invite.session, ready.friend.id, updateSharing);
+    // Watching stays a friends feature; the server refuses it for a match.
+    if (!match.quick) consent ??= new MatchSharing(invite.session, ready.friend.id, updateSharing);
+    befriend.hidden = blockButton.hidden = !match.quick;
+    if (quick) {
+      befriend.disabled = false;
+      befriend.textContent = `Add ${quick.username} as a friend`;
+      blockButton.textContent = `Block ${quick.username}`;
+      quickCard.idle();
+    }
     clearNotice();
     stalling = false;
     // A new link, and the batching question asked again from scratch. A pair
@@ -1493,6 +1542,176 @@ export function playScreen(host: HTMLElement): () => void {
     canvas.focus();
     drawPanel(lobby?.list ?? []);
   }
+
+  // ---- Quick Match -------------------------------------------------------
+
+  /** Search for a stranger to play with. The card owns the 60-second window. */
+  async function startQuick(role: Role): Promise<void> {
+    if (match || pending || quickSearch || quickPending || !lobby) return;
+    const abort = flow.start("searching");
+    quickSearch = abort;
+    quickCard.searching();
+    drawPanel(lobby.list);
+    let found: QuickMatch;
+    try {
+      found = await findPartner(role, auth().user!.id, abort.signal);
+    } catch (e) {
+      if (quickSearch === abort) quickSearch = null;
+      if (gone || abort.signal.aborted) return;
+      flow.finish(abort, "idle");
+      quickCard.idle((e as Error).message);
+      return;
+    }
+    if (gone || quickSearch !== abort) { void endMatch(found.partner); return; }
+    quickSearch = null;
+    void quickCard.found(found.username, found.iAmFireboy);
+    await connectQuick(found, abort);
+  }
+
+  /**
+   * From "matched" to a running game, with nobody pressing anything.
+   *
+   * The same handshake an invitation uses, run for both of them: the server
+   * named a host, the host invites once the other side's presence arrives on
+   * the match topic, and the other side accepts that one invitation and no
+   * other. Level one of Adventure; the map takes it from there.
+   */
+  async function connectQuick(found: QuickMatch, abort: AbortController): Promise<void> {
+    quickPending = { found, abort };
+    pending = { session: null, friendId: found.partner, abort };
+    showMatched(found);
+    drawPanel(lobby?.list ?? []);
+    if (quickTouch !== null) clearInterval(quickTouch);
+    quickTouch = setInterval(() => {
+      void touchMatch(found.partner).catch(() => true).then(live => {
+        if (!live && match?.quick?.partner === found.partner) endSession(`${found.username} left the game.`);
+      });
+    }, TOUCH_MS);
+    // Listening for their invitation starts before our presence can reach
+    // them, so an invitation sent the moment they see us is not turned away.
+    const invited = found.host ? null : new Promise<Invite>((resolve, reject) => {
+      const timer = setTimeout(() => { quickInvite = null; reject(new Error("they did not arrive")); }, 45000);
+      abort.signal.addEventListener("abort", () => { clearTimeout(timer); quickInvite = null; reject(new Error("cancelled")); }, { once: true });
+      quickInvite = (i, from) => {
+        if (from.id !== found.partner || i.from !== found.partner) { lobby?.decline(i); return; }
+        clearTimeout(timer); quickInvite = null; resolve(i);
+      };
+    });
+    void invited?.catch(() => {});
+    try {
+      if (!await lease.acquire()) throw new Error("Playing in another tab. Use Take over here to continue.");
+      if (!flow.owns(abort) || gone) throw new Error("cancelled");
+      flow.set("connecting");
+      await lobby!.openMatch(found, abort.signal);
+      const preparation = Promise.all([progress.adopt(found.partner, abort.signal),
+        view.prepareLevel("adventure", 1, abort.signal)]).then(() => {});
+      void preparation.catch(() => {});
+      let ready: Ready;
+      let invite: Invite;
+      if (!invited) {
+        await lobby!.present(found.partner, abort.signal, 20000);
+        ready = await lobby!.invite(found.partner, {
+          mode: "adventure", num: 1, iAmFireboy: found.iAmFireboy,
+          signal: abort.signal, beforeReady: () => preparation,
+        });
+        invite = ready.invite;
+      } else {
+        invite = await invited;
+        ready = await lobby!.join(invite, { signal: abort.signal, beforeReady: () => preparation });
+      }
+      if (!flow.finish(abort, "playing") || gone) { ready.transport.close(); return; }
+      pending = null;
+      quickPending = null;
+      begin(ready, invite, found);
+    } catch (e) {
+      if (gone || abort.signal.aborted) return;
+      dropQuick(found, `Couldn't connect to ${found.username}: ${(e as Error).message}. Try again.`);
+    }
+  }
+
+  /** Let go of a match that never became a game. */
+  function dropQuick(found: QuickMatch, message: string): void {
+    if (quickTouch !== null) { clearInterval(quickTouch); quickTouch = null; }
+    quickInvite = null;
+    quickPending = null;
+    flow.cancel(); flow.set("idle");
+    pending = null;
+    lease.release();
+    void progress.release();
+    void endMatch(found.partner);
+    lobby?.closeMatch(found.partner);
+    clearNotice();
+    quickCard.idle(message);
+    drawPanel(lobby?.list ?? []);
+  }
+
+  /** Cancel, Not now, or Leave before the game has started. */
+  function cancelQuick(): void {
+    if (quickSearch) {
+      const abort = quickSearch;
+      quickSearch = null;
+      abort.abort();
+      flow.cancel(); flow.set("idle");
+      quickCard.idle();
+      drawPanel(lobby?.list ?? []);
+      return;
+    }
+    if (quickPending) {
+      const { found, abort } = quickPending;
+      abort.abort();
+      dropQuick(found, "");
+      return;
+    }
+    quickCard.idle();
+  }
+
+  /** The match card over the game: who, which character, and Leave. */
+  function showMatched(found: QuickMatch): void {
+    takeBanner();
+    banner.classList.add("matched-card");
+    const initials = (name: string) => name.slice(0, 2).toUpperCase();
+    const me = initials(auth().profile?.username ?? "");
+    const them = initials(found.username);
+    const role = found.iAmFireboy ? "Fireboy" : "Watergirl";
+    banner.append(
+      el("div", { class: "matched-pair", "aria-hidden": "true" },
+        el("span", { class: "f" }, found.iAmFireboy ? me : them),
+        el("span", { class: "w" }, found.iAmFireboy ? them : me)),
+      el("div", { class: "matched-what" },
+        el("strong", {}, `Matched with ${found.username}`),
+        el("p", {}, "You're ", el("b", { class: found.iAmFireboy ? "fire" : "water" }, role), " · Connecting…")),
+      el("button", { class: "ghost", onclick: () => cancelQuick() }, "Leave"));
+    shell.showNotice();
+  }
+
+  on(befriend, "click", async () => {
+    const q = match?.quick;
+    if (!q) return;
+    befriend.disabled = true;
+    try {
+      await requestFriend(q.username);
+      await lobby?.refreshAfterChange();
+      const friends = lobby?.list.some(f => f.id === q.partner && !f.stranger && f.status === "accepted");
+      befriend.textContent = friends ? `You and ${q.username} are friends` : "Friend request sent";
+      notice("session", friends ? `You and ${q.username} are friends now. Your progress is kept.`
+                                : `Friend request sent. If ${q.username} adds you too, you keep this progress.`);
+    } catch (e) {
+      befriend.disabled = false;
+      notice("session", (e as Error).message);
+    }
+  });
+
+  on(blockButton, "click", async () => {
+    const q = match?.quick;
+    if (!q || !confirm(`Block ${q.username}? You won't be matched with them again.`)) return;
+    blockButton.disabled = true;
+    try {
+      await blockPlayer(q.partner);
+      endSession(`You blocked ${q.username}.`);
+    } catch (e) {
+      notice("session", (e as Error).message);
+    } finally { blockButton.disabled = false; }
+  });
 
   // ---- losing the link, and getting it back ------------------------------
 
@@ -1708,6 +1927,14 @@ export function playScreen(host: HTMLElement): () => void {
     // published an empty topic that matched nothing in anybody's list, and the
     // row for a game that had ended sat there until it aged out.
     const was = match;
+    if (was.quick) {
+      const id = was.quick.partner;
+      if (quickTouch !== null) { clearInterval(quickTouch); quickTouch = null; }
+      void endMatch(id);
+      // After the Quit has had a moment to go out over the match's channel.
+      setTimeout(() => lobby?.closeMatch(id), 1500);
+      befriend.hidden = blockButton.hidden = true;
+    }
     flow.cancel();
     flow.set("ended");
     match = null;
@@ -1823,6 +2050,12 @@ export function playScreen(host: HTMLElement): () => void {
 
     rebuilding?.abort();
     rebuilding = null;
+    quickSearch?.abort(); quickSearch = null;
+    quickPending?.abort.abort();
+    if (quickTouch !== null) { clearInterval(quickTouch); quickTouch = null; }
+    const quickPartner = match?.quick?.partner ?? quickPending?.found.partner;
+    if (quickPartner) { void endMatch(quickPartner); lobby?.closeMatch(quickPartner); }
+    quickPending = null;
     if (beating !== null) { clearInterval(beating); beating = null; }
     // The audience is told here too. Leaving this screen ends the feed, and a
     // row offering a game nobody is publishing is a link to a frozen canvas

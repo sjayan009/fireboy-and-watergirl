@@ -53,6 +53,8 @@ export interface FriendState extends Friend {
   /** What they are doing, or null when they are not online. */
   activity: Activity | null;
   connection: "connecting" | "connected" | "unavailable";
+  /** A Quick Match partner: in the lobby for the match, never in the friends list. */
+  stranger?: boolean;
 }
 
 export interface Ready {
@@ -129,6 +131,12 @@ export class Lobby {
   }
   private activity = new Map<string, Activity>();
   private friends: FriendState[] = [];
+  /**
+   * Quick Match partners, by id. Their channel was opened on the matcher's
+   * topic rather than read from a friendship, so a refresh must neither drop
+   * them from the list nor close it.
+   */
+  private strangers = new Map<string, FriendState>();
   private changeHandlers = new Set<(f: FriendState[]) => void>();
   private inviteHandlers = new Set<(i: Invite, from: FriendState) => void>();
   private resumeHandlers = new Set<(i: Invite, from: FriendState) => void>();
@@ -207,6 +215,11 @@ export class Lobby {
       ...f, activity: this.activity.get(f.id) ?? null,
       connection: this.channels.has(f.id) ? "connected" : "connecting",
     }));
+    // A partner who became a friend mid-match is in the list now, on the same
+    // topic; one who is still a stranger is put back.
+    for (const s of this.strangers.values()) {
+      if (!this.friends.some(f => f.id === s.id)) this.friends.push(s);
+    }
     this.announce();
 
     const accepted = list.filter((f) => f.status === "accepted").sort((a,b) => Number(b.id === this.prioritized) - Number(a.id === this.prioritized));
@@ -222,11 +235,11 @@ export class Lobby {
     const wanted = new Set(accepted.slice(0, MAX_CHANNELS).map((f) => f.id));
     this.wanted = wanted;
     for (const friend of this.friends) {
-      if (!wanted.has(friend.id)) friend.connection = "unavailable";
+      if (!wanted.has(friend.id) && !this.strangers.has(friend.id)) friend.connection = "unavailable";
     }
 
     for (const [id, channel] of this.channels) {
-      if (!wanted.has(id)) {
+      if (!wanted.has(id) && !this.strangers.has(id)) {
         void channel.close(); this.channels.delete(id); this.activity.delete(id);
         const friend = this.friends.find(f => f.id === id);
         if (friend) friend.activity = null;
@@ -268,6 +281,8 @@ export class Lobby {
   async ensureChannel(friendId: string, signal?: AbortSignal): Promise<PairChannel> {
     signal?.throwIfAborted();
     if (this.closing) throw new Error("Lobby closed");
+    const match = this.strangers.has(friendId) ? this.channels.get(friendId) : undefined;
+    if (match) return match;
     if (!this.friends.some(f => f.id === friendId && f.status === "accepted")) await this.cancelWait(this.refresh(), signal);
     signal?.throwIfAborted();
     if (this.closing) throw new Error("Lobby closed");
@@ -314,8 +329,8 @@ export class Lobby {
     this.opening.set(friendId,opening);
     return opening;
   }
-  private async initializeChannel(friendId: string): Promise<PairChannel> {
-    const channel = await PairChannel.open(friendId, this.me, this.abort.signal);
+  private async initializeChannel(friendId: string, topic?: string): Promise<PairChannel> {
+    const channel = await PairChannel.open(friendId, this.me, this.abort.signal, topic);
     if (this.closing) { await channel.close(); throw new Error("Lobby closed"); }
 
     channel.onPresence((all) => {
@@ -514,6 +529,65 @@ export class Lobby {
   setActivity(activity: Activity): void {
     this.me.activity = activity;
     for (const c of this.channels.values()) c.setActivity(activity);
+  }
+
+  // ---- a Quick Match --------------------------------------------------------
+
+  /** Join the pair topic the matcher handed out, and list the partner for the match. */
+  async openMatch(m: { partner: string; username: string; topic: string }, signal?: AbortSignal): Promise<void> {
+    const friend: FriendState = {
+      id: m.partner, username: m.username, status: "accepted", theirMove: false, ourMove: false,
+      blockedByMe: false, activity: null, connection: "connecting", stranger: true,
+    };
+    this.strangers.set(m.partner, friend);
+    if (!this.friends.some(f => f.id === m.partner)) this.friends.push(friend);
+    this.announce();
+    try {
+      const channel = await this.cancelWait(this.initializeChannel(m.partner, m.topic), signal);
+      if (this.closing || !this.strangers.has(m.partner)) { await channel.close(); throw new Error("cancelled"); }
+      this.channels.set(m.partner, channel);
+      friend.connection = "connected";
+      this.announce();
+    } catch (e) {
+      this.closeMatch(m.partner);
+      throw e;
+    }
+  }
+
+  /** Resolve once the partner's presence has arrived on the match topic. */
+  present(id: string, signal: AbortSignal, ms: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let off: (() => void) | null = null;
+      const done = (error?: Error) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); off?.(); signal.removeEventListener("abort", aborted);
+        if (error) reject(error); else resolve();
+      };
+      const aborted = () => done(new Error("cancelled"));
+      const timer = setTimeout(() => done(new Error("they did not arrive")), ms);
+      signal.addEventListener("abort", aborted, { once: true });
+      // `onChange` calls back at once, so it can settle before `off` exists.
+      off = this.onChange(list => { if (list.some(f => f.id === id && f.activity !== null)) done(); });
+      if (settled) off();
+    });
+  }
+
+  /**
+   * The match is over. A partner who is still a stranger leaves the lobby with
+   * their channel; one who became a friend stays, on the topic they already had.
+   */
+  closeMatch(id: string): void {
+    if (!this.strangers.delete(id)) return;
+    const friend = this.friends.find(f => f.id === id);
+    if (friend?.stranger) {
+      this.friends = this.friends.filter(f => f !== friend);
+      const channel = this.channels.get(id);
+      this.channels.delete(id);
+      this.activity.delete(id);
+      void channel?.close();
+    }
+    this.announce();
   }
 
   // ---- starting a game ----------------------------------------------------
@@ -804,7 +878,7 @@ export class Lobby {
     document.removeEventListener("visibilitychange", this.wake);
     window.removeEventListener("focus", this.wake);
     this.abort.abort();
-    this.warmQueue = []; this.wanted.clear();
+    this.warmQueue = []; this.wanted.clear(); this.strangers.clear();
     for (const pending of this.outbound.values()) pending.failed(new Error("signed out"));
     this.outbound.clear();
     const closing = [...this.channels.values()].map((c) => c.close());
