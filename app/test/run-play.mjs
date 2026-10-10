@@ -17,7 +17,7 @@ try {
     await delay(100);
   }
   if(!ready) throw new Error("Fixture server did not become ready");
-  const cases=["app/test/play-experience.mjs","app/test/play-pair.mjs","app/test/social-experience.mjs"];
+  const cases=["app/test/play-experience.mjs","app/test/play-pair.mjs","app/test/social-experience.mjs","app/test/play-guest.mjs"];
   const selected=process.argv[2] ? cases.filter(test=>test.endsWith(`/${process.argv[2]}.mjs`)) : cases;
   if(!selected.length) throw new Error("Unknown play fixture test");
   for(const test of selected) {

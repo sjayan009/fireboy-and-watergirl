@@ -42,6 +42,8 @@ export class PlayShell {
     primaryAction?: HTMLElement;
     /** The pair's link state, shown beside the sound and fullscreen controls. */
     connection?: HTMLElement;
+    /** No account: the friends, leaderboard, username and account controls are left out. */
+    guest?: boolean;
   }) {
     this.screen = el("div", { class: "screen" }, options.canvas);
     const close = el("button", { class: "ghost close-panel", "aria-label": "Close panel", title: "Close panel (Escape)" }, "×");
@@ -134,7 +136,10 @@ export class PlayShell {
     this.observer.observe(this.viewport);
     let collapsed = false;
     try { collapsed = localStorage.getItem(this.preference) === "closed"; } catch { /* optional preference */ }
-    if (this.wide.matches && !collapsed && !options.watching) this.open("friends", false);
+    if (options.guest) {
+      for (const node of [this.friendButton, this.boardButton, copy, accountActions,
+        ...this.tabs.querySelectorAll<HTMLElement>("[data-panel='friends'], [data-panel='leaderboard']")]) node.hidden = true;
+    } else if (this.wide.matches && !collapsed && !options.watching) this.open("friends", false);
     this.fit();
   }
 
