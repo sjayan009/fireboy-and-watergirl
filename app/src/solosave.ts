@@ -40,12 +40,18 @@ export interface SoloProgress {
   close(): void;
 }
 
-export function soloProgress(): SoloProgress {
-  const owner = auth().user?.id ?? "";
-  const local = new LocalSave(keyFor(owner || "anonymous"));
+/**
+ * `deviceKey` makes it a save with no account at all: that key, ownerless, so
+ * `valid()` is false and nothing is ever sent (the play screen's guest mode
+ * passes the guest page's own key, so a guest keeps the progress they have).
+ */
+export function soloProgress(deviceKey?: string): SoloProgress {
+  const owner = deviceKey ? "" : auth().user?.id ?? "";
+  const key = deviceKey ?? keyFor(owner || "anonymous");
+  const local = new LocalSave(key);
   if (owner) adoptLegacy(owner, local);
   const data = local.data as ProgressArrays;
-  const ackKey = keyFor(owner || "anonymous") + ".cloud";
+  const ackKey = key + ".cloud";
   let acknowledged = "";
   try { acknowledged = localStorage.getItem(ackKey) ?? ""; } catch { /* local reports storage errors */ }
   let current = signature(data), persisted = local.lastError ? "" : current;
