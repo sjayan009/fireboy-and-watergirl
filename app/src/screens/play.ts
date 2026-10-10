@@ -28,6 +28,7 @@ import { GameView, STAGE_W, STAGE_H } from "@engine/embed.js";
 import type { Transport } from "@engine/net/transport.js";
 import { drainOutbox, pairProgress } from "../pairsave.js";
 import { soloProgress } from "../solosave.js";
+import { guestOffer, guestOfferText, declineGuest, importGuest } from "../guestimport.js";
 import type { Invite, Showing } from "../net/pairchannel.js";
 import { WatchChannel } from "../net/watchchannel.js";
 import { WatchMirror } from "../net/watch.js";
@@ -161,7 +162,10 @@ export function playScreen(host: HTMLElement): () => void {
   const progress = pairProgress(solo.store);
   // Whatever this browser has, merged with whatever the account has, before the
   // first frame puts a map on screen.
-  void solo.sync().then(() => { if (!gone && !view.level && !progress.shared) progress.refreshSolo(); });
+  void solo.sync().then(() => {
+    if (!gone && !view.level && !progress.shared) progress.refreshSolo();
+    offerGuestProgress();
+  });
 
   // A live region: the connection state changes on the network's schedule
   // rather than on the reader's, so a stall, a reconnection or a friend leaving
@@ -1004,6 +1008,33 @@ export function playScreen(host: HTMLElement): () => void {
     if (FADES.includes(kind)) {
       noticeTimer = setTimeout(() => { noticeTimer = null; clearNotice(kind); }, NOTICE_MS);
     }
+  }
+
+  /**
+   * Ask, once per account, whether progress earned as a guest in this browser
+   * should join it (see guestimport.ts). Skipped while anything else needs the
+   * banner or the player's attention; it is simply asked on a later load.
+   */
+  function offerGuestProgress(): void {
+    const id = auth().user?.id;
+    if (gone || !id || match || pending || quickSearch || quickPending || view.level) return;
+    const offer = guestOffer(id);
+    if (!offer) return;
+    const add = (): void => {
+      void importGuest(solo, id).then(ok => {
+        if (gone) return;
+        if (!ok) {
+          notice("session", "Could not add it yet. Your guest progress is still saved in this browser.",
+            el("button", { class: "ghost", onclick: add }, "Retry"));
+          return;
+        }
+        if (!view.level && !progress.shared) progress.refreshSolo();
+        notice("session", "Added to your account.");
+      });
+    };
+    notice("session", guestOfferText(offer),
+      el("button", { class: "ghost", onclick: add }, "Add to my account"),
+      el("button", { class: "ghost", onclick: () => { declineGuest(id); clearNotice("session"); } }, "Not mine"));
   }
 
   /**

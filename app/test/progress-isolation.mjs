@@ -47,6 +47,7 @@ async function load(path, bindings) {
   return import(`data:text/javascript;base64,${Buffer.from(`const { ${bindings} } = globalThis.__progressTest;\n` + js).toString('base64')}`);
 }
 const { soloProgress } = await load('../src/solosave.ts', 'supabase, auth, LocalSave, normaliseSave, mergeProgress');
+const guestimport = await load('../src/guestimport.ts', 'normaliseSave, mergeProgress');
 const { pairProgress } = await load('../src/pairsave.ts', 'supabase, auth, acknowledge, deliveryFailed, retryDelivery, mergeProgress, pendingFor, remember');
 
 // Startup cloud completion cannot mutate an adopted pair or persist its results as solo.
@@ -145,6 +146,53 @@ await retained.flushNow();
 assert(records.some(p => p.friendId === 'friend' && p.stats[3] === 3));
 assert.equal(retained.storageError, null);
 retained.close(); records.length = 0;
+
+// Guest progress is offered, never imported silently, and only deleted once the cloud has it.
+{
+  const { GUEST_KEY, guestSummary, guestOffer, guestOfferText, declineGuest, importGuest } = guestimport;
+  assert.equal(GUEST_KEY, /GUEST_KEY = "([^"]+)"/.exec(await readFile(new URL('../src/screens/guest.ts', import.meta.url), 'utf8'))[1], 'both modules name the same key');
+  const stats = Array(32).fill(-1), times = Array(32).fill(0);
+  stats[0] = 0; stats[1] = 3; stats[2] = 1; stats[3] = 2; times[1] = 40; times[3] = 70;
+  const guestJson = JSON.stringify({ stats, times, timesString: times.map(() => '') });
+  const reset = () => { storage.clear(); storage.set(GUEST_KEY, guestJson); calls = []; rpcError = null; };
+
+  reset();
+  const summary = guestSummary();
+  assert.equal(summary.cleared, 3); assert.equal(summary.timed, 2);
+  assert.equal(guestOfferText(summary), 'This browser has guest progress: 3 levels cleared, 2 with times. Add it to your account?');
+  assert(guestOfferText({ cleared: 1, timed: 0 }).includes('1 level cleared'));
+  storage.set(GUEST_KEY, JSON.stringify({ stats: stats.map(s => Math.min(s, 0)), times }));
+  assert.equal(guestOffer('a'), null, 'unlocked but uncleared levels are not progress');
+  storage.delete(GUEST_KEY); assert.equal(guestOffer('a'), null, 'no guest data, no prompt');
+  storage.set(GUEST_KEY, '{not json'); assert.equal(guestOffer('a'), null);
+
+  // Add: raises only, syncs, then removes the guest key and records the answer.
+  reset(); owner = 'a';
+  const add = soloProgress();
+  add.store.data.stats[1] = 2; add.store.data.times[1] = 30; add.store.data.stats[5] = 3; add.touched();
+  assert(guestOffer('a')); assert.equal(storage.get(GUEST_KEY), guestJson);
+  assert.equal(await importGuest(add, 'a'), true);
+  assert.equal(add.store.data.stats[1], 3, 'better medal taken'); assert.equal(add.store.data.times[1], 30, 'faster account time kept');
+  assert.equal(add.store.data.stats[5], 3, 'account-only progress kept'); assert.equal(add.store.data.stats[3], 2);
+  assert.equal(add.pending, false); assert.equal(storage.has(GUEST_KEY), false);
+  assert.equal(guestOffer('a'), null); assert(calls.at(-1).args.p_stats[3] === 2, 'merged result was sent');
+  add.close();
+
+  // A failed sync keeps the guest save and offers again.
+  reset(); owner = 'a'; rpcError = { message: 'offline' };
+  const failing = soloProgress();
+  assert.equal(await importGuest(failing, 'a'), false);
+  assert.equal(storage.get(GUEST_KEY), guestJson); assert(guestOffer('a'), 'still offered after a failure');
+  rpcError = null; assert.equal(await importGuest(failing, 'a'), true); assert.equal(storage.has(GUEST_KEY), false);
+  failing.close();
+
+  // Not mine: this account is never asked again, the guest save is untouched, another account is still asked.
+  reset(); declineGuest('a');
+  assert.equal(storage.get(GUEST_KEY), guestJson); assert.equal(guestOffer('a'), null);
+  assert(guestOffer('b'), 'a second account is asked separately');
+  assert.deepEqual([...storage.keys()].filter(k => k.startsWith('fbwg.guestAsked.')), ['fbwg.guestAsked.a']);
+  owner = 'test-owner'; storage.clear();
+}
 
 // Actual solo stepping publishes once per completed authoritative step; disposal releases Stage ownership.
 setSaveStore(() => new MemorySave());
