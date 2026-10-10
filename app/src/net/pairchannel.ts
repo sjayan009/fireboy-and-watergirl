@@ -454,8 +454,9 @@ export class PairChannel {
    * never coming up.
    */
   static async open(friendId: string, me: Presence,
-                    signal?: AbortSignal): Promise<PairChannel> {
-    const topic = await topicFor(me.userId, friendId);
+                    signal?: AbortSignal, known?: string): Promise<PairChannel> {
+    // A Quick Match is handed its topic by the matcher; a friendship reads it.
+    const topic = known ?? await topicFor(me.userId, friendId);
     if (signal?.aborted) throw new Error("cancelled");
     const pair = new PairChannel(
       topic,

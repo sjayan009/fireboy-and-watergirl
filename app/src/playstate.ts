@@ -4,7 +4,7 @@ export interface LevelSelection {
   iAmFireboy: boolean;
 }
 
-export type PlayState = "idle" | "configuring" | "inviting" | "accepting" |
+export type PlayState = "idle" | "configuring" | "searching" | "inviting" | "accepting" |
   "connecting" | "playing" | "between-levels" | "reconnecting" | "ended";
 
 /** Owns asynchronous attempts. A superseded operation can never commit. */
