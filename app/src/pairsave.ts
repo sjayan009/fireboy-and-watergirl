@@ -1,4 +1,3 @@
-import { supabase } from "./supabase.js";
 import { auth } from "./auth.js";
 import type { SaveStore } from "@engine/game/save.js";
 import { acknowledge, deliveryFailed, retryDelivery, mergeProgress, pendingFor, remember, type PendingProgress, type ProgressArrays } from "./outbox.js";
@@ -43,6 +42,9 @@ async function pairRows(owner: string, friendId: string, signal?: AbortSignal): 
   }, { once: true }));
   try {
     const [lo, hi] = pairKey(owner, friendId);
+    // Imported here, not at the top: a guest uses this module and never
+    // downloads the client (auth.ts). Signed in, it is already loaded.
+    const { supabase } = await import("./supabase.js");
     const query = supabase.from("pair_progress").select("node, medal, best_time_s, best_time_str").eq("user_a", lo).eq("user_b", hi).abortSignal(controller.signal);
     const { data, error } = await Promise.race([query, expired]);
     controller.signal.throwIfAborted();
@@ -100,6 +102,7 @@ async function post(p: PendingProgress, keepalive = false, timeoutMs = 8000): Pr
   const deadline = setTimeout(() => controller.abort(), timeoutMs);
   const expired = new Promise<never>((_, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Cloud save timed out. The result remains on this device.")), { once: true }));
   try {
+  const { supabase } = await import("./supabase.js");
   const { data, error } = await Promise.race([supabase.auth.getSession(), expired]);
   if (error || data.session?.user.id !== p.owner || auth().user?.id !== p.owner) throw new DeliveryError("Sign in to the account that earned this result", 401);
   const response = await Promise.race([fetch(__SUPABASE_URL__ + "/rest/v1/rpc/sync_progress", {

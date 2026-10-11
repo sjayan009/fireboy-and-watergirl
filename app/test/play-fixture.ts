@@ -103,4 +103,4 @@ if (screen === "watch") {
   void import("../src/screens/watch.js").then(({watchScreen}) => watchScreen(fixtureHost));
 } else if (screen === "login" || screen === "signup") {
   void import("../src/screens/accounts.js").then(screens => (screen === "login" ? screens.loginScreen : screens.signUpScreen)(fixtureHost));
-} else playScreen(fixtureHost);
+} else void import("../src/online.js").then(online => playScreen(fixtureHost, { online }));

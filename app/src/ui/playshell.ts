@@ -1,6 +1,5 @@
 import { el, on } from "./dom.js";
 import { emblem } from "./brand.js";
-import { settingsScreen } from "../screens/settings.js";
 import { auth, onAuth } from "../auth.js";
 
 export type Panel = "friends" | "setup" | "leaderboard" | "progress" | "menu" | "manage" | "settings";
@@ -49,6 +48,12 @@ export class PlayShell {
      * where the username was.
      */
     guest?: boolean;
+    /**
+     * Draws the Settings panel, handed in rather than imported: Settings is
+     * account-only, and importing it here put it and the Supabase client in
+     * every guest's download. A guest has no way to open the panel.
+     */
+    settings?: (host: HTMLElement) => void;
   }) {
     this.screen = el("div", { class: "screen" }, options.canvas);
     const close = el("button", { class: "ghost close-panel", "aria-label": "Close panel", title: "Close panel (Escape)" }, "×");
@@ -209,7 +214,7 @@ export class PlayShell {
       if (current) tab.setAttribute("aria-current", "true"); else tab.removeAttribute("aria-current");
     }
     if (panel === "settings" && !this.panels.settings) {
-      this.panels.settings = el("div"); settingsScreen(this.panels.settings);
+      this.panels.settings = el("div"); this.options.settings?.(this.panels.settings);
     }
     if (changed) this.content.replaceChildren(this.panels[panel]);
     this.syncExpanded(); this.syncModal();
