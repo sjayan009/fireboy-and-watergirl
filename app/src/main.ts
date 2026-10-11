@@ -5,7 +5,7 @@
  * a sign-in form flash past on their way to the game.
  */
 import "./ui/styles.css";
-import { auth, onAuth, startAuth } from "./auth.js";
+import { auth, onAuth, preloadAuth, startAuth } from "./auth.js";
 import { rerender, startRouter, Route } from "./router.js";
 import {
   loginScreen, passwordScreen, reportSignInTrouble, resetScreen, signUpScreen,
@@ -42,29 +42,41 @@ function lazy(load: () => Promise<Route["render"]>): Route["render"] {
  * guest on a computer that may be shared.
  */
 const play = lazy(async () => {
-  const { playScreen } = await import("./screens/play.js");
+  // Signed in, the account-only half (online.ts) starts downloading NOW, beside
+  // the screen and the engine rather than after them. A guest never asks for it.
+  const online = auth().stage === "out" ? null : import("./online.js");
+  const [{ playScreen }, loaded] = await Promise.all([import("./screens/play.js"), online]);
   return (host) => {
     const stage = auth().stage;
+    // Signed in while the guest screen was downloading: build it again, which
+    // fetches the online half this time.
+    if (stage !== "out" && !loaded) { rerender(); return; }
     const off = onAuth(next => {
       if (next.stage === stage) return;
       if (next.stage === "in") rerender();
       else if (next.stage === "out") location.hash = "/login";
     });
-    const end = playScreen(host, { guest: stage === "out" });
+    const end = playScreen(host, loaded && stage !== "out" ? { online: loaded } : { guest: true });
     return () => { off(); end(); };
   };
 });
+
+/**
+ * A form whose next step is the Supabase client, which a signed-out visitor has
+ * not downloaded (see `startAuth`): fetch it while they type, not after Submit.
+ */
+const warm = (render: Route["render"]): Route["render"] => (host) => { preloadAuth(); return render(host); };
 
 const routes: Route[] = [
   // The bare site address, signed out: the landing page. Signed in, the router
   // sends the same address straight to /play, because this admits "out" only.
   { path: "/", stages: ["out"], render: lazy(async () => (await import("./screens/landing.js")).landingScreen) },
-  { path: "/login", stages: ["out"], render: loginScreen },
-  { path: "/signup", stages: ["out"], render: signUpScreen },
+  { path: "/login", stages: ["out"], render: warm(loginScreen) },
+  { path: "/signup", stages: ["out"], render: warm(signUpScreen) },
   // Signed-in stages too, because the reset code signs this tab in from the
   // reset screen itself; admitting them keeps the router from moving the tab
   // somewhere else before the screen sends it on to /password.
-  { path: "/reset", stages: ["out", "in", "nameless"], render: resetScreen },
+  { path: "/reset", stages: ["out", "in", "nameless"], render: warm(resetScreen) },
   // The old address of the guest page, kept for links already out there. It
   // is the same screen as /play signed out; signed in, the router sends it on
   // to /play, which this does not admit.
@@ -75,7 +87,7 @@ const routes: Route[] = [
   // used to vanish. Confirmation means no session until the link is followed,
   // so a person who has just signed up is "out" -- and this route admitting
   // only "unverified" is what bounced every one of them to /login in silence.
-  { path: "/verify", stages: ["out", "unverified"], render: verifyScreen },
+  { path: "/verify", stages: ["out", "unverified"], render: warm(verifyScreen) },
   { path: "/unlock", stages: ["locked"], render: unlockScreen },
   { path: "/username", stages: ["nameless"], render: usernameScreen },
   { path: "/play", stages: ["in", "out"], render: play },

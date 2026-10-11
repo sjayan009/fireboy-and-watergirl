@@ -1,5 +1,4 @@
 /** Canonical account progress. The engine uses a separate projection. */
-import { supabase } from "./supabase.js";
 import { auth } from "./auth.js";
 import { LocalSave, normaliseSave } from "@engine/game/save.js";
 import type { SaveStore } from "@engine/game/save.js";
@@ -93,6 +92,9 @@ export function soloProgress(deviceKey?: string): SoloProgress {
           const expired = new Promise<never>((_, reject) => {
             deadline = setTimeout(() => { controller.abort(); reject(new Error("Cloud save timed out. Your local result is preserved.")); }, 12000);
           });
+          // Imported here, not at the top: a guest uses this module and never
+          // downloads the client (auth.ts). Signed in, it is already loaded.
+          const { supabase } = await import("./supabase.js");
           const request = supabase.rpc("sync_solo_progress", { p_stats: data.stats.slice(0, 32), p_times: data.times.slice(0, 32) });
           // Pin the token to the canonical owner across the SDK's asynchronous fetch.
           if (typeof request.setHeader === "function") {

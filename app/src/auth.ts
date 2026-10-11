@@ -30,8 +30,83 @@
  * So the two questions the boot sequence asks now have three answers each, and
  * the third one is a screen that says so and offers to try again.
  */
-import { scratchClient, supabase } from "./supabase.js";
 import type { Session, User } from "@supabase/supabase-js";
+
+/**
+ * The Supabase client, downloaded the first time something needs it.
+ *
+ * It is 217 kB, a quarter of everything a visitor fetches, and most visitors
+ * never use it: the landing page and guest play are signed out and talk to
+ * nobody. So it is not imported until there is a session to read (see
+ * `startAuth`) or somebody acts on an account -- signs in, signs up, types a
+ * code. A failed download is forgotten, so the next attempt tries again.
+ */
+type Supabase = typeof import("./supabase.js");
+let loaded: Promise<Supabase> | null = null;
+function loadClient(): Promise<Supabase> {
+  return loaded ??= import("./supabase.js").catch((e: unknown) => { loaded = null; throw e; });
+}
+
+/** Start downloading the client early, on a screen whose next step needs it. */
+export function preloadAuth(): void {
+  loadClient().catch(() => { /* the action that needs it reports the failure */ });
+}
+
+/**
+ * Where supabase-js keeps this project's session: its own default name, pinned
+ * in supabase.ts so the two cannot drift apart. Read here without the client,
+ * which is how a visitor with no session is known to have none.
+ */
+export const SESSION_KEY = (() => {
+  try { return `sb-${new URL(__SUPABASE_URL__).hostname.split(".")[0]}-auth-token`; } catch { return ""; }
+})();
+
+/**
+ * Could the client find anybody signed in? Only if a session is stored, or the
+ * address carries one back from an emailed link or Google (`?code=`,
+ * `?token_hash=`, or `?error=` for a refusal). If storage cannot be read, the
+ * answer is yes: loading the client for nothing costs a download, while a wrong
+ * "no" would show a signed-in person the landing page.
+ */
+function mayBeSignedIn(): boolean {
+  if (location.search) return true;
+  try { return !SESSION_KEY || localStorage.getItem(SESSION_KEY) !== null; } catch { return true; }
+}
+
+/**
+ * Read the session the client holds and hear every change to it from then on.
+ *
+ * Once per page, whenever the client is first wanted: at boot when somebody may
+ * be signed in, otherwise on the first account action. Every action that can
+ * change the session goes through `client()`, so the listener that turns a
+ * sign-in into a new stage is always up before the sign-in happens.
+ */
+let listening: Promise<void> | null = null;
+function listen(): Promise<void> {
+  removeEventListener("storage", signedInElsewhere);
+  return listening ??= (async () => {
+    const { supabase } = await loadClient();
+    await redeemTokenHash(supabase);
+    const { data } = await supabase.auth.getSession();
+    await refresh(data.session);
+    supabase.auth.onAuthStateChange((_event, session) => { void refresh(session); });
+  })().catch((e: unknown) => { listening = null; throw e; });
+}
+
+/** The client, listened to. For everything except `refresh`'s own lookups. */
+async function client() {
+  await listen();
+  return (await loadClient()).supabase;
+}
+
+/**
+ * Another tab signed in while this one had no client to hear it. The client's
+ * own cross-tab channel only exists once it is loaded, so the session landing
+ * in storage is the signal instead; the storage event fires only in OTHER tabs.
+ */
+function signedInElsewhere(e: StorageEvent): void {
+  if (e.key === SESSION_KEY && e.newValue) void listen();
+}
 
 export interface Profile {
   id: string;
@@ -92,6 +167,7 @@ type Answer<T> = { ok: true; value: T } | { ok: false; why: string };
  */
 async function needsSecondFactor(): Promise<Answer<boolean>> {
   try {
+    const { supabase } = await loadClient();
     const { data, error } =
       await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
     if (error) return { ok: false, why: error.message };
@@ -106,6 +182,7 @@ async function needsSecondFactor(): Promise<Answer<boolean>> {
 }
 
 async function fetchProfile(id: string): Promise<Answer<Profile | null>> {
+  const { supabase } = await loadClient();
   const { data, error } = await supabase
     .from("profiles")
     .select("id, username, display_name, avatar_url")
@@ -163,6 +240,7 @@ export async function refresh(session: Session | null): Promise<AuthState> {
 
 /** Ask again, with whatever session the client currently holds. */
 export async function retryAuth(): Promise<AuthState> {
+  const supabase = await client();
   const { data } = await supabase.auth.getSession();
   return refresh(data.session);
 }
@@ -181,7 +259,7 @@ export async function retryAuth(): Promise<AuthState> {
  * it was opened on the phone that signed up or the laptop beside it -- which
  * is, in practice, what people do.
  */
-async function redeemTokenHash(): Promise<void> {
+async function redeemTokenHash(supabase: Supabase["supabase"]): Promise<void> {
   const params = new URLSearchParams(location.search);
   const token_hash = params.get("token_hash");
   const type = params.get("type");
@@ -210,12 +288,13 @@ function askedForLink(): boolean {
   try { return Date.now() - Number(localStorage.getItem(ASKED_KEY) ?? 0) < 86_400_000; } catch { return false; }
 }
 
-/** Start listening. Resolves once the first state is known. */
+/**
+ * Start listening. Resolves once the first state is known -- for a visitor with
+ * no session, at once and without the client: the state is already `out`.
+ */
 export async function startAuth(): Promise<AuthState> {
-  await redeemTokenHash();
-  const { data } = await supabase.auth.getSession();
-  await refresh(data.session);
-  supabase.auth.onAuthStateChange((_event, session) => { void refresh(session); });
+  if (mayBeSignedIn()) await listen();
+  else addEventListener("storage", signedInElsewhere);
   return state;
 }
 
@@ -269,6 +348,7 @@ function landing(intent?: string): string {
  */
 export async function signUp(email: string, password: string,
                              captchaToken?: string): Promise<{ existing: boolean }> {
+  const supabase = await client();
   const { data, error } = await supabase.auth.signUp({
     email, password,
     options: { emailRedirectTo: landing(), captchaToken },
@@ -301,6 +381,7 @@ export type CodeKind = "signup" | "recovery" | "email_change";
  */
 export async function verifyEmailCode(kind: CodeKind, email: string,
                                       code: string): Promise<void> {
+  const supabase = await client();
   const { error } = await supabase.auth.verifyOtp({ email, token: code, type: kind });
   if (!error) return;
   if (error.status === 429 || error.code === "over_request_rate_limit") {
@@ -314,6 +395,7 @@ export async function verifyEmailCode(kind: CodeKind, email: string,
 
 export async function signIn(email: string, password: string,
                              captchaToken?: string): Promise<void> {
+  const supabase = await client();
   const { error } = await supabase.auth.signInWithPassword({
     email, password, options: { captchaToken },
   });
@@ -338,6 +420,7 @@ export async function signIn(email: string, password: string,
  * returns, exchanged by the same `detectSessionInUrl` at boot. See `landing`.
  */
 export async function signInWithGoogle(): Promise<void> {
+  const supabase = await client();
   const { error } = await supabase.auth.signInWithOAuth({
     provider: "google",
     options: { redirectTo: landing() },
@@ -368,6 +451,7 @@ export async function signInWithGoogle(): Promise<void> {
  */
 export async function hasPassword(): Promise<boolean> {
   try {
+    const supabase = await client();
     const { data, error } = await supabase.rpc("has_password");
     if (error || data === null || data === undefined) {
       // Includes the window where this release is live and the migration is
@@ -398,6 +482,7 @@ export function onBeforeSignOut(fn: () => Promise<void>): void {
 }
 
 export async function signOut(): Promise<void> {
+  const supabase = await client();
   for (const close of closers) {
     try {
       await close();
@@ -412,6 +497,7 @@ export async function signOut(): Promise<void> {
 
 export async function resendVerification(email: string,
                                          captchaToken?: string): Promise<void> {
+  const supabase = await client();
   const { error } = await supabase.auth.resend({
     type: "signup", email,
     options: { emailRedirectTo: landing(), captchaToken },
@@ -429,6 +515,7 @@ export async function resendVerification(email: string,
 
 export async function sendPasswordReset(email: string,
                                         captchaToken?: string): Promise<void> {
+  const supabase = await client();
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: landing("password"), captchaToken,
   });
@@ -438,6 +525,7 @@ export async function sendPasswordReset(email: string,
 /** Mail both codes for a pending address change again. */
 export async function resendEmailChange(newEmail: string,
                                         captchaToken?: string): Promise<void> {
+  const supabase = await client();
   const { error } = await supabase.auth.resend({
     type: "email_change", email: newEmail, options: { captchaToken },
   });
@@ -471,6 +559,7 @@ export class ReauthenticationNeeded extends Error {
  */
 export async function setPassword(password: string, nonce?: string,
                                   current?: string): Promise<boolean> {
+  const supabase = await client();
   const { error } = await supabase.auth.updateUser({
     password,
     ...(nonce ? { nonce } : {}),
@@ -491,6 +580,7 @@ export async function setPassword(password: string, nonce?: string,
 
 /** Mail a six-digit code that proves the person at the keyboard has the inbox. */
 export async function sendReauthenticationCode(): Promise<void> {
+  const supabase = await client();
   const { error } = await supabase.auth.reauthenticate();
   fail(error);
 }
@@ -514,7 +604,8 @@ async function proveCurrentPassword(current: string,
                                    captchaToken?: string): Promise<void> {
   const email = state.user?.email;
   if (!email) throw new Error("not signed in");
-  const scratch = scratchClient();
+  await listen();
+  const scratch = (await loadClient()).scratchClient();
   const { error } = await scratch.auth.signInWithPassword({
     email, password: current, options: { captchaToken },
   });
@@ -565,6 +656,7 @@ export async function changePassword(current: string, next: string,
  */
 export async function changeEmail(email: string, current: string | null,
                                   captchaToken?: string): Promise<void> {
+  const supabase = await client();
   if (current !== null) await proveCurrentPassword(current, captchaToken);
   const { error } = await supabase.auth.updateUser(
     { email }, { emailRedirectTo: landing("email") });
@@ -581,6 +673,7 @@ export async function changeEmail(email: string, current: string | null,
  */
 export async function signOutOtherDevices(): Promise<boolean> {
   try {
+    const supabase = await client();
     const { error } = await supabase.auth.signOut({ scope: "others" });
     if (error) console.warn("could not sign out other sessions:", error.message);
     return !error;
@@ -633,6 +726,7 @@ export function arrivedByResetLink(withinMs = 15 * 60 * 1000): boolean {
  * account that no longer exists.
  */
 export async function deleteAccount(): Promise<void> {
+  const supabase = await client();
   const { error } = await supabase.rpc("delete_me");
   fail(error);
   await signOut();
@@ -654,6 +748,7 @@ export async function deleteAccount(): Promise<void> {
  * RPC has to follow it.
  */
 export async function claimUsername(username: string): Promise<Profile> {
+  const supabase = await client();
   const { data, error } = await supabase.rpc("claim_username", {
     new_username: username,
   });
@@ -679,12 +774,14 @@ export interface Enrolment {
 }
 
 export async function listFactors() {
+  const supabase = await client();
   const { data, error } = await supabase.auth.mfa.listFactors();
   fail(error);
   return data?.totp ?? [];
 }
 
 export async function enrolTotp(): Promise<Enrolment> {
+  const supabase = await client();
   const { data, error } = await supabase.auth.mfa.enroll({
     factorType: "totp",
     friendlyName: `authenticator-${Date.now()}`,
@@ -703,6 +800,7 @@ export async function enrolTotp(): Promise<Enrolment> {
  * verify -- which is why one function serves both.
  */
 export async function verifyTotp(factorId: string, code: string): Promise<void> {
+  const supabase = await client();
   const { data: challenge, error: cErr } =
     await supabase.auth.mfa.challenge({ factorId });
   fail(cErr);
@@ -722,12 +820,14 @@ export async function verifyTotp(factorId: string, code: string): Promise<void> 
  * would mean one somebody wrote down a year ago still works.
  */
 export async function generateRecoveryCodes(): Promise<string[]> {
+  const supabase = await client();
   const { data, error } = await supabase.rpc("generate_recovery_codes");
   fail(error);
   return (data as string[]) ?? [];
 }
 
 export async function recoveryCodesLeft(): Promise<number> {
+  const supabase = await client();
   const { data, error } = await supabase.rpc("recovery_codes_left");
   fail(error);
   return (data as number) ?? 0;
@@ -745,6 +845,7 @@ export async function recoveryCodesLeft(): Promise<number> {
  * `needsSecondFactor` is false and `locked` becomes `in`.
  */
 export async function redeemRecoveryCode(code: string): Promise<void> {
+  const supabase = await client();
   const { data, error } = await supabase.rpc("redeem_recovery_code", { code });
   fail(error);
   if (data !== true) throw new Error("that is not one of your recovery codes");
@@ -761,6 +862,7 @@ export async function redeemRecoveryCode(code: string): Promise<void> {
 }
 
 export async function unenrolTotp(factorId: string): Promise<void> {
+  const supabase = await client();
   const { error } = await supabase.auth.mfa.unenroll({ factorId });
   fail(error);
 }
