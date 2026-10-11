@@ -18,24 +18,13 @@
  * The bar is the search window, not progress: matchmaking has none to show.
  */
 import { el } from "./dom.js";
+import { moveTo, spring } from "./spring.js";
 import type { Role } from "../quickmatch.js";
 
 const EASE_OUT = "cubic-bezier(.23,1,.32,1)";
 const reduce = matchMedia("(prefers-reduced-motion: reduce)");
 const FIRE = "M23 4C24 15 9 17 9 29a14 14 0 0 0 14 14V30c-6-1-6-7-3-10 1 4 3 5 3 5V4Z";
 const WATER = "M29 6c0 9 12 14 12 23a14 14 0 0 1-14 14V29c7-2 8-7 2-13V6Z";
-
-/** An Apple-style spring (damping ratio, response in seconds) as CSS `linear()`. */
-function spring(z: number, response: number): { easing: string; duration: number } {
-  const w = 2 * Math.PI / response, wd = w * Math.sqrt(1 - z * z), points: string[] = [];
-  let t = 0;
-  for (; t < 3; t += 1 / 60) {
-    const x = 1 - Math.exp(-z * w * t) * (Math.cos(wd * t) + (z * w / wd) * Math.sin(wd * t));
-    points.push(x.toFixed(4));
-    if (Math.abs(1 - x) < 0.002 && t > response) break;
-  }
-  return { easing: `linear(${points.join(",")})`, duration: Math.round(t * 1000) };
-}
 
 /** One comet. Every move begins from where it is on screen, never from a target. */
 class Orbit {
@@ -129,14 +118,32 @@ export class QuickCard {
   private swapTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly o: QuickCardOptions) {
-    const roles: [Role, string, string][] = [["fireboy", "Fireboy", "fire"], ["either", "Either", ""], ["watergirl", "Watergirl", "water"]];
-    const seg = el("div", { class: "qm-seg", role: "group", "aria-label": "Play as" });
-    for (const [role, label, tone] of roles) {
-      seg.append(el("button", { type: "button", class: tone, "aria-pressed": String(role === this.role), onclick: (e: Event) => {
+    /*
+     * The character picker, as a real segmented control: one thumb that slides
+     * between the options on a spring and wears the colour of the choice --
+     * ember for Fireboy, water for Watergirl, the two blended for Either -- so
+     * what is picked never reads as plain white. Each option answers the
+     * pointer in its own colour. A radio group, so it is announced as one.
+     */
+    const roles: [Role, string, string][] = [["fireboy", "Fireboy", "fire"], ["either", "Either", "either"], ["watergirl", "Watergirl", "water"]];
+    const thumb = el("span", { class: "qm-thumb", "aria-hidden": "true" });
+    const seg = el("div", { class: "qm-seg", role: "radiogroup", "aria-label": "Play as", "data-pick": this.role }, thumb);
+    const slide = spring(.82, .32);
+    const place = (i: number, animate: boolean) => {
+      const to = `translateX(${i * 100}%)`;
+      if (animate && !matchMedia("(prefers-reduced-motion: reduce)").matches) moveTo(thumb, to, slide);
+      else thumb.style.transform = to;
+    };
+    roles.forEach(([role, label, tone], i) => {
+      seg.append(el("button", { type: "button", role: "radio", class: tone, "aria-checked": String(role === this.role), onclick: (e: Event) => {
+        if (this.role === role) return;
         this.role = role;
-        for (const b of seg.children) b.setAttribute("aria-pressed", String(b === e.currentTarget));
-      } }, label));
-    }
+        seg.dataset.pick = role;
+        for (const b of seg.querySelectorAll("button")) b.setAttribute("aria-checked", String(b === e.currentTarget));
+        place(i, true);
+      } }, tone === "either" ? el("span", { class: "split" }, label) : label));
+    });
+    place(roles.findIndex(([role]) => role === this.role), false);
     this.go = el("button", { type: "button", class: "qm-go", onclick: () => o.onStart(this.role) }, "Quick Match");
     this.note = el("p", { class: "note qm-note", role: "status", hidden: true });
     this.idleView = el("div", { class: "qm-view" },
