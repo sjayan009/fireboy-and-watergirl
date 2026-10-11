@@ -5,8 +5,8 @@
  * parental consent, which this app does not collect. The screen asks for a
  * birth month and year without hinting at the cut-off, and keeps only the
  * answer's outcome in this browser -- never the date -- so pressing Back and
- * trying a different year shows the same refusal. Local play (`guest.ts`)
- * needs no account and stays open to everyone.
+ * trying a different year shows the same refusal. Playing as a guest
+ * (`#/play` signed out) needs no account and stays open to everyone.
  */
 import { el, form, note } from "./ui/dom.js";
 
@@ -36,7 +36,7 @@ const refused = () => read() === "under";
 export function ageGate(onCleared: () => void): HTMLElement {
   const refusal = () => el("div", { class: "age-refusal" },
     note(`Online accounts are for players ${MIN_AGE} and older. You can still play together on this computer, no account needed.`),
-    el("a", { class: "secondary", href: "#/local" }, "Play on This Computer"));
+    el("a", { class: "secondary", href: "#/play" }, "Play on This Computer"));
   if (refused()) return refusal();
 
   const year = new Date().getFullYear();

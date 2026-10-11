@@ -1,7 +1,7 @@
 /**
  * Offering a signed-in player the progress a guest earned in this browser.
  *
- * Never automatic: `#/local` progress is kept under its own key precisely so
+ * Never automatic: guest progress is kept under its own key precisely so
  * that on a shared computer the next person to sign in does not inherit
  * somebody else's medals. The player is asked, once per account, and only an
  * explicit "Add" moves anything.
@@ -10,9 +10,9 @@ import { normaliseSave } from "@engine/game/save.js";
 import { mergeProgress, type ProgressArrays } from "./outbox.js";
 import type { SoloProgress } from "./solosave.js";
 
-// Same value as `GUEST_KEY` in screens/guest.ts. Not imported from there: that
-// module is the guest page itself, and the signed-in app must not pull it in.
-// (app/test/progress-isolation.mjs fails if the two ever differ.)
+// Where the play screen keeps a guest's progress -- the key the old guest page
+// at `#/local` used, so progress made there carries over. Never change it
+// (app/test/progress-isolation.mjs fails if it does).
 export const GUEST_KEY = "FBCookie:guest";
 const askedKey = (userId: string) => `fbwg.guestAsked.${userId}`;
 

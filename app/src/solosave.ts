@@ -43,7 +43,7 @@ export interface SoloProgress {
 /**
  * `deviceKey` makes it a save with no account at all: that key, ownerless, so
  * `valid()` is false and nothing is ever sent (the play screen's guest mode
- * passes the guest page's own key, so a guest keeps the progress they have).
+ * passes the guest key, so a guest keeps the progress they have).
  */
 export function soloProgress(deviceKey?: string): SoloProgress {
   const owner = deviceKey ? "" : auth().user?.id ?? "";

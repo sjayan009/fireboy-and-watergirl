@@ -5,8 +5,8 @@
  * a sign-in form flash past on their way to the game.
  */
 import "./ui/styles.css";
-import { startAuth } from "./auth.js";
-import { startRouter, Route } from "./router.js";
+import { auth, onAuth, startAuth } from "./auth.js";
+import { rerender, startRouter, Route } from "./router.js";
 import {
   loginScreen, passwordScreen, reportSignInTrouble, resetScreen, signUpScreen,
   troubleScreen, unlockScreen, usernameScreen, verifyScreen,
@@ -30,6 +30,31 @@ function lazy(load: () => Promise<Route["render"]>): Route["render"] {
   };
 }
 
+/**
+ * The play screen, for whoever is in front of it: signed in, the full screen;
+ * signed out, the same screen as a guest (see the guest note in play.ts).
+ *
+ * The router leaves a screen up while its route still admits the stage, and
+ * /play admits both -- so the change between them is made here. Signing in
+ * (in this tab or another) builds it again signed in, where the guest-import
+ * card offers the progress just made. Signing out goes to the sign-in form, as
+ * it always has: leaving an account is not a request to start playing as a
+ * guest on a computer that may be shared.
+ */
+const play = lazy(async () => {
+  const { playScreen } = await import("./screens/play.js");
+  return (host) => {
+    const stage = auth().stage;
+    const off = onAuth(next => {
+      if (next.stage === stage) return;
+      if (next.stage === "in") rerender();
+      else if (next.stage === "out") location.hash = "/login";
+    });
+    const end = playScreen(host, { guest: stage === "out" });
+    return () => { off(); end(); };
+  };
+});
+
 const routes: Route[] = [
   // The bare site address, signed out: the landing page. Signed in, the router
   // sends the same address straight to /play, because this admits "out" only.
@@ -40,8 +65,10 @@ const routes: Route[] = [
   // reset screen itself; admitting them keeps the router from moving the tab
   // somewhere else before the screen sends it on to /password.
   { path: "/reset", stages: ["out", "in", "nameless"], render: resetScreen },
-  // Two on one keyboard with no account; signed in, /play does the same.
-  { path: "/local", stages: ["out"], render: lazy(async () => (await import("./screens/guest.js")).guestScreen) },
+  // The old address of the guest page, kept for links already out there. It
+  // is the same screen as /play signed out; signed in, the router sends it on
+  // to /play, which this does not admit.
+  { path: "/local", stages: ["out"], render: play },
   // Reached from the emailed link, which arrives with a session already.
   { path: "/password", stages: ["in", "nameless"], render: passwordScreen },
   // "out" as well as "unverified", and that is the whole fix for a sign-up that
@@ -51,7 +78,7 @@ const routes: Route[] = [
   { path: "/verify", stages: ["out", "unverified"], render: verifyScreen },
   { path: "/unlock", stages: ["locked"], render: unlockScreen },
   { path: "/username", stages: ["nameless"], render: usernameScreen },
-  { path: "/play", stages: ["in"], render: lazy(async () => (await import("./screens/play.js")).playScreen) },
+  { path: "/play", stages: ["in", "out"], render: play },
   { path: "/friends", stages: ["in"], render: lazy(async () => (await import("./screens/friends.js")).friendsScreen) },
   { path: "/watch", stages: ["in"], render: lazy(async () => (await import("./screens/watch.js")).watchScreen) },
   { path: "/settings", stages: ["in"], render: lazy(async () => (await import("./screens/settings.js")).settingsScreen) },

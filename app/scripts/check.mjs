@@ -190,14 +190,26 @@ console.log("\nevery asset the manifests name is there");
 
 console.log("\nthe download is the size it should be");
 {
-  // The signed-out pages are budgeted on their own: the landing page, local
-  // play (#/local) and the landing stylesheets the two share (Rollup splits
-  // those into `base-*.js`). They are lazy, and only a signed-out visitor
-  // downloads them -- a player never does, so it would be wrong to let them
-  // eat the game's allowance, or to raise the game's allowance to fit them.
+  // The landing page is budgeted on its own, with the landing stylesheets
+  // (`base-*.js` whenever Rollup splits them out). It is lazy, and only a
+  // signed-out visitor at the bare address downloads it -- a player never
+  // does, so it would be wrong to let it eat the game's allowance, or to
+  // raise the game's allowance to fit it.
+  //
+  // Guest play is not on this side any more. It used to be its own small page
+  // (`guest-*.js`, sharing `base-*.js` with the landing page); since the guest
+  // page was retired, a signed-out player at #/play runs the same play screen
+  // as an account and downloads the game's own chunks. So guests are counted,
+  // and capped, by the game's budget below, which is the honest place for
+  // them. Measured at that change: the landing side went from 91 kB (landing
+  // + guest + base) to 82 kB (landing, with the landing styles now inlined in
+  // it), and the game from 886 to 891 kB for the guest panels -- under the
+  // same 905 kB ceiling, which did not move. A guest at #/play loads 888 kB of
+  // it (all but the landing and watch chunks), against about 760 kB for the
+  // old guest page.
   const all = walk(join(DIST, "assets")).filter((p) => /\.(js|css)$/.test(p));
   const landing = all.filter((p) => /[\\/]landing-[\w-]+\.js$/.test(p));
-  const signedOut = all.filter((p) => /[\\/](landing|guest|base)-[\w-]+\.js$/.test(p));
+  const signedOut = all.filter((p) => /[\\/](landing|base)-[\w-]+\.js$/.test(p));
   const code = all.filter((p) => !signedOut.includes(p));
   const bytes = code.reduce((n, p) => n + statSync(p).size, 0);
   // Audited networking rollout adds the runtime broker client, path manager,
@@ -213,13 +225,13 @@ console.log("\nthe download is the size it should be");
   check(`under the ${BUDGET / 1000} kB budget`, bytes < BUDGET,
         `${(bytes / 1000).toFixed(0)} kB`);
 
-  // Markup, styles and behaviour of the whole page in one file (~71 kB), plus
-  // local play and their shared styles (~15 kB).
+  // Markup, styles and behaviour of the whole page in one file (~82 kB with
+  // its stylesheets, now that nothing else shares them).
   const LANDING_BUDGET = 100_000;
   const landingBytes = signedOut.reduce((n, p) => n + statSync(p).size, 0);
   check("the landing page is its own chunk", landing.length === 1,
         `${landing.length} files`);
-  console.log(`  ${(landingBytes / 1000).toFixed(0)} kB for the landing page and local play, ` +
+  console.log(`  ${(landingBytes / 1000).toFixed(0)} kB for the landing page, ` +
               `fetched only by signed-out visitors`);
   check(`under its own ${LANDING_BUDGET / 1000} kB budget`,
         landingBytes < LANDING_BUDGET, `${(landingBytes / 1000).toFixed(0)} kB`);
