@@ -35,6 +35,9 @@ const GRADES: Record<number, string> = { 3: "A", 2: "B", 1: "C" };
 interface Row { rank: number; a_username: string; b_username: string; medal: number; best_time_str: string; is_mine: boolean }
 interface Standing { node: number; rank: number; entries: number }
 
+/** The board's heading mark; the guest's locked board wears it too. */
+export const TROPHY = '<svg width="20" height="20" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2" xmlns="http://www.w3.org/2000/svg"><path d="M9 5h14v7a7 7 0 0 1-14 0V5Zm7 14v7m-6 2h12M9 8H4v3a6 6 0 0 0 7 6m12-9h5v3a6 6 0 0 1-7 6"/><path d="m16 8 1 2 2 .3-1.5 1.5.4 2.2-1.9-1-1.9 1 .4-2.2-1.5-1.5 2-.3 1-2Z" fill="currentColor" stroke="none"/></svg>';
+
 export class Leaderboard {
   private mode = el("select", { class: "pick", "aria-label": "Leaderboard game mode" }, ...modes.map(([value,label]) => el("option", {value},label)));
   private num = el("select", { class: "pick", "aria-label": "Leaderboard level" });
@@ -72,7 +75,7 @@ export class Leaderboard {
      */
     host.append(
       el("h3", { class: "board-title" },
-        el("span", {class:"trophy-mark", "aria-hidden":"true", html:'<svg width="20" height="20" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2" xmlns="http://www.w3.org/2000/svg"><path d="M9 5h14v7a7 7 0 0 1-14 0V5Zm7 14v7m-6 2h12M9 8H4v3a6 6 0 0 0 7 6m12-9h5v3a6 6 0 0 1-7 6"/><path d="m16 8 1 2 2 .3-1.5 1.5.4 2.2-1.9-1-1.9 1 .4-2.2-1.5-1.5 2-.3 1-2Z" fill="currentColor" stroke="none"/></svg>'}),
+        el("span", {class:"trophy-mark", "aria-hidden":"true", html:TROPHY}),
         "Two players. One great time."),
       el("div", {class:"board-filters"}, el("label", {}, "Mode", this.mode), el("label", {}, "Level", this.num)),
       this.results,

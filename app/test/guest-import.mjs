@@ -1,9 +1,12 @@
 /**
  * Guest progress joining an account, in a real browser against a local stack.
  *
- * A browser that played at `#/local` signs in. The account is asked once; Add
- * puts the guest's levels into the account on the server and only then clears
- * the guest copy, and Not mine leaves the guest copy exactly as it was.
+ * A browser that played as a guest (`#/play` signed out) signs in from the
+ * guest screen's own "Sign in". The account is asked once; Add puts the guest's
+ * levels into the account on the server and only then clears the guest copy,
+ * and Not mine leaves the guest copy exactly as it was. A guest screen left
+ * open while another tab signs in becomes the signed-in screen in place, and
+ * signing out of it goes to the sign-in form, not back to guest play.
  */
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -59,8 +62,11 @@ async function startVite() {
   }
 }
 
-async function signIn(page, user) {
-  await page.goto(URL_ + "#/login", { waitUntil: "load" });
+async function signIn(page, user, { fromGuest = false } = {}) {
+  if (fromGuest) {
+    await page.goto(URL_ + "#/play", { waitUntil: "load" });
+    await page.locator(".online-card").getByRole("link", { name: "Sign in" }).click({ timeout: 30000 });
+  } else await page.goto(URL_ + "#/login", { waitUntil: "load" });
   await page.waitForSelector("input[type=email]", { timeout: 30000 });
   await page.fill("input[type=email]", user.email);
   await page.fill("input[type=password]", user.password);
@@ -71,7 +77,7 @@ async function signIn(page, user) {
   await page.waitForSelector("#stage", { timeout: 30000 });
 }
 
-// Two cleared levels, one with a time, as `#/local` would have saved them.
+// Two cleared levels, one with a time, as guest play would have saved them.
 const stats = new Array(32).fill(-1), times = new Array(32).fill(0), timesString = new Array(32).fill("");
 stats[0] = 3; times[0] = 40; timesString[0] = "00:40";
 stats[1] = 2; stats[2] = 0;
@@ -100,7 +106,8 @@ try {
   console.log("\nan account that says it is theirs");
   const ann = await makeUser("a");
   const a = await guestBrowser();
-  await signIn(a, ann);
+  await signIn(a, ann, { fromGuest: true });
+  check("signing in from the guest screen lands on /play", await a.evaluate(() => location.hash), "#/play");
   const banner = a.locator(".banner");
   await banner.getByText("guest progress").waitFor({ timeout: 30000 });
   check("is asked, with the real counts", await banner.locator("span").first().innerText(),
@@ -123,6 +130,32 @@ try {
   check("nothing reached the account", Number((await db.query("select count(*) from public.solo_progress where user_id = $1 and medal >= 1", [ben.id])).rows[0].count), 0);
   await b.reload(); await b.waitForSelector("#stage"); await b.waitForTimeout(3000);
   check("and this account is not asked again", await b.locator(".banner:has-text('guest progress')").count(), 0);
+
+  console.log("\na guest screen left open while another tab signs in");
+  const cat = await makeUser("c");
+  // Named first, elsewhere: a nameless account is sent to /username in every
+  // tab, which is the router doing its job and not what is under test here.
+  const naming = await browser.newContext();
+  await passCaptcha(naming, API, SECRET, () => {});
+  await signIn(await naming.newPage(), cat);
+  await naming.close();
+  const c = await guestBrowser();
+  await c.goto(URL_ + "#/play", { waitUntil: "load" });
+  await c.locator(".guest-chip").waitFor({ timeout: 30000 });
+  const other = await c.context().newPage();
+  await other.goto(URL_ + "#/login", { waitUntil: "load" });
+  await other.fill("input[type=email]", cat.email);
+  await other.fill("input[type=password]", cat.password);
+  await other.click("button[type=submit]");
+  await other.waitForSelector("#stage", { timeout: 30000 });
+  await c.locator(".copy-name").waitFor({ timeout: 30000 });
+  check("becomes the signed-in screen in place", [await c.evaluate(() => location.hash), await c.locator(".guest-chip").count()], ["#/play", 0]);
+  await c.locator(".banner").getByText("guest progress").waitFor({ timeout: 30000 });
+  check("and offers the guest progress there too", true, true);
+  await c.getByRole("button", { name: "Menu", exact: true }).click();
+  await c.getByRole("button", { name: "Sign out", exact: true }).click();
+  await c.waitForSelector("input[type=password]", { timeout: 30000 });
+  check("signing out goes to the sign-in form", await c.evaluate(() => location.hash), "#/login");
 } catch (err) {
   failures++;
   console.log("  FAIL " + err.message);

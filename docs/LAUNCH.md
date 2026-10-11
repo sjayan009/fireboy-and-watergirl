@@ -11,8 +11,9 @@ the owner can take: accounts, consoles, posting.
   every footer, in the Terms, in the `<noscript>` text and in `llms.txt`.
 - A **13+ neutral age screen** in front of every way to make an account
   (`app/src/age.ts`), including Google sign-in.
-- **Local play with no account** at `#/local`, open to everyone, kids included.
-  It is linked from the landing page's "Local" chip.
+- **Guest play with no account** at `#/play` (signed out), open to everyone,
+  kids included, sending nothing to the server. `#/local`, its old address,
+  shows the same screen. It is linked from the landing page's "Local" chip.
 - **SEO**: a keyword title and description, a canonical link, Open Graph and
   Twitter cards (`og.png`, 1200×630, a capture of the real hero), JSON-LD
   `VideoGame`, `sitemap.xml`, and a `Sitemap:` line in `robots.txt`.

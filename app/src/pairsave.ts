@@ -185,8 +185,13 @@ export interface PairProgress {
   retryPending(friendId: string): Promise<void>;
 }
 
-export function pairProgress(local: SaveStore): PairProgress {
-  const owner = auth().user?.id ?? "";
+/**
+ * `guest` makes it ownerless whoever is signed in: the play screen's guest mode
+ * passes it, so a guest screen still standing when an account signs in (in
+ * another tab, say) can never drain, retry or beacon that account's outbox.
+ */
+export function pairProgress(local: SaveStore, { guest = false }: { guest?: boolean } = {}): PairProgress {
+  const owner = guest ? "" : auth().user?.id ?? "";
   const data = read(local.data as ProgressArrays);
   let friendId: string | null = null;
   const canonicalPairs = new Map<string, ProgressArrays>();
@@ -206,7 +211,7 @@ export function pairProgress(local: SaveStore): PairProgress {
   };
   async function flush(): Promise<void> {
     await durable;
-    if (auth().user?.id !== owner) return;
+    if (!owner || auth().user?.id !== owner) return;
     try {
       // Storage may recover while the run is paused or already on its results.
       // Reattempt retained canonical results without waiting for another game frame.
@@ -258,7 +263,7 @@ export function pairProgress(local: SaveStore): PairProgress {
   document.addEventListener("visibilitychange", onWake);
   // Ownerless records stay quarantined at their original key, never guessed at.
   try {
-    if (localStorage.getItem("fbwg.pairoutbox")) storageError = "Older unsent results were preserved on this browser but cannot be assigned to an account safely";
+    if (owner && localStorage.getItem("fbwg.pairoutbox")) storageError = "Older unsent results were preserved on this browser but cannot be assigned to an account safely";
   } catch { /* IndexedDB reports its own storage failure when first used. */ }
 
   return {
@@ -272,16 +277,17 @@ export function pairProgress(local: SaveStore): PairProgress {
     confirm: confirmed,
     refreshSolo() { if (!friendId && !closed) write(data, local.data); },
     async pendingResults() {
-      if (closed || auth().user?.id !== owner) return [];
+      if (closed || !owner || auth().user?.id !== owner) return [];
       await durable;
       const results = await pendingFor(owner);
       return !closed && auth().user?.id === owner ? results : [];
     },
-    async retryPending(id) { if (!closed && auth().user?.id === owner) { await retryDelivery(owner, id); await flush(); } },
+    async retryPending(id) { if (!closed && owner && auth().user?.id === owner) { await retryDelivery(owner, id); await flush(); } },
     onChange(fn) { listeners.add(fn); fn(); return () => listeners.delete(fn); },
     async adopt(id, signal) {
       const mine = ++generation;
       signal?.throwIfAborted();
+      if (!owner) throw new Error("Sign in to share progress with a friend");
       if (friendId) throw new Error("Leave the current pair before loading another");
       // Selected-pair reads never wait for another friend's delivery.
       signal?.throwIfAborted();
@@ -306,6 +312,7 @@ export function pairProgress(local: SaveStore): PairProgress {
     },
     async flushNow() {
       if (timer !== null) clearTimeout(timer); timer = null;
+      if (!owner) return;
       try { await retryDelivery(owner, friendId ?? undefined); }
       catch (error) { lastError = (error as Error).message; announce(); }
       await flush();
@@ -320,6 +327,7 @@ export function pairProgress(local: SaveStore): PairProgress {
       await flush();
     },
     beacon() {
+      if (!owner) return;
       // Writes were made durable at confirmation, before this unload event.
       void durable.then(async () => {
         for (const p of await pendingFor(owner)) {

@@ -706,3 +706,45 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
   .friends-fold, .friends-toggle .chev { transition:none; }
 }
 @media (prefers-reduced-transparency: reduce) { .banner.matched-card { background:#1e1a15; -webkit-backdrop-filter:none; backdrop-filter:none; } }
+
+/* ---- Guest: the play screen with no account (guestpanels.ts) ---------------
+ * "Sign in" stands where the username was, and wears the same 1px rule with
+ * the same 3px of padding, so the two rows sit on one baseline. Friends and
+ * Leaderboard keep their colours and gain a lock after the label: the panels
+ * still open, and say what is behind it.
+ */
+.guest-chip { color:var(--dim); }
+.signin-link { color:var(--water); font-weight:600; text-decoration:none; padding-bottom:3px; background-image:linear-gradient(to right, #75d5eb66 0 100%); background-repeat:no-repeat; background-size:100% 1px; background-position:0 100%; }
+@media (hover:hover) and (pointer:fine) { .signin-link:hover { background-image:linear-gradient(to right, var(--water) 0 100%); } }
+.tool[data-locked]::after { content:''; flex:none; width:12px; height:12px; margin-left:2px; background:currentColor; opacity:.7; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2'%3E%3Crect x='5' y='11' width='14' height='10' rx='2'/%3E%3Cpath d='M8 11V8a4 4 0 0 1 8 0v3'/%3E%3C/svg%3E") center/contain no-repeat; }
+.online-card { padding:18px; background:#24201a; border:1px solid var(--edge); border-radius:14px; box-shadow:inset 0 1px 0 #ffffff09; }
+.online-card h3 { margin:0; font:600 1.0625rem/1.3 var(--heading); letter-spacing:-.01em; }
+.online-card p { margin:6px 0 0; color:var(--dim); font-size:.8125rem; line-height:1.45; }
+.pitch-list { display:grid; gap:9px; margin:14px 0 0; padding:0; list-style:none; font-size:.8125rem; }
+.pitch-list li { display:flex; align-items:center; gap:10px; }
+.pitch-icon { flex:none; display:grid; place-items:center; width:22px; height:22px; border-radius:7px; }
+.pitch-icon.water { background:#75d5eb22; color:var(--water); }
+.pitch-icon.fire { background:#ff865b22; color:#ff9e7c; }
+.pitch-icon.gold { background:#f0ce7b22; color:var(--gold); }
+/* Links that look like the Quick Match buttons, and press like them. */
+.online-card .pitch-go { display:flex; align-items:center; justify-content:center; margin-top:16px; text-decoration:none; }
+.online-card .pitch-signin { display:flex; width:100%; min-height:40px; margin-top:8px; }
+.online-card .pitch-signin:active { transform:scale(.97); }
+.online-card .pitch-fine { margin-top:10px; font-size:.75rem; text-align:center; }
+.local-keys { margin-top:22px; }
+.local-keys h3 { margin:0 0 6px; font-size:.9375rem; }
+.keyrow { display:flex; align-items:center; justify-content:space-between; margin:0; padding:8px 0; border-bottom:1px solid var(--edge); font-size:.875rem; }
+.keyrow:last-child { border-bottom:0; }
+.keyrow kbd { padding:4px 9px; border-radius:7px; background:#1a1712; letter-spacing:.12em; }
+.board-lock .board-title { margin:0 0 14px; color:var(--gold); font-size:.9375rem; font-weight:600; }
+/* Decoration, not data: the shape of a board, drawn here and never fetched. */
+.ghost-rows { display:grid; gap:8px; margin:14px 0 2px; filter:blur(2px); opacity:.6; }
+.ghost-rows i { display:block; height:34px; border-radius:8px; background:#3a332a; }
+@media (prefers-reduced-motion: reduce) {
+  /* The press still answers, as a dim rather than a movement. */
+  .online-card .pitch-go:active, .online-card .pitch-signin:active { transform:none; opacity:.85; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .ghost-rows { filter:none; opacity:1; }
+  .ghost-rows i { background:#2c271f; }
+}
