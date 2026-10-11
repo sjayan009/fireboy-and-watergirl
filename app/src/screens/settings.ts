@@ -19,6 +19,7 @@ import { codeClock, codeField, tryCode } from "../ui/code.js";
 import { supabase } from "../supabase.js";
 import { card, el, field, form, inputOf, note, on } from "../ui/dom.js";
 import { presentationPreferences, savePresentationPreferences } from "../presentation.js";
+import { glowSwitch } from "../ui/glowswitch.js";
 
 /**
  * One row per setting, and only one of them open.
@@ -113,11 +114,14 @@ function presentationSection(): HTMLElement {
   fps.value = String(preferences.fps); scale.value = String(preferences.scale);
   const change = () => savePresentationPreferences({ fps: Number(fps.value), scale: Number(scale.value) });
   on(fps, "change", change); on(scale, "change", change);
+  // The glow's own switch, the same one the Menu carries.
+  const glow = glowSwitch();
   // The same labelled fields as every other row's form, so the two pickers do
   // not arrive as the browser's bare selects with their labels run into them.
   return el("div", { class: "settings-fields" },
     el("label", { class: "field" }, el("span", {}, "Frame rate"), fps),
     el("label", { class: "field" }, el("span", {}, "Output quality"), scale),
+    glow.root,
     note("Higher frame rates can make movement smoother when your display and computer support them. Lower settings use less power. These choices apply only to your screen; your friend can choose independently."));
 }
 

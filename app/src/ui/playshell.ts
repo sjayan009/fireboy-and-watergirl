@@ -1,5 +1,8 @@
 import { el, on } from "./dom.js";
-import { emblem } from "./brand.js";
+import { liveEmblem } from "./logo.js";
+import { keyLegend, keyRow, lightKeys, type KeyMode } from "./keys.js";
+import { glowSwitch } from "./glowswitch.js";
+import { PRESENTATION_CHANGED, presentationPreferences, type PresentationPreferences } from "../presentation.js";
 import { auth, onAuth } from "../auth.js";
 
 export type Panel = "friends" | "setup" | "leaderboard" | "progress" | "menu" | "manage" | "settings";
@@ -31,6 +34,17 @@ export class PlayShell {
   private panels: Record<string, HTMLElement>;
   private preference = `fbwg.panel.${auth().user?.id ?? "local"}`;
   private toastTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Whose keys the footer shows and lights: both on one keyboard, only yours online. */
+  private keyMode: KeyMode = "both";
+  private legend = keyLegend();
+  /**
+   * The stage glow: a light at each side of the stage, ember on Fireboy's and
+   * water on Watergirl's, lavender for a moment when a level is cleared. Off
+   * unless turned on (see glowswitch.ts). The strips are sized from the stage
+   * in `fit`, so nothing is ever drawn above or below it.
+   */
+  private glow = [el("div", { class: "glow-side left", "aria-hidden": "true" }, el("i", { class: "base" }), el("i", { class: "clear" })),
+    el("div", { class: "glow-side right", "aria-hidden": "true" }, el("i", { class: "base" }), el("i", { class: "clear" }))];
 
   constructor(host: HTMLElement, private options: {
     canvas: HTMLCanvasElement; name: string; status: HTMLElement; mute: HTMLElement;
@@ -61,17 +75,18 @@ export class PlayShell {
       this.tabs.append(el("button", { class: "ghost", "data-panel": key, onclick: () => this.open(key) }, label));
     }
     const sessionActions = el("section", { class: "menu-group" }, el("h3", {}, "This Session"));
+    const glowControl = glowSwitch();
+    this.off.push(() => glowControl.destroy());
     const accountActions = el("section", { class: "menu-group" }, el("h3", {}, "Your Account"),
       el("button", { class: "ghost", onclick: () => this.open("settings") }, "Settings"));
     for (const action of options.actions) (action.textContent === "Sign out" ? accountActions : sessionActions).append(action);
     this.panels = {
       friends: options.friends, leaderboard: options.board, progress: options.times,
       menu: el("div", { class: "menu-actions" }, sessionActions,
+        el("section", { class: "menu-group" }, el("h3", {}, "Game Display"), glowControl.root),
         el("section", { class: "menu-group" }, el("h3", {}, "At Your Fingertips"),
           options.watching ? el("p", { class: "note" }, "The two players have the controls. Watching does not change your own progress.") :
-            el("div", { class: "control-keys" },
-              el("p", { class: "control-pair fire-control" }, "Fireboy", el("kbd", {}, "← ↑ →")),
-              el("p", { class: "control-pair water-control" }, "Watergirl", el("kbd", {}, "W A D")),
+            el("div", { class: "control-keys" }, keyRow("fire"), keyRow("water"),
               el("p", { class: "note" }, "P pauses · R retries · Escape closes a panel"))), accountActions,
         // The game's own credits screen has 22px to spare and gets one line.
         // This is where the whole attribution fits without fighting for room.
@@ -93,21 +108,25 @@ export class PlayShell {
     this.drawer.append(el("header", { class: "drawer-heading" }, this.title, close), this.tabs, this.content);
     this.drawer.hidden = true;
     this.notices.append(options.banner);
-    this.viewport.append(this.screen);
-    this.root.append(
-      el("header", { class: "play-toolbar" },
-        el("div", { class: "play-identity" }, emblem(),
-          el("div", { class: "identity-copy" }, el("strong", { class: "game-title" }, "Fireboy & Watergirl"),
+    this.viewport.append(...this.glow, this.screen);
+    const identity = el("div", { class: "play-identity" });
+    const logo = liveEmblem(identity);
+    this.off.push(() => logo.destroy());
+    identity.append(logo.root,
+      el("div", { class: "identity-copy" }, el("strong", { class: "game-title" },
+          el("span", { class: "fb" }, "Fireboy"), " & ", el("span", { class: "wg" }, "Watergirl")),
             el("div", { class: "identity-detail" }, ...options.guest
               ? [el("span", { class: "guest-chip" }, "Playing as a guest"), el("a", { class: "signin-link", href: "#/login" }, "Sign in")]
-              : [copy, options.status]))),
-        this.friendButton, this.boardButton, this.menuButton, options.primaryAction),
+              : [copy, options.status])));
+    this.root.append(
+      el("header", { class: "play-toolbar" },
+        identity, this.friendButton, this.boardButton, this.menuButton, options.primaryAction),
       el("div", { class: "play-workspace" }, this.viewport, this.drawer, this.notices),
       // Sound and fullscreen change the screen, not the session, so they sit
       // under the screen they change, opposite "Saved": the footer is the
       // game's own status bar, the toolbar is for the social panels.
       el("footer", { class: "play-footer" }, this.saveStatus,
-        el("span", { class: "focus-hint", id: "play-keys" }, options.watching ? "Watching together · The players have the controls" : "Click the game to play · Arrows / W A D · P pauses"),
+        options.watching ? el("span", { class: "focus-hint", id: "play-keys" }, "Watching together · The players have the controls") : this.legend.root,
         el("div", { class: "footer-controls" }, ...(options.connection ? [options.connection] : []), options.mute, this.full)), this.toast);
     host.append(this.root);
     this.off.push(on(this.friendButton, "click", () => this.toggle("friends")),
@@ -144,6 +163,10 @@ export class PlayShell {
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
     }));
+    if (!options.watching) this.off.push(lightKeys(this.root, () => this.keyMode));
+    const glowing = (p: PresentationPreferences) => this.viewport.classList.toggle("glow", p.glow && !options.watching);
+    glowing(presentationPreferences());
+    this.off.push(on(window, PRESENTATION_CHANGED, e => glowing((e as CustomEvent<PresentationPreferences>).detail)));
     this.observer = new ResizeObserver(() => this.fit());
     this.observer.observe(this.viewport);
     let collapsed = false;
@@ -163,17 +186,33 @@ export class PlayShell {
   }
 
   /**
-   * The largest 4:3 stage the viewport will hold, less the frame's own inlay.
+   * The largest 4:3 stage the viewport will hold, inside the frame's inlay.
    *
-   * 8px, not 16: the inset rings are 6px, so anything past that is a margin
-   * inside a border that already reads as one -- and on a 4:3 stage every
-   * pixel taken off the height takes a third more off the width.
+   * The inset rings are 6px deep, so the stage keeps 6px clear on every side.
+   * It used to keep 4px, which put the stage over 2px of the ring on whichever
+   * axis was tight -- the edge read as the game spilling over its frame, and the
+   * corner, rounded less than the ring's inner curve, poked out past it. The
+   * corner radius in styles.css is concentric with the ring for the same reason.
+   * The stage's size is also handed to the glow strips, so they match it.
    */
   private fit(): void {
-    const width = Math.max(0, Math.min(this.viewport.clientWidth - 8, (this.viewport.clientHeight - 8) * 4 / 3));
+    const inlay = 12;
+    // The exact box, not clientWidth/Height: those round to whole pixels, and
+    // a frame 694.75px tall read as 695 put the stage 0.25px into the ring.
+    const box = this.viewport.getBoundingClientRect(), style = getComputedStyle(this.viewport);
+    const inner = (size: number, a: string, b: string) => size - parseFloat(a) - parseFloat(b);
+    const w = inner(box.width, style.borderLeftWidth, style.borderRightWidth);
+    const h = inner(box.height, style.borderTopWidth, style.borderBottomWidth);
+    const width = Math.max(0, Math.min(w - inlay, (h - inlay) * 4 / 3));
     this.screen.style.width = `${width}px`;
     this.screen.style.height = `${width * 3 / 4}px`;
+    this.viewport.style.setProperty("--stage-w", `${width}px`);
+    this.viewport.style.setProperty("--stage-h", `${width * 3 / 4}px`);
   }
+  /** Online, only your character's keys; on one keyboard, both. */
+  setKeyMode(mode: KeyMode): void { this.keyMode = mode; this.legend.setMode(mode); }
+  /** A level's results board is up: the glow turns lavender until the next level. */
+  setCleared(cleared: boolean): void { this.viewport.classList.toggle("cleared", cleared); }
   private syncInput(): void {
     const focused = document.activeElement;
     this.options.input(!(this.active && !this.wide.matches) &&
