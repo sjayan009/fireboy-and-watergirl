@@ -42,7 +42,12 @@ export class PlayShell {
     primaryAction?: HTMLElement;
     /** The pair's link state, shown beside the sound and fullscreen controls. */
     connection?: HTMLElement;
-    /** No account: the friends, leaderboard, username and account controls are left out. */
+    /**
+     * No account. Friends and Leaderboard stay, locked, and open the panels the
+     * caller filled with what an account adds; the username, the session line,
+     * the session and account menu groups are left out, and "Sign in" stands
+     * where the username was.
+     */
     guest?: boolean;
   }) {
     this.screen = el("div", { class: "screen" }, options.canvas);
@@ -88,7 +93,9 @@ export class PlayShell {
       el("header", { class: "play-toolbar" },
         el("div", { class: "play-identity" }, emblem(),
           el("div", { class: "identity-copy" }, el("strong", { class: "game-title" }, "Fireboy & Watergirl"),
-            el("div", { class: "identity-detail" }, copy, options.status))),
+            el("div", { class: "identity-detail" }, ...options.guest
+              ? [el("span", { class: "guest-chip" }, "Playing as a guest"), el("a", { class: "signin-link", href: "#/login" }, "Sign in")]
+              : [copy, options.status]))),
         this.friendButton, this.boardButton, this.menuButton, options.primaryAction),
       el("div", { class: "play-workspace" }, this.viewport, this.drawer, this.notices),
       // Sound and fullscreen change the screen, not the session, so they sit
@@ -137,9 +144,16 @@ export class PlayShell {
     let collapsed = false;
     try { collapsed = localStorage.getItem(this.preference) === "closed"; } catch { /* optional preference */ }
     if (options.guest) {
-      for (const node of [this.friendButton, this.boardButton, copy, accountActions,
-        ...this.tabs.querySelectorAll<HTMLElement>("[data-panel='friends'], [data-panel='leaderboard']")]) node.hidden = true;
-    } else if (this.wide.matches && !collapsed && !options.watching) this.open("friends", false);
+      sessionActions.hidden = accountActions.hidden = true;
+      this.friendButton.textContent = "Friends";
+      for (const button of [this.friendButton, this.boardButton]) {
+        button.dataset.locked = "";
+        button.append(el("span", { class: "sr-only" }, ", needs an account"));
+      }
+    }
+    // A guest too: on a wide screen the Friends panel is the pitch for an
+    // account, and it sits beside the game rather than over it.
+    if (this.wide.matches && !collapsed && !options.watching) this.open("friends", false);
     this.fit();
   }
 
