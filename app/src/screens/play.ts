@@ -27,8 +27,9 @@
  * ## Without an account
  *
  * `{ guest: true }` is the same screen with nobody signed in: two players on
- * one keyboard, saved under the guest page's own key, and NOTHING sent to the
- * server. Everything that needs an account -- the lobby and friends, Quick
+ * one keyboard, saved under the guest key (`FBCookie:guest`, where the old
+ * guest page kept it), and NOTHING sent to the server. It is what `#/play`
+ * shows signed out (see main.ts). Everything that needs an account -- the lobby and friends, Quick
  * Match, the leaderboard, watching, the outbox, the cloud save, the match
  * lease, the guest-import offer -- is simply never constructed, so the match
  * code below has nothing to run against: without a lobby there is never a
@@ -49,6 +50,7 @@ import { PlayShell } from "../ui/playshell.js";
 import { FriendsPanel } from "./friends.js";
 import { Leaderboard } from "../ui/leaderboard.js";
 import { ProgressPanel } from "../ui/progress.js";
+import { guestBoard, guestFriends } from "../ui/guestpanels.js";
 import { leaderboardCache } from "../ranking.js";
 import { PlayController, loadSelection, selectionKey } from "../playstate.js";
 import { MatchLease } from "../matchlease.js";
@@ -169,7 +171,7 @@ export function playScreen(host: HTMLElement, { guest = false }: { guest?: boole
   // here. `pairProgress` still wraps it: alone it is this store, and in a pair
   // it becomes the pair's shared map and hands the solo one back afterwards.
   const solo = soloProgress(guest ? GUEST_KEY : undefined);
-  const progress = pairProgress(solo.store);
+  const progress = pairProgress(solo.store, { guest });
   // Whatever this browser has, merged with whatever the account has, before the
   // first frame puts a map on screen.
   if (!guest) void solo.sync().then(() => {
@@ -214,6 +216,7 @@ export function playScreen(host: HTMLElement, { guest = false }: { guest?: boole
   const panel = el("div", { class: "panel" });
   const times = el("div", { class: "panel" });
   const board = el("div", { class: "panel" });
+  if (guest) { panel.append(guestFriends()); board.append(guestBoard()); }
   const name = auth().profile?.username ?? "";
 
   let linkKind = "";
@@ -539,6 +542,7 @@ export function playScreen(host: HTMLElement, { guest = false }: { guest?: boole
       showShare();
     },
     onFrame: () => {
+      if (guest) noticeCleared();
       const request = view.session?.pendingControl;
       const next = request ? `${request.command}:${request.frame}` : "";
       if (next !== pendingControl) {
@@ -916,11 +920,32 @@ export function playScreen(host: HTMLElement, { guest = false }: { guest?: boole
   const labelSave = () => {
     const error = progress.shared ? progress.storageError ?? progress.lastError : solo.storageError ?? solo.lastError;
     const waiting = progress.shared ? progress.waiting : solo.pending;
-    shell.saveStatus.textContent = error ? "Retry needed" : waiting ? "Saving…" : solo.localOnly && !progress.shared ? "Saved on device" : "Saved to Cloud";
-    shell.saveStatus.title = error ?? "Your progress";
+    shell.saveStatus.textContent = error ? "Retry needed" : waiting ? "Saving…" : solo.localOnly && !progress.shared ? "Saved on this device" : "Saved to Cloud";
+    // Honest about where a guest's progress is: in this browser and nowhere else.
+    shell.saveStatus.title = error ?? (guest ? "Saved in this browser only. A free account keeps it everywhere." : "Your progress");
     // The dot says it at a glance: green once it is in the cloud, red when it is not.
     shell.saveStatus.dataset.state = error ? "error" : waiting ? "saving" : solo.localOnly && !progress.shared ? "local" : "saved";
   };
+  /**
+   * A guest's save is only this browser's localStorage, which the browser may
+   * evict under storage pressure. So once there is a cleared level worth
+   * keeping, ask it not to -- not on arrival, because Firefox answers
+   * `persist()` with a permission prompt, an odd greeting on page load. Asked
+   * once per browser, as the old guest page did.
+   */
+  let cleared = false;
+  function noticeCleared(): void {
+    const now = (view.game.children as { symbol?: string }[]).some(c => c.symbol === "Recuento");
+    if (now && !cleared) {
+      try {
+        if (!localStorage.getItem("fbwg.persistAsked")) {
+          localStorage.setItem("fbwg.persistAsked", "1");
+          void navigator.storage?.persist?.().catch(() => {});
+        }
+      } catch { /* storage unavailable: nothing to protect either */ }
+    }
+    cleared = now;
+  }
   // Labelled now, not on the first save: until something changed, the footer
   // went on saying the bare "Saved" the shell is built with.
   labelSave();

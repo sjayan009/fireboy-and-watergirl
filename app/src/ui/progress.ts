@@ -250,7 +250,7 @@ export class ProgressPanel {
     const friend = this.sources.friends().find(f => f.id === subject);
     this.body.append(el("p", { class: "note" },
       `${done} of 32 finished` +
-      (subject ? `, together with ${friend?.username ?? "your friend"}` : ", on your account")));
+      (subject ? `, together with ${friend?.username ?? "your friend"}` : this.sources.solo.localOnly ? ", on this device" : ", on your account")));
 
     if (!rows.length) {
       this.body.append(note(subject

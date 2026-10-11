@@ -150,7 +150,9 @@ retained.close(); records.length = 0;
 // Guest progress is offered, never imported silently, and only deleted once the cloud has it.
 {
   const { GUEST_KEY, guestSummary, guestOffer, guestOfferText, declineGuest, importGuest } = guestimport;
-  assert.equal(GUEST_KEY, /GUEST_KEY = "([^"]+)"/.exec(await readFile(new URL('../src/screens/guest.ts', import.meta.url), 'utf8'))[1], 'both modules name the same key');
+  // The key the old guest page saved under: changing it would lose every guest's progress.
+  assert.equal(GUEST_KEY, 'FBCookie:guest', 'guest progress keeps its key');
+  assert.match(await readFile(new URL('../src/screens/play.ts', import.meta.url), 'utf8'), /GUEST_KEY[^;]*from "\.\.\/guestimport\.js"/, 'the guest play screen saves under that same key');
   const stats = Array(32).fill(-1), times = Array(32).fill(0);
   stats[0] = 0; stats[1] = 3; stats[2] = 1; stats[3] = 2; times[1] = 40; times[3] = 70;
   const guestJson = JSON.stringify({ stats, times, timesString: times.map(() => '') });
