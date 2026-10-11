@@ -199,14 +199,9 @@ console.log("\nthe download is the size it should be");
   // Guest play is not on this side any more. It used to be its own small page
   // (`guest-*.js`, sharing `base-*.js` with the landing page); since the guest
   // page was retired, a signed-out player at #/play runs the same play screen
-  // as an account and downloads the game's own chunks. So guests are counted,
-  // and capped, by the game's budget below, which is the honest place for
-  // them. Measured at that change: the landing side went from 91 kB (landing
-  // + guest + base) to 82 kB (landing, with the landing styles now inlined in
-  // it), and the game from 886 to 891 kB for the guest panels -- under the
-  // same 905 kB ceiling, which did not move. A guest at #/play loads 888 kB of
-  // it (all but the landing and watch chunks), against about 760 kB for the
-  // old guest page.
+  // as an account and downloads the game's own chunks. So guests are counted
+  // by the game's budget below, and have a budget of their own after it for
+  // the part of the game they actually fetch.
   const all = walk(join(DIST, "assets")).filter((p) => /\.(js|css)$/.test(p));
   const landing = all.filter((p) => /[\\/]landing-[\w-]+\.js$/.test(p));
   const signedOut = all.filter((p) => /[\\/](landing|base)-[\w-]+\.js$/.test(p));
@@ -219,6 +214,8 @@ console.log("\nthe download is the size it should be");
   // Preserve a measured ceiling with20 kB headroom; see IMPLEMENTATION_RESULTS_17.md.
   // Quick Match adds the matchmaking flow, the card and its search animation
   // (~24 kB, ~884 kB total); the ceiling moves with it and keeps its headroom.
+  // Keeping account code out of a guest's download (below) split it into more
+  // chunks, at ~4 kB of import glue (~895 kB); the ceiling did not move.
   const BUDGET = 905_000;
   console.log(`  ${(bytes / 1000).toFixed(0)} kB of javascript and css ` +
               `across ${code.length} files`);
@@ -235,6 +232,53 @@ console.log("\nthe download is the size it should be");
               `fetched only by signed-out visitors`);
   check(`under its own ${LANDING_BUDGET / 1000} kB budget`,
         landingBytes < LANDING_BUDGET, `${(landingBytes / 1000).toFixed(0)} kB`);
+
+  // What a signed-out visitor to #/play fetches: the entry and the play
+  // screen, with everything they import statically -- the dynamic imports are
+  // what a guest does NOT fetch, and they are the point. When guest play
+  // first ran the account screen it fetched 888 kB, every chunk but the
+  // landing and watch ones, because the play screen imported the lobby,
+  // friends, Quick Match, the leaderboard and Settings, and the entry imported
+  // the 217 kB Supabase client to boot. With those behind `import()` (online.ts
+  // for the play screen, `loadClient` in auth.ts for the client) it is 587 kB,
+  // under the ~760 kB of the old guest page. The ceiling keeps ~13 kB of
+  // headroom; a static import that drags account code back in is far bigger.
+  // Measured by reading the built chunks rather than a browser, so it holds
+  // without one; app/test/play-guest.mjs is what proves a guest makes no
+  // request to Supabase at run time.
+  const GUEST_BUDGET = 600_000;
+  const html = readFileSync(join(DIST, "index.html"), "utf8");
+  const entry = html.match(/<script type="module"[^>]*src="\/(assets\/index-[\w-]+\.js)"/)?.[1];
+  const styles = [...html.matchAll(/<link rel="stylesheet"[^>]*href="\/(assets\/[\w-]+\.css)"/g)].map((m) => m[1]);
+  const play = all.filter((p) => /[\\/]play-[\w-]+\.js$/.test(p));
+  /** A chunk and every chunk it imports statically, as Rollup writes them. */
+  const closure = (file, seen = new Set()) => {
+    if (seen.has(file)) return seen;
+    seen.add(file);
+    const text = readFileSync(file, "utf8");
+    // `import{a as b}from"./x.js"` and the bare `import"./x.js"`, but not
+    // `import("./x.js")`, which is the dynamic kind.
+    for (const m of text.matchAll(/\bimport\s*(?:[\w$*{},\s]+?\s*from\s*)?"\.\/([\w-]+\.js)"/g)) {
+      closure(join(DIST, "assets", m[1]), seen);
+    }
+    return seen;
+  };
+  check("the entry and the play screen are where this expects", Boolean(entry) && play.length === 1,
+        `entry ${entry}, ${play.length} play chunks`);
+  if (entry && play.length === 1) {
+    const guest = new Set([...closure(join(DIST, entry)), ...closure(play[0]),
+                           ...styles.map((s) => join(DIST, s))]);
+    const guestBytes = [...guest].reduce((n, p) => n + statSync(p).size, 0);
+    console.log(`  ${(guestBytes / 1000).toFixed(0)} kB for a guest at #/play, ` +
+                `across ${guest.size} files`);
+    check(`under its own ${GUEST_BUDGET / 1000} kB budget`, guestBytes < GUEST_BUDGET,
+          `${(guestBytes / 1000).toFixed(0)} kB`);
+    // The same question asked by content rather than by size, so the answer
+    // does not depend on a file name: supabase-js stamps every request with it.
+    const client = [...guest].filter((p) => readFileSync(p, "utf8").includes("X-Client-Info"));
+    check("and none of it is the Supabase client", client.length === 0,
+          client.map((p) => p.slice(DIST.length + 1)).join(", "));
+  }
 
   const assetBytes = walk(ASSETS).reduce((n, p) => n + statSync(p).size, 0);
   console.log(`  ${(assetBytes / 1e6).toFixed(1)} MB of art and audio, ` +

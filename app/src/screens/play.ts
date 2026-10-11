@@ -33,7 +33,10 @@
  * Match, the leaderboard, watching, the outbox, the cloud save, the match
  * lease, the guest-import offer -- is simply never constructed, so the match
  * code below has nothing to run against: without a lobby there is never a
- * match, and every path that talks to the server starts from one.
+ * match, and every path that talks to the server starts from one. Nor is it
+ * downloaded (bar guestimport.ts, which also names the guest's save): it
+ * arrives as `online` (online.ts), which a guest is not given, and
+ * `scripts/check.mjs` holds a guest's download to its own budget.
  */
 import { GameView, STAGE_W, STAGE_H } from "@engine/embed.js";
 import type { Transport } from "@engine/net/transport.js";
@@ -41,26 +44,21 @@ import { drainOutbox, pairProgress } from "../pairsave.js";
 import { soloProgress } from "../solosave.js";
 import { guestOffer, guestOfferText, declineGuest, importGuest, GUEST_KEY } from "../guestimport.js";
 import type { Invite, Showing } from "../net/pairchannel.js";
-import { WatchChannel } from "../net/watchchannel.js";
-import { WatchMirror } from "../net/watch.js";
+import type { WatchChannel } from "../net/watchchannel.js";
+import type { WatchMirror } from "../net/watch.js";
 import { auth, signOut } from "../auth.js";
 import { clear, el, on } from "../ui/dom.js";
-import { FriendState, getLobby, Lobby, Ready } from "../lobby.js";
+import type { FriendState, Lobby, Ready } from "../lobby.js";
 import { PlayShell } from "../ui/playshell.js";
-import { FriendsPanel } from "./friends.js";
-import { Leaderboard } from "../ui/leaderboard.js";
 import { ProgressPanel } from "../ui/progress.js";
 import { guestBoard, guestFriends } from "../ui/guestpanels.js";
-import { leaderboardCache } from "../ranking.js";
 import { PlayController, loadSelection, selectionKey } from "../playstate.js";
-import { MatchLease } from "../matchlease.js";
-import { MatchSharing, type SharingState } from "../sharing.js";
+import type { MatchSharing, SharingState } from "../sharing.js";
 import { QoeRecorder } from "../net/qoe.js";
 import { networkFlags } from "../net/flags.js";
 import { presentationPreferences, PRESENTATION_CHANGED } from "../presentation.js";
-import { QuickCard } from "../ui/quickcard.js";
-import { endMatch, findPartner, touchMatch, TOUCH_MS, type QuickMatch, type Role } from "../quickmatch.js";
-import { block as blockPlayer, request as requestFriend } from "../friends.js";
+import type { QuickMatch, Role } from "../quickmatch.js";
+import type * as Online from "../online.js";
 
 const MUTE_KEY = "fbwg.muted";
 
@@ -140,7 +138,21 @@ const LEAVE_MS = 140;
 /** Asked rather than assumed, and re-asked: the setting can change mid-session. */
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 
-export function playScreen(host: HTMLElement, { guest = false }: { guest?: boolean } = {}): () => void {
+/**
+ * `online` is the account-only half of this screen (online.ts), loaded by the
+ * caller. Signed in it is required; a guest passes nothing and downloads none of it.
+ */
+export function playScreen(host: HTMLElement,
+                           options: { guest: true } | { guest?: false; online: typeof Online }): () => void {
+  const guest = options.guest === true;
+  // A guest gets an empty object: every one of these is reached only from an
+  // account's code paths, which a guest never takes (see the note above), and
+  // if one ever were, it would fail here loudly rather than reach the server.
+  const {
+    getLobby, FriendsPanel, settingsScreen, Leaderboard, QuickCard, leaderboardCache, MatchLease,
+    MatchSharing, WatchChannel, WatchMirror, endMatch, findPartner, touchMatch, TOUCH_MS,
+    blockPlayer, requestFriend,
+  } = options.guest ? {} as typeof Online : options.online;
   const flow = new PlayController();
   const canvas = el("canvas", {
     id: "stage", width: STAGE_W, height: STAGE_H, tabindex: "0",
@@ -878,6 +890,7 @@ export function playScreen(host: HTMLElement, { guest = false }: { guest?: boole
     () => match?.friend.id ?? lastPartner);
   const shell = new PlayShell(host, {
     canvas, name, status, mute, banner, friends: panel, times, board, connection, guest,
+    settings: guest ? undefined : settingsScreen,
     input: (enabled) => view.setInputEnabled(enabled),
     onObstructed: obstructed => { if (obstructed && view.level && !view.watching) view.pauseForSuspension(); },
     onPanel: (panel, changed) => {
@@ -960,7 +973,7 @@ export function playScreen(host: HTMLElement, { guest = false }: { guest?: boole
     // moment that is neither too early nor a guess.
     if (progress.saves !== sentResults) {
       sentResults = progress.saves;
-      leaderboardCache.clear();
+      leaderboardCache?.clear();
       leaderboard?.invalidate();
       void drawBoard();
     }

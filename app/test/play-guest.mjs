@@ -106,7 +106,14 @@ for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
     const [fire, water] = await at();
     await page.keyboard.down("ArrowRight");
     await page.keyboard.down("KeyD");
-    await page.waitForTimeout(1500);
+    // Released as soon as both have moved, not after a fixed wall-clock time:
+    // how many frames a second buys differs by browser and by machine load,
+    // and held long enough on level one somebody walks into a pool and dies --
+    // after which the level can never finish (WebKit did, on a busy machine).
+    await page.waitForFunction(([f, w]) => {
+      const lv = window.__fbwg.view.level;
+      return lv.pers1.GetPosition().x > f + 0.6 && lv.pers2.GetPosition().x > w + 0.6;
+    }, [fire, water], { timeout: 5000, polling: 50 });
     await page.keyboard.up("ArrowRight");
     await page.keyboard.up("KeyD");
     const [fire2, water2] = await at();

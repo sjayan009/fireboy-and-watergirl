@@ -12,7 +12,7 @@
  * card offers the progress made here.
  */
 import { el } from "./dom.js";
-import { TROPHY } from "./leaderboard.js";
+import { TROPHY } from "./brand.js";
 
 const icon = (tone: string, path: string) => el("span", { class: `pitch-icon ${tone}`, "aria-hidden": "true",
   html: `<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">${path}</svg>` });
