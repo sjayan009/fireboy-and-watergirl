@@ -216,7 +216,10 @@ console.log("\nthe download is the size it should be");
   // (~24 kB, ~884 kB total); the ceiling moves with it and keeps its headroom.
   // Keeping account code out of a guest's download (below) split it into more
   // chunks, at ~4 kB of import glue (~895 kB); the ceiling did not move.
-  const BUDGET = 905_000;
+  // The live keycaps, the stage glow, the toolbar emblem's hover and the
+  // sliding character picker add ~15 kB (~910 kB); the ceiling moves to keep
+  // its headroom.
+  const BUDGET = 925_000;
   console.log(`  ${(bytes / 1000).toFixed(0)} kB of javascript and css ` +
               `across ${code.length} files`);
   check(`under the ${BUDGET / 1000} kB budget`, bytes < BUDGET,
@@ -246,7 +249,10 @@ console.log("\nthe download is the size it should be");
   // Measured by reading the built chunks rather than a browser, so it holds
   // without one; app/test/play-guest.mjs is what proves a guest makes no
   // request to Supabase at run time.
-  const GUEST_BUDGET = 600_000;
+  // The live keycaps, the glow and its switch, and the emblem's hover are
+  // guest features too (~15 kB, ~601 kB); the ceiling moves with them, still
+  // far below what one stray static import of account code would add.
+  const GUEST_BUDGET = 615_000;
   const html = readFileSync(join(DIST, "index.html"), "utf8");
   const entry = html.match(/<script type="module"[^>]*src="\/(assets\/index-[\w-]+\.js)"/)?.[1];
   const styles = [...html.matchAll(/<link rel="stylesheet"[^>]*href="\/(assets\/[\w-]+\.css)"/g)].map((m) => m[1]);

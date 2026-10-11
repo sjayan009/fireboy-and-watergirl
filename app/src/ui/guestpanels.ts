@@ -13,6 +13,7 @@
  */
 import { el } from "./dom.js";
 import { TROPHY } from "./brand.js";
+import { keyRow } from "./keys.js";
 
 const icon = (tone: string, path: string) => el("span", { class: `pitch-icon ${tone}`, "aria-hidden": "true",
   html: `<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">${path}</svg>` });
@@ -39,8 +40,8 @@ export function guestFriends(): HTMLElement {
       el("p", { class: "pitch-fine" }, "Accounts are for ages 13 and up. You keep this device's progress when you sign up.")),
     el("section", { class: "local-keys", "aria-labelledby": "local-keys-title" },
       el("h3", { id: "local-keys-title" }, "Playing here together"),
-      el("p", { class: "keyrow fire-control" }, "Fireboy", el("kbd", {}, "← ↑ →")),
-      el("p", { class: "keyrow water-control" }, "Watergirl", el("kbd", {}, "W A D"))));
+      keyRow("fire"), keyRow("water"),
+      el("p", { class: "keyrow-note" }, el("kbd", { class: "kc", "data-key": "KeyP" }, "P"), "pauses for both of you")));
 }
 
 /** The Leaderboard tab: what is behind the lock, and no request to find out. */

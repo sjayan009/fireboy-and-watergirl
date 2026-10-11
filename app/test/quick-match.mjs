@@ -110,6 +110,8 @@ try {
 
   console.log("\nboth press Quick Match");
   await a.click(".qm-seg button:has-text('Fireboy')");
+  check("the picker remembers Fireboy, in Fireboy's colour", await a.locator(".qm-seg").getAttribute("data-pick"), "fireboy");
+  check("and says so to a screen reader", await a.locator(".qm-seg button:has-text('Fireboy')").getAttribute("aria-checked"), "true");
   await a.click(".qm-go");
   await a.waitForSelector(".qm-ring.searching");
   check("alice is searching", await a.locator(".qm-headline h4").innerText(), "Finding a partner");
@@ -121,6 +123,8 @@ try {
   for (const p of [a, b]) await p.waitForFunction("window.__fbwg && window.__fbwg.view.session", null, { timeout: 60000 });
   const slots = await Promise.all([a, b].map((p) => p.evaluate(() => window.__fbwg.view.slot)));
   check("alice asked to be Fireboy and is", slots, [0, 1]);
+  check("online, each footer shows only that player's own keys",
+        await Promise.all([a, b].map((p) => p.locator(".keys-legend").getAttribute("data-mode"))), ["fire", "water"]);
   await Promise.all([a, b].map((p) => p.waitForFunction("window.__fbwg.view.level !== null", null, { timeout: 30000 })));
   check("both are on Adventure 1", await Promise.all([a, b].map((p) => p.evaluate(() => [window.__fbwg.view.level.CurrentMode, window.__fbwg.view.session.selection.num]))),
         [["adventure", 1], ["adventure", 1]]);

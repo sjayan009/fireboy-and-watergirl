@@ -77,10 +77,10 @@ const routes: Route[] = [
   // reset screen itself; admitting them keeps the router from moving the tab
   // somewhere else before the screen sends it on to /password.
   { path: "/reset", stages: ["out", "in", "nameless"], render: warm(resetScreen) },
-  // The old address of the guest page, kept for links already out there. It
-  // is the same screen as /play signed out; signed in, the router sends it on
-  // to /play, which this does not admit.
-  { path: "/local", stages: ["out"], render: play },
+  // The old address of the guest page. Links to it are still out there, and an
+  // address the router does not know goes to the sign-in form -- so it stays,
+  // as a redirect: /play is the one address for playing, signed in or not.
+  { path: "/local", stages: ["out", "in"], render: () => { location.replace("#/play"); } },
   // Reached from the emailed link, which arrives with a session already.
   { path: "/password", stages: ["in", "nameless"], render: passwordScreen },
   // "out" as well as "unverified", and that is the whole fix for a sign-up that

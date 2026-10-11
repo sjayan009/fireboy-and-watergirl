@@ -554,7 +554,7 @@ export function playScreen(host: HTMLElement,
       showShare();
     },
     onFrame: () => {
-      if (guest) noticeCleared();
+      noticeCleared();
       const request = view.session?.pendingControl;
       const next = request ? `${request.command}:${request.frame}` : "";
       if (next !== pendingControl) {
@@ -949,7 +949,8 @@ export function playScreen(host: HTMLElement,
   let cleared = false;
   function noticeCleared(): void {
     const now = (view.game.children as { symbol?: string }[]).some(c => c.symbol === "Recuento");
-    if (now && !cleared) {
+    if (now !== cleared) shell.setCleared(now);
+    if (now && !cleared && guest) {
       try {
         if (!localStorage.getItem("fbwg.persistAsked")) {
           localStorage.setItem("fbwg.persistAsked", "1");
@@ -1544,6 +1545,7 @@ export function playScreen(host: HTMLElement,
     shell.notify("");
     shell.close(true);
     linkKind = ready.kind === "webrtc" ? "direct" : "relay";
+    shell.setKeyMode(ready.slot === 0 ? "fire" : "water");
     qoe.attach(ready.transport, ready.kind);
     partner = ready.friend;
     // Whoever was picking before this link died is still picking. Only a match
@@ -2018,6 +2020,7 @@ export function playScreen(host: HTMLElement,
     flow.set("ended");
     match = null;
     inGame = false;
+    shell.setKeyMode("both");
     rebuilding?.abort();
     rebuilding = null;
     view.leave();
