@@ -3,7 +3,7 @@
  *
  * A level played on one keyboard and saved under the guest key; every guest
  * panel opened (Friends, Leaderboard, Progress, Menu) and read; the two ways
- * to an account followed; `#/local` shown to be the same screen -- and not one
+ * to an account followed; `#/local` shown to redirect to the same screen -- and not one
  * request or socket to the Supabase host throughout.
  *
  * Every request leaving the dev server's own host is aborted and written down,
@@ -83,8 +83,27 @@ for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
     assert.equal(await card.getByRole("link", { name: "Create a free account" }).getAttribute("href"), "#/signup");
     assert.equal(await card.getByRole("link", { name: "Sign in" }).getAttribute("href"), "#/login");
     assert.equal(await card.locator(".pitch-fine").innerText(), "Accounts are for ages 13 and up. You keep this device's progress when you sign up.");
-    assert.deepEqual(await page.locator(".local-keys .keyrow").allInnerTexts().then(t => t.map(s => s.replace(/\s+/g, " "))),
-      ["Fireboy ← ↑ →", "Watergirl W A D"]);
+    assert.deepEqual(await page.locator(".local-keys .keyrow").evaluateAll(rows => rows.map(r =>
+      [r.querySelector(".who").textContent, [...r.querySelectorAll("kbd")].map(k => k.textContent).join(" ")])),
+      [["Fireboy", "← ↑ →"], ["Watergirl", "A W D"]], "each player's keys in their own row");
+
+    // ---- the toolbar emblem answers the pointer -----------------------------
+    const emblem = await page.locator(".play-identity .logo").boundingBox();
+    await page.mouse.move(emblem.x + emblem.width * .3, emblem.y + emblem.height / 2);
+    await page.waitForFunction(() => document.querySelector(".play-identity").classList.contains("lit"));
+    await page.mouse.move(emblem.x + emblem.width * 6, emblem.y + emblem.height * 4);
+    await page.waitForFunction(() => !document.querySelector(".play-identity").classList.contains("lit"));
+
+    // ---- the stage glow: off unless turned on, from the Menu ----------------
+    assert.equal(await page.locator(".game-viewport").evaluate(n => n.classList.contains("glow")), false, "the glow is off by default");
+    await page.locator(".play-toolbar .tool-menu").click();
+    await page.locator(".play-drawer .switch").click();
+    assert.equal(await page.locator(".game-viewport").evaluate(n => n.classList.contains("glow")), true, "the Menu's switch turns it on");
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("fbwg.presentation.local")).glow), true, "and it is remembered");
+    assert.equal(await page.locator(".play-drawer .switch").getAttribute("aria-checked"), "true");
+    await page.locator(".play-drawer .switch").click();
+    assert.equal(await page.locator(".game-viewport").evaluate(n => n.classList.contains("glow")), false, "and off again");
+    await page.locator(".play-toolbar .tool-friends").click();
 
     // ---- a level on one keyboard, panel docked beside it -----------------
     await page.evaluate(() => {
@@ -114,8 +133,12 @@ for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
       const lv = window.__fbwg.view.level;
       return lv.pers1.GetPosition().x > f + 0.6 && lv.pers2.GetPosition().x > w + 0.6;
     }, [fire, water], { timeout: 5000, polling: 50 });
+    assert.deepEqual(await page.locator(".keys-legend .kc.is-down").evaluateAll(ks => ks.map(k => k.dataset.key).sort()),
+      ["ArrowRight", "KeyD"], "the footer's keys light while they are held");
+    assert.equal(await page.locator(".local-keys .kc.is-down").count(), 2, "and so do the panel's");
     await page.keyboard.up("ArrowRight");
     await page.keyboard.up("KeyD");
+    assert.equal(await page.locator(".kc.is-down").count(), 0, "and go out when let go");
     const [fire2, water2] = await at();
     assert(fire2 > fire + 0.5, `Fireboy moved right on the arrow key (${fire} -> ${fire2})`);
     assert(water2 > water + 0.5, `Watergirl moved right on D (${water} -> ${water2})`);
@@ -165,7 +188,7 @@ for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
     await page.locator(".tool-menu").click();
     assert.equal(await page.locator("#drawer-title").innerText(), "Game Menu");
     assert.deepEqual(await page.locator(".menu-group h3").evaluateAll(h => h.filter(n => n.getClientRects().length).map(n => n.textContent)),
-      ["At Your Fingertips", "About"], "only the groups a guest can use, and no empty heading");
+      ["Game Display", "At Your Fingertips", "About"], "only the groups a guest can use, and no empty heading");
     for (const label of ["Sign out", "Settings"]) assert.equal(await page.getByRole("button", { name: label, exact: true }).count(), 0, `no ${label}`);
 
     await page.locator(".save-status").click();
@@ -186,6 +209,14 @@ for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
       assert(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1), `${name} ${width}: the page does not scroll`);
       const box = await page.locator("#stage").boundingBox();
       assert(Math.abs(box.width / box.height - 4 / 3) < 0.02, "the canvas keeps its aspect ratio");
+      // Inside the frame's 6px inlay on every side, and flush with it on the tight one.
+      const inset = await page.evaluate(() => {
+        const vp = document.querySelector(".game-viewport"), r = document.querySelector(".screen").getBoundingClientRect();
+        const a = vp.getBoundingClientRect(), bw = parseFloat(getComputedStyle(vp).borderTopWidth);
+        return [r.top - a.top - bw, a.bottom - r.bottom - bw, r.left - a.left - bw, a.right - r.right - bw];
+      });
+      assert(inset.every(n => n > 5.95), `${name} ${width}: the stage stays inside the frame's ring (${inset.map(n => n.toFixed(2))})`);
+      assert(Math.min(...inset) < 6.05, `${name} ${width}: and fills the frame up to it (${inset.map(n => n.toFixed(2))})`);
       assert(await page.locator(".tool-leaderboard").isVisible() && await page.locator(".tool-menu").isVisible(), "every toolbar button fits");
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name} ${width}: nothing overflows sideways`);
     }
@@ -220,8 +251,8 @@ for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
     // ---- the old address -------------------------------------------------
     await page.goto(origin + "/#/local");
     await ready();
-    assert.equal(await page.evaluate(() => location.hash), "#/local", "#/local stays where it is");
-    assert.equal(await page.locator("#drawer-title").innerText(), "Play Together", "and is the same guest screen");
+    assert.equal(await page.evaluate(() => location.hash), "#/play", "#/local is sent on to #/play");
+    assert.equal(await page.locator("#drawer-title").innerText(), "Play Together", "the same guest screen");
     assert.equal(await page.evaluate(() => window.__fbwg.view.game.The_cookie.data.stats[0] >= 1), true, "with the same save");
 
     // Leaving runs pagehide, the last place a save would have been sent from.
@@ -230,6 +261,6 @@ for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
 
     assert.deepEqual(errors, [], "no page errors");
     assert.deepEqual(toSupabase(), [], "no request or socket to the Supabase host");
-    console.log(`PASS ${name} guest play at #/play and #/local: level, save, four panels, ${SIZES.length} sizes, reduced motion, sign-up and sign-in links; none to Supabase (the sign-in pages asked ${[...new Set(outside.map(u => new URL(u).host))].join(", ") || "nothing"} off-host)`);
+    console.log(`PASS ${name} guest play at #/play (and #/local's redirect): level, save, live keys, glow switch, emblem, four panels, ${SIZES.length} sizes inside the frame, reduced motion, sign-up and sign-in links; none to Supabase (the sign-in pages asked ${[...new Set(outside.map(u => new URL(u).host))].join(", ") || "nothing"} off-host)`);
   } finally { await browser.close(); }
 }
