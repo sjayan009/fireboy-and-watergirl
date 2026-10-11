@@ -108,14 +108,23 @@ jobs:
       - name: wait for this commit to be the one that is live
         env:
           SITE: ${{ vars.FBWG_URL || 'https://fireboy-and-watergirl.sjayan009.workers.dev' }}
+        # Three matching reads in a row, not one: Cloudflare's edges pick up
+        # a new version at different moments, and on #53 the first edge to
+        # answer had it while the next request, from the test, did not.
         run: |
+          seen=0
           for i in $(seq 1 60); do
-            live=$(curl -fsS "$SITE/version.txt" 2>/dev/null | tr -d '[:space:]' || true)
+            live=$(curl -fsS -H 'Cache-Control: no-cache' "$SITE/version.txt?t=$i" 2>/dev/null | tr -d '[:space:]' || true)
             if [ "$live" = "$GITHUB_SHA" ]; then
-              echo "live after $((i * 10))s"
-              exit 0
+              seen=$((seen + 1))
+              if [ "$seen" -ge 3 ]; then
+                echo "live after $((i * 10))s"
+                exit 0
+              fi
+            else
+              seen=0
+              echo "live is '${live:-nothing}', waiting for $GITHUB_SHA"
             fi
-            echo "live is '${live:-nothing}', waiting for $GITHUB_SHA"
             sleep 10
           done
           echo "::error::the deployment never became $GITHUB_SHA"
