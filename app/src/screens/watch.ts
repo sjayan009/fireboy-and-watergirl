@@ -32,6 +32,7 @@ import { el } from "../ui/dom.js";
 import { PlayShell } from "../ui/playshell.js";
 import { Leaderboard } from "../ui/leaderboard.js";
 import { FriendsPanel } from "./friends.js";
+import { settingsScreen } from "./settings.js";
 import { presentationPreferences, PRESENTATION_CHANGED } from "../presentation.js";
 
 const MUTE_KEY = "fbwg.muted";
@@ -108,7 +109,7 @@ export function watchScreen(host: HTMLElement): () => void {
   const shell = new PlayShell(host, {
     canvas, name, status, mute, banner, friends, board,
     times: el("p", {class:"note"}, "Watching does not change your own progress. Return to your game to see your best times."),
-    watching: true, input: () => { view.setInputEnabled(false); },
+    watching: true, settings: settingsScreen, input: () => { view.setInputEnabled(false); },
     primaryAction: el("a", {class:"ghost stop-watching",href:"#/play"},"Stop watching"),
     onPanel: (panel, changed) => { if (panel === "leaderboard") leaderboard.open(view.session?.selection, changed); },
     actions: [el("button", {class:"ghost",onclick:async()=>{await signOut();}},"Sign out")],

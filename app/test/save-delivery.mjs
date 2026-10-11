@@ -43,7 +43,9 @@ globalThis.__delivery = {
   }, retryDelivery: async () => {}, mergeProgress: () => {}, remember: async () => {},
 };
 globalThis.__SUPABASE_URL__ = 'https://fixture.invalid'; globalThis.__SUPABASE_KEY__ = 'fixture';
-const source = (await readFile(new URL('../src/pairsave.ts', import.meta.url), 'utf8')).replace(/^import .*;\r?$/gm, '');
+// The client is imported lazily inside pairsave.ts; point that at the fixture too.
+const source = (await readFile(new URL('../src/pairsave.ts', import.meta.url), 'utf8')).replace(/^import .*;\r?$/gm, '')
+  .replaceAll('await import("./supabase.js")', 'globalThis.__delivery');
 const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
 const { drainOutbox, pairProgress } = await import(`data:text/javascript;base64,${Buffer.from('const { supabase, auth, pendingFor, acknowledge, deliveryFailed, retryDelivery, mergeProgress, remember } = globalThis.__delivery;\n' + js).toString('base64')}`);
 const pending = friendId => ({ key: friendId, owner: 'owner', friendId, revision: 'r1', at: 0, stats: [], times: [], timesString: [] });
