@@ -27,7 +27,7 @@
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
-    <script type="application/ld+json">{"@context":"https://schema.org","@type":"VideoGame","name":"Fireboy & Watergirl: The Forest Temple (online co-op fan rebuild)","url":"__SITE__/","description":"Play the 2009 Forest Temple with a friend: two on one keyboard with no account, or online from anywhere with rollback netcode. A free, unofficial fan rebuild.","genre":["Puzzle","Platformer","Co-op"],"playMode":["CoOp","MultiPlayer"],"numberOfPlayers":{"@type":"QuantitativeValue","value":2},"gamePlatform":"Web browser","applicationCategory":"Game","operatingSystem":"Any","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"author":{"@type":"Person","name":"Jayan Sirikonda"},"image":"__SITE__/og.png"}</script>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"VideoGame","name":"Fireboy & Watergirl: The Forest Temple (online co-op fan rebuild)","url":"__SITE__/","description":"Play the 2009 Forest Temple with a friend: two on one keyboard with no account, or online from anywhere with rollback netcode. A free, unofficial fan rebuild.","genre":["Puzzle","Platformer","Co-op"],"playMode":["CoOp","MultiPlayer"],"numberOfPlayers":{"@type":"QuantitativeValue","value":2},"gamePlatform":"Web browser","applicationCategory":"Game","operatingSystem":"Any","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"author":{"@type":"Person","name":"Jayan Sirikonda","url":"__SITE__/about","description":"Recovered the 2009 Forest Temple from its compiled Flash file and rebuilt it in TypeScript for online co-op with rollback netcode."},"image":"__SITE__/og.png"}</script>
     <meta name="color-scheme" content="dark" />
     <!--
       The paired glyph, on its own tile. SVG where it is supported, and two
@@ -39,12 +39,32 @@
     <link rel="apple-touch-icon" href="/icon-180.png" />
   </head>
   <body>
-    <div id="app"><noscript>
+    <!--
+      The page as raw HTML, for readers that run no script: crawlers, agents,
+      and people with JavaScript off. Visually hidden (.sr-only, from the
+      render-blocking stylesheet) so nothing flashes before the landing page,
+      and replaced by the router the moment the app starts. The <noscript>
+      stylesheet shows it to the people who will never get that far. The same
+      page as Markdown is public/index.md.
+    -->
+    <div id="app"><main class="static-page sr-only">
       <h1>Fireboy &amp; Watergirl: The Forest Temple, online co-op</h1>
-      <p>The 2009 Flash game, recovered from its compiled file and rebuilt for the browser. Play as two on one keyboard with no account, or sign in and play online with a friend anywhere, with rollback netcode and progress saved for the pair. This site needs JavaScript.</p>
-      <p><a href="developers/">For Developers</a> · <a href="legal/privacy.html">Privacy</a> · <a href="legal/terms.html">Terms</a></p>
+      <p>The 2009 Flash game Fireboy &amp; Watergirl in the Forest Temple, now online multiplayer for the first time. Play side by side on one keyboard with no account, or invite a friend and play together from anywhere. It is free, runs in the browser, and has no ads. Rebuilt for online co-op by Jayan Sirikonda.</p>
+      <p><a href="#/play">Play locally right now</a> · <a href="#/login">Sign in to play online</a></p>
+      <h2>Online multiplayer, from sign-in to level one</h2>
+      <ol>
+        <li>Sign in with Google, or with an email address you confirm. Two-factor sign-in is there if you want it.</li>
+        <li>Invite a friend and choose who plays Fireboy and who plays Watergirl.</li>
+        <li>Play, and come back together: progress belongs to the pair, so you resume from the same level.</li>
+      </ol>
+      <p>Online play uses rollback netcode over WebRTC, so two people in two browsers play as if they shared a keyboard.</p>
+      <h2>Watch and compete</h2>
+      <p>Watch a friend's game live, if they let you, or chase the fastest pairs on each level's leaderboard.</p>
+      <h2>The game</h2>
+      <p>All 32 levels of the Forest Temple, recovered from the original compiled Flash file with no source code and ported to TypeScript. This site needs JavaScript to play.</p>
+      <p><a href="developers/">For Developers</a> · <a href="about">About</a> · <a href="contact">Contact</a> · <a href="legal/privacy">Privacy</a> · <a href="legal/terms">Terms</a></p>
       <p>An unofficial fan project by Jayan Sirikonda, not affiliated with or endorsed by Oslo Albet, who created Fireboy &amp; Watergirl.</p>
-    </noscript></div>
+    </main><noscript><link rel="stylesheet" href="/noscript.css" /></noscript></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
