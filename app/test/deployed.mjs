@@ -147,9 +147,11 @@ const md = { headers: { Accept: "text/markdown" } };
 const mdRoot = await fetch(`${SITE}/`, md);
 // The front door never goes through the Worker, so a used-up daily quota
 // cannot take it down: asked for Markdown, it is still the static page.
+// The type, not its parameters: Cloudflare sends `text/html` where wrangler dev
+// adds `; charset=utf-8`.
 check("/ is static, whatever is asked for",
-      [mdRoot.status, h(mdRoot, "content-type"), h(mdRoot, "vary")],
-      [200, "text/html; charset=utf-8", null]);
+      [mdRoot.status, (h(mdRoot, "content-type") ?? "").split(";")[0], h(mdRoot, "vary")],
+      [200, "text/html", null]);
 const mdPage = await fetch(`${SITE}/index.md`);
 check("the page as Markdown is at /index.md",
       [mdPage.status, (await mdPage.text()).startsWith("# Fireboy & Watergirl")], [200, true]);
