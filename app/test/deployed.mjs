@@ -137,6 +137,31 @@ check("an unknown path 404s rather than soft-serving the app", deep.status, 404)
 const hashRoute = await fetch(`${SITE}/#/signup`);
 check("a hash route is just the page", hashRoute.status, 200);
 
+// ---------------------------------------------------------------- agents
+
+/**
+ * edge.mjs, measured where it runs: which requests reach it is the asset
+ * layer's decision, and test/edge.mjs can only stand in for that.
+ */
+const md = { headers: { Accept: "text/markdown" } };
+const mdRoot = await fetch(`${SITE}/`, md);
+// The front door never goes through the Worker, so a used-up daily quota
+// cannot take it down: asked for Markdown, it is still the static page.
+check("/ is static, whatever is asked for",
+      [mdRoot.status, h(mdRoot, "content-type"), h(mdRoot, "vary")],
+      [200, "text/html; charset=utf-8", null]);
+const mdPage = await fetch(`${SITE}/index.md`);
+check("the page as Markdown is at /index.md",
+      [mdPage.status, (await mdPage.text()).startsWith("# Fireboy & Watergirl")], [200, true]);
+const mdMissing = await fetch(`${SITE}/some/path/that/does/not/exist`, md);
+check("an unknown path asked for as Markdown is still a 404",
+      [mdMissing.status, h(mdMissing, "content-type")], [404, "text/markdown; charset=utf-8"]);
+check("  that points at llms.txt", (await mdMissing.text()).includes("(/llms.txt)"), true);
+check("and the HTML 404 is the 404 page", (await deep.text()).includes("This door leads nowhere"), true);
+for (const path of ["/about", "/contact", "/llms.txt"]) {
+  check(`${path} is served`, (await fetch(`${SITE}${path}`)).status, 200);
+}
+
 // ---------------------------------------------------------------- the app
 
 if (process.argv.includes("--static-only")) {

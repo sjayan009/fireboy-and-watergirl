@@ -1,12 +1,14 @@
 {
   "name": "fireboy-and-watergirl",
   "account_id": "592b20815b40026da0a5162992185d85",
+  "main": "edge.mjs",
   "compatibility_date": "2026-09-11",
   "workers_dev": true,
   "preview_urls": false,
   "assets": {
     "directory": "./dist",
+    "binding": "ASSETS",
     "html_handling": "auto-trailing-slash",
-    "not_found_handling": "404-page"
+    "not_found_handling": "none"
   }
 }

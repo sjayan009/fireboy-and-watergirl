@@ -1,0 +1,3 @@
+/* Loaded only from index.html's <noscript>: shows the raw-HTML page, which is
+   otherwise .sr-only until the app replaces it. */
+.static-page { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip-path: none; white-space: normal; max-width: 40rem; }

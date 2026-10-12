@@ -311,6 +311,30 @@ console.log("\nand search finds the landing page, not the game's art");
 }
 
 /*
+ * What a reader that runs no script gets: crawlers and agents read the raw
+ * HTML, and an agent asking for Markdown gets index.md (edge.mjs).
+ */
+console.log("\nand a reader that runs no script still gets the page");
+{
+  const text = (file) => readFileSync(file, "utf8")
+    .replace(/<!--[\s\S]*?-->|<(script|style|noscript)\b[\s\S]*?<\/\1>|<head>[\s\S]*?<\/head>/g, "")
+    .replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const html = readFileSync(join(DIST, "index.html"), "utf8");
+  check("index.html has one <h1>", (html.match(/<h1\b/g) ?? []).length === 1);
+  check("and 500+ characters of text without script", text(join(DIST, "index.html")).length >= 500,
+        `${text(join(DIST, "index.html")).length} characters`);
+  check("and links For Developers", /<a href="developers\/">/.test(html));
+  const md = join(DIST, "index.md");
+  check("index.md is the page as Markdown", existsSync(md) && /^# \S/.test(readFileSync(md, "utf8")));
+  for (const name of ["about", "contact"]) {
+    const path = join(DIST, `${name}.html`);
+    check(`${name}.html has 500+ characters of its own`, existsSync(path) && text(path).length >= 500);
+  }
+  const llms = readFileSync(join(DIST, "llms.txt"), "utf8");
+  check("llms.txt says when to use this site", llms.includes("## When to use this site"));
+}
+
+/*
  * The For Developers pages, built by design/landing/vite.config.mjs in ship
  * mode into dist/developers. Static pages under the same CSP as the app, so
  * the same rule as the 404 page: an inline script would be silently refused.
