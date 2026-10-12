@@ -39,6 +39,8 @@ const DEVELOPERS = {
   architecture: resolve(HERE, "developers/architecture.html"),
   privacy: resolve(HERE, "legal/privacy.html"),
   terms: resolve(HERE, "legal/terms.html"),
+  about: resolve(HERE, "about.html"),
+  contact: resolve(HERE, "contact.html"),
 };
 
 export default defineConfig(({ mode }) => ({

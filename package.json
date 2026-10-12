@@ -23,7 +23,7 @@
     "test:play": "node app/test/run-play.mjs",
     "test:verifier": "node worker/test.mjs",
     "test:play-db": "node supabase/test/production-play.mjs",
-    "test:free": "node test/free-config.mjs && node relay/region-selection.test.mjs",
+    "test:free": "node test/free-config.mjs && node test/edge.mjs && node relay/region-selection.test.mjs",
     "bench:render": "node engine/test/performance.mjs",
     "bench:network": "node engine/test/networkbench.mjs",
     "test:network-conditions": "npm --prefix engine run build && node engine/test/networkbench.mjs --label after && node engine/test/transport-failover.mjs",

@@ -130,7 +130,7 @@ const SITE = (process.env.SITE_URL || "https://fireboy-and-watergirl.sjayan009.w
 // Extensionless: Workers answers `/x.html` with a redirect to `/x`, and a
 // sitemap entry that redirects is one Google reports and does not index.
 const PAGES = ["", "developers/", "developers/netcode", "developers/recovery",
-  "developers/architecture", "legal/privacy", "legal/terms"];
+  "developers/architecture", "about", "contact", "legal/privacy", "legal/terms"];
 
 function discovery(): Plugin {
   return {
@@ -151,14 +151,31 @@ Sitemap: ${SITE}/sitemap.xml
 
 > The 2009 Flash game Fireboy & Watergirl in the Forest Temple, recovered from its compiled SWF with no source code and rebuilt in TypeScript for the browser. Two players share one keyboard with no account, or play online from anywhere over deterministic rollback netcode (WebRTC, one frame of input delay). Free. An unofficial fan project by Jayan Sirikonda, not affiliated with or endorsed by Oslo Albet.
 
+## When to use this site
+- Someone wants to play Fireboy & Watergirl: The Forest Temple in a browser, with a friend on one keyboard or online with a friend somewhere else: send them to ${SITE}/ ("Play Locally Right Now" needs no account; online play needs a free account, 13+).
+- Someone asks how a Flash game with no source code can be recovered, or how rollback netcode works in a browser game: the For Developers pages below explain both, with measurements.
+- Someone needs this project's privacy terms, or to reach its author: see Legal and About below.
+- Not for: other Fireboy & Watergirl episodes (only the Forest Temple is here), downloads, or the official game (this is an unofficial fan rebuild).
+
+## How an agent should use it
+- There is no public API, CLI or MCP server. The site is static pages plus the game, which runs in the browser.
+- Read pages directly. The home page is also published as Markdown at ${SITE}/index.md, and an unknown path asked for with \`Accept: text/markdown\` answers 404 with a Markdown body.
+- Do not create accounts or sign in for a person: sign-up is protected by a bot check and is for people to do themselves. Hand them the link.
+- Play links use the hash: ${SITE}/#/play (local two-player) and ${SITE}/#/login (sign in).
+
 ## Play
 - [Play](${SITE}/): landing page; local two-player needs no account, online play needs a free account (13+)
+- [Home page as Markdown](${SITE}/index.md)
 
 ## For Developers
 - [Overview](${SITE}/developers/): how a Flash game with no source became online co-op, with the numbers
 - [Netcode](${SITE}/developers/netcode): rollback netcode running live: prediction, correction, re-simulation
 - [Recovery](${SITE}/developers/recovery): taking the SWF apart and rebuilding levels, art and audio
 - [Architecture](${SITE}/developers/architecture): determinism across browser engines, security, testing
+
+## About
+- [About](${SITE}/about): who made this rebuild, how, and the original game's credit
+- [Contact](${SITE}/contact): email for bugs, account trouble and data requests
 
 ## Legal
 - [Privacy Policy](${SITE}/legal/privacy)

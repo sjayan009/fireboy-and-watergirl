@@ -1,4 +1,4 @@
-/** Static Cloudflare packaging for Workers Assets and Pages. No runtime or paid storage. */
+/** Static Cloudflare packaging for Workers Assets. No paid storage; the only runtime is edge.mjs (static-hosting.mjs). */
 import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { resolve, join, relative } from "node:path";

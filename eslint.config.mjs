@@ -73,6 +73,8 @@ export default tseslint.config(
       // Local agent worktrees: whole second copies of the repo, never in CI.
       ".claude/**",
       ".cache/**",
+      // `wrangler dev`'s bundles of edge.mjs.
+      ".wrangler/**",
       "**/dist/**",
       "dist/**",
       "snaps/**",
