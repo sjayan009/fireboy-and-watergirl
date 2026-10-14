@@ -11,7 +11,7 @@ not equivalent to unreliable SCTP. A steady pair generates 52 incoming WS
 messages/s. At 20:1 metering that is 9,360 request units per pair-hour. The
 100,000/day allowance supports **10.68 pair-hours/day before all setup, probes,
 auth, control and abuse**; a 75,000-unit gameplay allocation supports 8.01.
-See [FREE_TIER_BUDGET.md](../FREE_TIER_BUDGET.md) for the complete model.
+See [the deployment guide](../docs/HIGH_LEVEL/DEPLOYMENT.md) for the complete model.
 
 The published Free plan is SQLite-only, fails at quota exhaustion, and includes
 13,000 GB-s/day. The relay must use `ctx.acceptWebSocket` and hibernatable event

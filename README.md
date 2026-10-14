@@ -4,8 +4,9 @@ The 2009 Flash game, recovered from its compiled SWF and rebuilt so two people
 anywhere can play it together and pick up where they left off.
 
 There was no source code. Everything here — 32 levels, the art, the audio, the
-menus, the physics — was reconstructed from one 2 MB binary, which is committed
-because it is the only thing the rest was derived from.
+menus, the physics — was reconstructed from one 2 MB binary. That binary and the
+ActionScript decompiled from it belong to Oslo Albet and are not distributed
+here.
 
 ```bash
 npm install
@@ -16,7 +17,9 @@ npm run test:all   # everything, including the soak and three browsers
 
 `npm install` is the whole toolchain. Python is still what turned the SWF into
 the assets in the first place (`tools/`), but nothing in a normal build or
-deploy needs it.
+deploy needs it. To re-run `tools/`, download the original from the Internet
+Archive item `fireboy-watergirl-the-forest-temple_202401` and place it at the
+repo root as `Fireboy & Watergirl - The Forest Temple.swf`.
 
 ## What it is
 
@@ -27,7 +30,7 @@ deploy needs it.
 | `supabase/` | migrations, row level security tests, and the authenticated TURN credential broker |
 | `tools/` | the Python that turned the SWF into everything else |
 | `web/` | the engine's own harness, with readouts and debug hooks |
-| `docs/` | [the architecture](docs/ARCHITECTURE.MD), and the release and hosting notes |
+| `docs/` | [`HIGH_LEVEL/`](docs/HIGH_LEVEL/OVERVIEW.md) (start here: overview, deployment, launch) and `DEEP_DIVE/` (recovery, engine, netcode, app, rendering, testing) |
 
 ## The two things that shaped it
 
@@ -47,8 +50,8 @@ connect, the authorized networking rollout uses Cloudflare TURN within the
 same WebRTC data channel. Supabase Realtime remains the emergency gameplay
 fallback and carries presence, invitations and signaling. Short-lived TURN
 credentials come from an authenticated Supabase Edge Function. See the
-[network rollout](docs/NETWORK_ROLLOUT.md) and
-[TURN deployment gate](docs/NETWORK_ROLLOUT_TURN.md).
+[netcode](docs/DEEP_DIVE/NETCODE.md) and
+[TURN deployment gate](docs/DEEP_DIVE/TURN.md).
 
 ## Accounts
 
@@ -56,7 +59,7 @@ Two players on one keyboard need no account: signed out, `#/play` is the
 same game screen as a guest (`#/local`, its old address, still works), and it
 keeps progress in the browser. Accounts are 13 and up: every way to make one, Google included, waits
 on a neutral age screen first (`app/src/age.ts`). The Privacy Policy and Terms
-are in `design/landing/legal/`, and [docs/LAUNCH.md](docs/LAUNCH.md) has the
+are in `design/landing/legal/`, and [docs/HIGH_LEVEL/LAUNCH.md](docs/HIGH_LEVEL/LAUNCH.md) has the
 launch checklist.
 
 Sign-up needs a confirmed email address, and two-factor is optional. Google
@@ -140,7 +143,7 @@ Run `npm run build`, then upload only repository-root `dist/` using the
 static-file uploader or `npx wrangler@4.131.1 deploy` with `wrangler.json`.
 The build generates security/cache headers and refuses more than 20,000 files,
 assets over 25 MiB, Worker scripts, resource bindings or build hooks. Pages Free
-can also serve this artifact. See [the deployment runbook](docs/free-hosting.md).
+can also serve this artifact. See [the deployment guide](docs/HIGH_LEVEL/DEPLOYMENT.md).
 Only public configuration such as `SUPABASE_URL` and
 `SUPABASE_PUBLISHABLE_KEY` is embedded in the browser build — the
 secret key and the database password stay in `.env.local`, which is gitignored
@@ -165,10 +168,10 @@ requests short-lived ICE credentials from `turn-credentials`, with the public
 STUN list as a fallback if issuance fails. Store `CLOUDFLARE_TURN_KEY_ID` and
 `CLOUDFLARE_TURN_API_TOKEN` only as Supabase Edge Function secrets. They never
 belong in Vite or public files. The
-[TURN runbook](docs/NETWORK_ROLLOUT_TURN.md) covers deployment, the live forced
+[TURN runbook](docs/DEEP_DIVE/TURN.md) covers deployment, the live forced
 relay test and the remaining acceptance gates.
 
-Read [FREE_TIER_BUDGET.md](FREE_TIER_BUDGET.md) before deploying. Quota exhaustion
+Read [the deployment guide](docs/HIGH_LEVEL/DEPLOYMENT.md) before deploying. Quota exhaustion
 must restrict service, never trigger a paid upgrade. Cloudflare TURN's published
 1,000 GB monthly allowance supports the $0 target at modest usage, but has
 metered overage; billing alerts do not impose a spend cap. Review its usage and
@@ -178,12 +181,11 @@ the account's $0 stop-spend budget. Local tests do not need hosted CI. The
 optional verifier may be unavailable while ordinary play and progress continue;
 never accept unverified leaderboard scores to work around that.
 
-The [before/after benchmark table](BENCHMARKS.md) records browser frame/render
-times, real visual position updates, input latency proxies, CPU/heap and relay
-traffic. The authoritative simulation remains 26 Hz; renderer-only snapshots
+The authoritative simulation remains 26 Hz; renderer-only snapshots
 present motion at the display callback rate. Local visual extrapolation is
 bounded and adds no simulation-tick input delay. Run `npm run bench:render`
-and `npm run test:network-conditions` to reproduce the measurements/tests.
+and `npm run test:network-conditions` to reproduce the measurements/tests; the
+renderer design is in [RENDERING.md](docs/DEEP_DIVE/RENDERING.md).
 
 ## A note on the art
 
@@ -204,3 +206,13 @@ Production source maps are off, so the source is no longer served alongside
 them. Restricting the assets themselves needs a deployment-level control that
 does not exist here yet. Worth settling before this goes anywhere more public
 than it already is.
+
+## License
+
+The code and documentation written for this project are [MIT licensed](LICENSE).
+Fireboy & Watergirl, its characters, art, audio, level designs, `extracted/` and
+the files generated from its code (`engine/src/game/game.ts`,
+`engine/src/flash/symbols.ts`) belong to Oslo Albet and are not covered;
+`engine/src/box2d/box2d.ts` is a port of Box2DFlash 2.0.2 under its own zlib
+license ([notice](engine/BOX2D-LICENSE.txt)). This is an unofficial fan project and is not
+affiliated with Oslo Albet.

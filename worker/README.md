@@ -10,7 +10,7 @@ payloads, tokens or database URLs.
 ## Free VM setup
 
 Use an existing Always Free Linux VM as described in
-[the hosting comparison](../docs/free-hosting.md). No paid cloud resource is
+[the hosting comparison](../docs/HIGH_LEVEL/DEPLOYMENT.md). No paid cloud resource is
 created by the repository. Supply `VERIFIER_DATABASE_URL` securely to Docker
 Compose, then run:
 

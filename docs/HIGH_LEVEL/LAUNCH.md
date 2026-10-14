@@ -27,21 +27,24 @@ the owner can take: accounts, consoles, posting.
 
 1. **Read the IP risk once more.** Oslo Albet is actively selling this
    franchise: games 1–4 were re-released on Steam in September 2026. Promoting
-   a free copy of their art and levels invites a DMCA notice to Vercel or
-   GitHub. The Terms promise prompt removal on request. Keep that promise if
+   a free copy of their art and levels invites a DMCA notice to the host
+   (Cloudflare) or GitHub. The Terms promise prompt removal on request. Keep that promise if
    asked, and keep a version that does not depend on their assets (the
    For Developers pages) in mind as the fallback.
 2. **Drop "official" from the address.** Done 2026-10-06:
-   `fireboy-and-watergirl-official` read as an impersonation claim, so the
-   project moved to `fbwg-online-multiplayer.vercel.app` and the old host was
-   removed. A bought domain would still need adding in Cloudflare and `SITE_URL`.
+   `fireboy-and-watergirl-official` read as an impersonation claim, so that
+   host was removed. The game now lives on Cloudflare Workers at
+   `fireboy-and-watergirl.sjayan009.workers.dev`. A bought domain would still
+   need adding in Cloudflare and `SITE_URL`.
 3. **Google OAuth consent screen**: add the Privacy Policy and Terms URLs, and
    the new domain as an authorized domain.
 4. **Supabase Auth**: add the new domain to Site URL and Redirect URLs.
 
 ## Search consoles (free, about 30 minutes)
 
-- **Google Search Console**: verify the domain (a DNS TXT record), submit
+- **Google Search Console**: verify the site (the Google HTML file in
+  `app/public/` covers the workers.dev address; a custom domain takes a DNS TXT
+  record), submit
   `/sitemap.xml`, then request indexing for `/` and `/developers/`.
 - **Bing Webmaster Tools**: import from Search Console. Bing's index also
   feeds ChatGPT search and DuckDuckGo.
@@ -59,7 +62,7 @@ The engineering is the safest and strongest story, because it is original.
 | Channel | What to post | Notes |
 |---|---|---|
 | Hacker News (Show HN) | "I rebuilt a 2009 Flash game from its SWF and added rollback netcode" → /developers/ | One shot. Post on a weekday morning (US Eastern) and stay to answer comments |
-| r/gamedev, r/webdev, r/programming | The Netcode or Recovery write-up | Read each subreddit's self-promotion rules first |
+| r/gamedev, r/webdev, r/programming | The [Netcode](../DEEP_DIVE/NETCODE.md) or [Recovery](../DEEP_DIVE/RECOVERY.md) write-up | Read each subreddit's self-promotion rules first |
 | r/flashgames, r/nostalgia | "Play Forest Temple online with a friend" | Expect the IP question in the comments |
 | X / Bluesky / LinkedIn | 20–40 s clips: two browsers playing in sync, the rollback demo | LinkedIn suits the Georgia Tech and research angle |
 | YouTube Shorts / Instagram Reels / TikTok | The same clips, vertical | Gaming reach on TikTok has fallen to roughly 4–8% organically. Reels and Shorts currently reach more |
@@ -74,7 +77,7 @@ without "official" in it (for example "fbwg.online.coop", not
 - Under-13 accounts need verifiable parental consent (COPPA, amended rule in
   force since 22 April 2026). It is a separate project; local play covers kids
   until then.
-- Privacy-friendly analytics (Vercel Web Analytics is cookieless) would need
-  a line in the Privacy Policy before it is turned on.
+- Privacy-friendly, cookieless analytics would need a line in the Privacy
+  Policy before it is turned on.
 - Have a lawyer read the two legal pages once there is real traffic. They are
   written to match this code, but they are not legal advice.

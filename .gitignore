@@ -16,9 +16,7 @@ snaps/
 extracted/assets/_raw/
 
 # Internet Archive artifacts: the metadata and screenshots that came with the
-# download. The SWF itself IS committed -- it is the only source every asset and
-# every line of ported code was derived from, so a checkout without it cannot be
-# rebuilt -- but none of this is.
+# download. The SWF that came with them is ignored further down.
 fireboy-watergirl-the-forest-temple_*
 screenshot_*.png
 *_thumb.jpg
@@ -35,6 +33,26 @@ __pycache__/
 
 CODEBASE_AUDIT.md
 docs/AI_BOT_FEASIBILITY.md
+
+# Oslo Albet's work, kept local: the original SWF and the ActionScript
+# decompiled from it. Nothing in the build reads either; only tools/ needs the
+# SWF, at the repository root, to re-extract the assets.
+/Fireboy & Watergirl - The Forest Temple.swf
+extracted/as3/
+
+# Measurements and dated working notes: local evidence, not documentation.
+# The benchmark scripts still write here.
+benchmarks/
+docs/benchmarks/
+BENCHMARKS.md
+FREE_TIER_BUDGET.md
+docs/CI_AUDIT.md
+docs/DEEP_AUDIT_2026-10-02.md
+docs/DEPLOYMENT_STATUS.md
+docs/IMPLEMENTATION_HANDOFF_17_IMPROVEMENTS.md
+docs/IMPLEMENTATION_RESULTS_17.md
+docs/NETWORK_HARDENING.md
+docs/production-play-release.md
 
 # Landing-page design exploration: the board, the alternative directions, the
 # motion studies and their renders are for local review only and are never
