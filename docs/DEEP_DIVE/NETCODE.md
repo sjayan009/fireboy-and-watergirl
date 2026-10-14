@@ -1,14 +1,182 @@
-# Realtime networking rollout
+# Netcode
+
+How two players share one simulation: rollback, the snapshot, the wire format and transport choice, followed by the realtime networking rollout record.
+
+## Netcode
+
+Two modes live in `net/session.ts`. Lockstep is still in the box and still
+tested; rollback is what plays.
+
+### Why rollback, with numbers
+
+Lockstep runs a frame only when both players' input for it is known, so a peer
+decides its input for frame `F + delay` and sends it ahead — no stalls, but a
+constant ~115 ms between pressing a key and seeing your own character move at
+26 Hz and delay 3. Rollback applies your input to the very next frame and
+*guesses* the peer's as "whatever they were doing last", which in a platformer
+where keys are held for many frames is right almost every time.
+
+It is affordable here for a measured reason:
+
+| | cost |
+|---|---|
+| One frame of physics, re-simulated | **~0.04 ms** |
+| One full snapshot | **~4.7 ms** |
+| Frame budget at 26 fps | **38.5 ms** |
+
+A snapshot is a hundred times dearer than a re-simulated frame. That inverts the
+textbook design: instead of a ring of per-frame snapshots, there is **one**
+snapshot, taken at a frame both players' real input has settled, and every
+correction rewinds to it and re-simulates forward. It is refreshed only once it
+has fallen `snapLag` frames behind the settled frontier — one capture per eight
+frames rather than eight, and **1.4 MB of memory instead of 17 MB**.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Local player
+    participant S as NetSession
+    participant W as World
+    participant P as Peer
+
+    U->>S: press right (frame 100)
+    S->>W: step(100) with my real input + peer's PREDICTED input
+    Note over S,W: shown immediately — zero input delay
+    S-->>P: input packet {epoch, frame 100, last 32 frames of bits}
+    P-->>S: input packet {epoch, frame 98, ...}
+    alt prediction for frame 98 was right
+        S->>S: advance confirmed frontier, nothing to redo
+    else prediction was wrong
+        S->>W: restore the single snapshot (frame <= 98)
+        loop each frame from the snapshot to now
+            S->>W: step(f) replaying = true
+            Note right of W: sound suppressed,<br/>save writes suppressed
+        end
+        S->>W: step(now) replaying = false
+    end
+    S->>S: every N frames, hash the world and exchange the digest
+```
+
+Solo play runs through this same session with a `NullTransport`. Single-player
+and netplay are one code path, so a bug in either shows up in both.
+
+### The snapshot
+
+`net/snapshot.ts` is a generic reflective walk, not a hand-written Box2D
+serialiser — because the state that matters is not only Box2D's. Display-tree
+playheads gate level completion, the contact listener counts diamonds, and the
+level's own flags decide whether anyone has died. A walk reaches all of it
+without being told about any of it.
+
+It **restores in place**: hard references to the same object instances, field
+values written back into them, never a rebuilt graph. That is what keeps
+`game.m_level`, the renderer's per-node caches and every Box2D cross-reference
+valid across a restore; it is also why objects created since the snapshot vanish
+correctly (nothing references them once the arrays are rewritten) and objects
+destroyed since it come back (the snapshot was still holding them).
+
+The storage layout was the difference between 11.3 ms and 4.7 ms per capture. A
+census found 26,000 objects but only ~107,000 fields — the cost was ~105 ns of
+per-field overhead, not the state. `Object.keys()` allocating 26,000 arrays a
+frame became `for...in` into a cached list; a `Map.get` per object-valued field
+became a non-enumerable generation stamp; one mixed `any[]` became typed arrays
+with booleans, `null` and `undefined` encoded as payload-free tags. Functions and
+anything in `FOREIGN` — images, audio nodes, promises, DOM — are opaque
+references, never walked.
+
+### The wire format
+
+Two packet kinds, both tiny. A player's whole input is **three bits** — left,
+right, up — so an input packet carrying a 32-frame window fits in 65 bytes and a
+session costs about 1.7 kB a second *including* the redundancy. The body still
+carries at most 16 frames (`BODY_HISTORY`); the other 16 ride in a checksummed
+trailer that older clients ignore.
+
+```mermaid
+flowchart LR
+    subgraph IP["InputPacket — Kind.Input"]
+        direction TB
+        I1["slot (0/1)"]
+        I2["epoch — which build of the level"]
+        I3["frame — absolute, from level start"]
+        I4["bits[] — newest first, up to HISTORY=32"]
+    end
+    subgraph CP["CommandPacket — Kind.Command"]
+        direction TB
+        C1["Start (mode, level)"]
+        C2["Pause"]
+        C3["Retry"]
+        C4["Quit"]
+    end
+```
+
+That redundancy is the whole reliability strategy: **there are no
+acknowledgements, no retransmission and no ordering.** A transport may lose,
+duplicate and reorder freely; the next packet heals the gap. Which is why the
+WebRTC data channel is deliberately configured **unreliable and unordered** —
+SCTP retransmission would hold newer input behind older input that no longer
+matters, and head-of-line blocking is the one thing this cannot afford.
+
+**The epoch** exists because retry rebuilds the level and restarts the frame
+count at zero. Without a generation number, a peer that has just retried files
+still-in-flight packets for frames 195–201 of the level it left as frames
+195–201 of the level it just started, and plays them seconds later as real
+input. The symptom is a desync that appears only after a retry on a link with
+any latency at all.
+
+### Choosing a transport
+
+```mermaid
+stateDiagram-v2
+    [*] --> Rendezvous
+    Rendezvous: Pair channel (Realtime) or BroadcastChannel
+    Rendezvous --> Offering: inviter offers, only after invitee says it is listening
+    Offering --> Direct: ICE succeeds
+    Offering --> Relay: ICE fails or times out
+    Direct: RTCDataChannel — unreliable, unordered, ~0 server cost
+    Relay: the rendezvous channel itself carries the game
+    Direct --> Relay: link closes (onClosed)
+    Direct --> [*]
+    Relay --> [*]
+```
+
+Three `Transport` implementations satisfy one interface — `BroadcastChannel`
+between two tabs, `RTCDataChannel` between two people (direct, or through
+Cloudflare TURN when NAT refuses), Supabase Realtime as the emergency path when
+neither connects. The session behaves identically on all three; the only
+thing that changes is latency, which it measures rather than assumes.
+
+`onClosed` is on the interface for a specific reason: silence means "nothing
+arrived", and a session correctly treats that as the peer being slow, because
+for a lost packet it is. A link that has actually gone never breaks that silence
+— so without an explicit close signal, a dead connection and a laggy one are the
+same event forever.
+
+**Relay batching.** In `app/src/net/realtime.ts`, changed input publishes
+immediately and held input on a 115 ms heartbeat (`FAST_MS`); the original
+230 ms leading-edge batching (`SLOW_MS`) survives only behind
+`FBWG_LEGACY_RELAY_BATCHING=1` (see the rollout below). One packet per frame
+per peer is ~52 messages a second, which
+spends the free tier's ~2 million monthly Realtime messages in about ten hours
+of play. Coalescing costs almost nothing because every packet already repeats
+thirty-two frames and rollback absorbs the later arrival by predicting. Commands
+and signalling bypass the queue — they unblock the next action and must not wait
+behind input.
+
+---
+
+## Realtime networking rollout
 
 Implemented directly from clean `main` at `1717cf1`. This is a staged patch set,
-not a production deployment. The user confirmed that TURN is not configured and
-requested the deployment checklist. Hosted TURN/Supabase acceptance remains open.
+not a production deployment. TURN was not configured when it was written, so it
+ends with the deployment checklist. Hosted TURN/Supabase acceptance remains open.
 
-## Architecture and important changes
+### Architecture and important changes
 
 The authoritative simulation remains **26 Hz**. Physics, input protocol bytes,
 rollback/prediction, hashes and replay rules are unchanged. The replay engine ID
-remains `temple-c09dc55de2a0f25301c882d322aa2507`.
+stayed `temple-c09dc55de2a0f25301c882d322aa2507` through the rollout; later
+engine changes have moved it since (see `engine/src/version.ts`).
 
 An authenticated Supabase Edge Function validates the caller with `getUser`, then
 requests four-hour Cloudflare TURN credentials. The browser receives only
@@ -64,7 +232,7 @@ identity, addresses, input contents or credentials are included. The app input
 metric is event-to-next-simulation-render; the browser benchmark separately
 measures event-to-observed-movement response. Neither measures physical photons.
 
-## Changed-file and review boundaries
+### Changed-file and review boundaries
 
 Paths below are repository-relative and list exact files within each brace group.
 Apply the stages in order. Shared lobby/flags integration is in stage 3; the
@@ -74,17 +242,17 @@ PlayScreen diagnostics and rollout scripts are finalized in stage 5.
 |---|---|---|
 | 1: TURN/security | `supabase/functions/turn-credentials/index.ts`, `handler.ts`; `supabase/functions/runtime.d.ts`, `tsconfig.json` | Validated auth, bounded TTL, CORS, throttling, strict local typecheck |
 | 1 | `app/src/net/turn.ts`, `turn-loader.ts`; `app/scripts/free-config.mjs`, `secret-scan.mjs`, `check.mjs` | Runtime credentials and static/source/output secret safeguards |
-| 1 | `engine/src/net/transport.ts`, `webrtc.ts`, `connect.ts`; `engine/test/ice-diagnostics.mjs`, `webrtc.mjs`; `test/free-config.mjs`, `turn-credentials.mjs`, `turn-live.mjs`; `docs/NETWORK_ROLLOUT_TURN.md` | IP-free selected ICE diagnostics and forced-relay harness |
+| 1 | `engine/src/net/transport.ts`, `webrtc.ts`, `connect.ts`; `engine/test/ice-diagnostics.mjs`, `webrtc.mjs`; `test/free-config.mjs`, `turn-credentials.mjs`, `turn-live.mjs`; `docs/DEEP_DIVE/TURN.md` | IP-free selected ICE diagnostics and forced-relay harness |
 | 2: relay publishing | `app/src/net/realtime.ts`; `test/realtime-edges.mjs`; `app/test/social-experience.mjs` | Immediate edges, coalesced heartbeat, legacy rollback mode, loss/replay proof and valid browser protocol fixtures |
 | 3: path ownership | `app/src/net/pathmanager.ts`, `pairchannel.ts`, `scope.ts`, `flags.ts`; `app/src/lobby.ts`, `env.d.ts`; `app/vite.config.ts`; `app/test/pathmanager.mjs`, `pathmanager-webrtc.mjs` | Stable session transport, lane buffering, capability negotiation and reconnect tests |
 | 4: presentation | `engine/src/render/interpolation.ts`, `sprites.ts`; `engine/src/embed.ts`, `interpolationtest.ts`; `engine/test/render-reconciliation.mjs`, `performance.mjs` | Residual smoothing, descendant animation, passive render timing callback and verification |
 | 5: QoE/integration | `app/src/net/qoe.ts`, `watch.ts`; `app/src/screens/play.ts`; `app/test/run-play.mjs`; `test/qoe.mjs`, `network-rollout-browser.mjs`; `package.json`, `engine/package.json`; `.github/workflows/fast.yml` | Local summaries, path readout, flags and CI/test entry points |
-| 5: evidence | `engine/test/networkbench.mjs`, `network-rollout-report.mjs`, `transport-failover.mjs`; `benchmarks/rollout-before.json`, `rollout-default.json`, `rollout-after.json`; `docs/benchmarks/network-rollout-before.json`, `network-rollout-after.json`, `pathmanager-local.json`, `webrtc-rollout-local.json`, `NETWORK_ROLLOUT_BENCHMARK.md` | Baselines, hostile network, browser timings and migration artifacts |
-| 5: operations | `README.md`, `app/README.md`, `supabase/README.md`, `FREE_TIER_BUDGET.md`, `BENCHMARKS.md`, `docs/NETWORK_ROLLOUT.md` | Updated architecture, cost boundary and deployment gates |
+| 5: evidence | `engine/test/networkbench.mjs`, `network-rollout-report.mjs`, `transport-failover.mjs` | Baselines, hostile network, browser timings and migration artifacts |
+| 5: operations | `README.md`, `app/README.md`, `supabase/README.md` | Updated architecture, cost boundary and deployment gates |
 
-## Validation and benchmark interpretation
+### Validation and benchmark interpretation
 
-The [complete benchmark table](benchmarks/NETWORK_ROLLOUT_BENCHMARK.md) reports
+The complete benchmark table reports
 all 32 network cells, queue/RTT/jitter percentiles, rollback depths, stalls,
 traffic, CPU and replay hashes. It also separates browser timings and live-RTC
 results from unmeasured hosted paths.
@@ -126,7 +294,7 @@ The recorded input-to-render proxies are 50.5 ms baseline, 52.1 ms default and
 52.2 ms enabled. CPU is 84.19%, 83.35% and 90.94%, respectively. These are single
 headless runs on this machine, with startup long tasks, not universal FPS claims.
 
-## Tests and commands
+### Tests and commands
 
 Run from the repository root. Browser checks require installed Playwright
 browsers and permission to launch local subprocesses. Missing browsers fail
@@ -165,13 +333,14 @@ migration or save/replay schema changed here. Lint retains existing warnings.
 | 5 | `node test/qoe.mjs`, `node engine/test/network-rollout-report.mjs`, cross-browser replay, play fixtures, build/check/lint and documentation checks | Bounded local summaries; the report records all 32 network cells and all three render configurations |
 
 The fully enabled bundle initially exceeded the previous 800 kB JS/CSS ceiling:
-805 kB across nine files. The reviewed budget is now 820 kB to account for these
+805 kB across nine files. The reviewed budget became 820 kB (since raised to
+925 kB in `app/scripts/check.mjs`) to account for these
 new modules; this is an explicit download-size increase, not a secret-scan or
 provider-limit exemption. The enabled build has 2,496 static files and about
 27.9 MB total output, below the existing file/count/asset limits. The final
 default build also passed the separate source/output secret and asset scan.
 
-## Security and known limits
+### Security and known limits
 
 `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN` belong only in Supabase
 Edge Function secrets, read by the broker. No actual value is committed or
@@ -185,7 +354,7 @@ The warm-isolate issuance throttle is abuse resistance, not a distributed
 budget. Cloudflare's published **1,000 GB/month** free allowance supports the
 $0 modest-usage target but has metered overage. Alerts are not spending caps.
 No SFU or authoritative gameplay server is added. See the
-[TURN security and cost runbook](NETWORK_ROLLOUT_TURN.md) for official sources.
+[TURN security and cost runbook](TURN.md) for official sources.
 
 Open limitations: hosted TURN/Supabase path acceptance; production NAT and WAN
 variability; TURN allocations lasting beyond the four-hour credentials (fresh
@@ -197,7 +366,7 @@ after 30 seconds of healthy RTC. A diagnostic `retryRTC()` permits an explicit
 fresh retry after exhaustion. Silent RTC failure detection uses a six-second
 heartbeat bound; explicit channel failure falls back immediately.
 
-## Rollback switches and staged release risks
+### Rollback switches and staged release risks
 
 | Stage | Risk and benchmark | Rollback / migration action |
 |---|---|---|
@@ -211,9 +380,9 @@ Rollback flags affect new builds/sessions; they do not alter an already-running
 pair's physical path owner. Redeploying the previous static artifact is the
 complete client rollback. Retain old replay verifier versions as already required.
 
-## Exact deployment configuration
+### Exact deployment configuration
 
-First follow the verified [broker commands](NETWORK_ROLLOUT_TURN.md#deployment-commands-and-secret-locations).
+First follow the verified [broker commands](TURN.md#deployment-commands-and-secret-locations).
 Create the TURN key and a private operator env file containing the two master
 values and optional `TURN_ALLOWED_ORIGINS`. Do not put that file in public assets.
 
@@ -255,7 +424,7 @@ hardware. The development-only `?forceTurn=1` forces relay ICE; it is excluded
 from production behavior. No Cloudflare master secret is needed by Wrangler,
 Vite, GitHub build variables or browser JavaScript.
 
-## Final production checklist
+### Final production checklist
 
 Local passes below are explicitly scoped. Hosted checks remain unchecked.
 

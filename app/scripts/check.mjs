@@ -211,7 +211,7 @@ console.log("\nthe download is the size it should be");
   // presentation options and local QoE (~805 kB total in the enabled build).
   // The 17-improvement implementation adds bounded renderer/resource caches,
   // manifest preparation, coherent recovery and durable saving (~846 kB total).
-  // Preserve a measured ceiling with20 kB headroom; see IMPLEMENTATION_RESULTS_17.md.
+  // Preserve a measured ceiling with20 kB headroom.
   // Quick Match adds the matchmaking flow, the card and its search animation
   // (~24 kB, ~884 kB total); the ceiling moves with it and keeps its headroom.
   // Keeping account code out of a guest's download (below) split it into more

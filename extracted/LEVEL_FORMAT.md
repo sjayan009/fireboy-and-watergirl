@@ -1,7 +1,7 @@
 # Recovered level format
 
-Extracted from `Fireboy & Watergirl - The Forest Temple.swf` by
-`tools/extract_levels.py`. Source of truth is ABC method **782**, which is
+Extracted from the original `Fireboy & Watergirl - The Forest Temple.swf`
+(not distributed in this repository) by `tools/extract_levels.py`. Source of truth is ABC method **782**, which is
 `level.<constructor>` — a 72.5 KB method that is 28% of the game's entire
 bytecode, almost all of it level literals.
 

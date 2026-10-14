@@ -112,7 +112,7 @@ physical high-refresh measurements or a decoded/GPU memory plateau claim.
 Two serial 20-second source-asset comparisons used the same current engine,
 adventure 1, position steering, Chromium 151, and the audit laptop. The second
 pair used compact observed terrain revisions and reversed the run order. Raw
-results are retained in `benchmarks/17-improvements-source-*.json`.
+results are not retained in the repository.
 
 | Comparison | Fallback p50 / p95 | Default p50 / p95 |
 |---|---|---|
@@ -129,8 +129,7 @@ claim would be premature. These harness preparation figures are not a
 login/invite-to-play measurement, and the fallback is the current implementation
 with selected raster features disabled, not an archived original release.
 
-The final packaged WebP run is retained as
-`benchmarks/17-improvements-packaged-default.json`. It used the compiled engine
+The final packaged WebP run used the compiled engine
 harness with `dist/extracted/assets`, default smoothing, position steering,
 and the production atlas rollout disabled. Over 20.01 seconds it recorded
 4.8/7.8 ms render p50/p95, 16.7/16.8 ms callback interval p50/p95, a 51.3 ms
@@ -176,7 +175,7 @@ reused per-node resolved/sampled transforms. Image download/decode
 concurrency remained bounded at 12 lanes, and `prepare()`
 waited for all requested art to settle before simulation started. No atlas or
 new asset service was necessary for those earlier improvements. Asset-count/build
-limits and packing decisions are covered in the free-tier budget.
+limits and packing decisions are covered in [the deployment guide](../HIGH_LEVEL/DEPLOYMENT.md).
 
 The old mask and filter recursion temporarily wrote `mask`, `isMask` and
 `filters` on display objects. Draw flags/content traversal now avoid those
@@ -202,7 +201,7 @@ zero accumulator presents its corrected position exactly once.
 Synthetic callback schedules establish interpolation behavior, not a claim of
 physical 144/240 Hz display performance. The actual browser benchmark and its
 environment, input-to-render proxy, CPU/heap, GC/long-task measurements and
-limitations are recorded separately in `benchmarks/`.
+limitations were recorded separately.
 
 Survev was studied through its primary source on 2026-09-11. Its
 [player renderer](https://github.com/survev/survev/blob/master/client/src/objects/player.ts)
