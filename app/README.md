@@ -65,7 +65,7 @@ verified and Supabase records it as confirmed.
 The obsolete invite machinery and its CLI were removed by
 `20260911000000_drop_the_invite_machinery`. Google sign-in avoids a required
 outbound mail service; password signup/reset requires separately verified free
-SMTP. See the root `FREE_TIER_BUDGET.md` for the deployment and quota policy.
+SMTP. See [the deployment guide](../docs/HIGH_LEVEL/DEPLOYMENT.md) for the deployment and quota policy.
 
 ## Two-factor
 
@@ -131,8 +131,8 @@ The optional build-time `ICE_SERVERS` setting accepts public STUN URLs only.
 back to public STUN on failure. Cloudflare TURN is selected by WebRTC ICE;
 Supabase gameplay relay remains the emergency application path. Master
 Cloudflare tokens never belong in client source, Vite configuration or public
-assets. See [TURN setup and live acceptance](../docs/NETWORK_ROLLOUT_TURN.md)
-and [migration flags and benchmarks](../docs/NETWORK_ROLLOUT.md).
+assets. See [TURN setup and live acceptance](../docs/DEEP_DIVE/TURN.md)
+and [migration flags](../docs/DEEP_DIVE/NETCODE.md).
 
 ## Configuration the dashboard has to supply
 

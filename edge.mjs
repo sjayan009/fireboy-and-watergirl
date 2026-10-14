@@ -2,7 +2,7 @@
  * The only code that runs in front of the static site, and only for a path
  * that matches no file. Every file that exists, the bare address included, is
  * served by the asset layer without invoking this, so it costs nothing and has
- * no daily limit (FREE_TIER_BUDGET.md).
+ * no daily limit (docs/HIGH_LEVEL/DEPLOYMENT.md).
  *
  * That is deliberate. Workers Free answers 429 once 100,000 invocations are
  * used in a day, so anything routed through here can be switched off for the

@@ -20,8 +20,8 @@ allowed origins and usage monitoring before enabling the function. It uses no
 service-role key and creates no gameplay-data authorization; existing
 profile/MFA/friendship policies still govern game data. Its eight-attempt
 per-user throttle is local to an isolate, not a global spend cap. See the
-[TURN deployment runbook](../docs/NETWORK_ROLLOUT_TURN.md) and
-[full networking rollout](../docs/NETWORK_ROLLOUT.md).
+[TURN deployment runbook](../docs/DEEP_DIVE/TURN.md) and
+[full networking rollout](../docs/DEEP_DIVE/NETCODE.md).
 
 There is no Supabase CLI or Docker on this machine, so `migrate.mjs` connects
 straight to Postgres and applies the files itself. The files are plain SQL, so

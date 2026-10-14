@@ -10,7 +10,7 @@
  *   - every state is a pure function of the frame number, so a paused frame
  *     is a complete picture, and the log keeps what already happened on screen
  *
- * The numbers are the build's own (docs/ARCHITECTURE.MD): 26 fps, a single
+ * The numbers are the build's own (docs/DEEP_DIVE/NETCODE.md): 26 fps, a single
  * snapshot refreshed once the settled frontier is 8 frames past it, ~0.04 ms
  * to re-simulate a frame, and the peer's input predicted by repeating its last
  * confirmed bits. The 4-frame packet delay is illustrative.
