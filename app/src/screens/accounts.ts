@@ -6,17 +6,19 @@
  * which part failed.
  */
 import {
-  arrivedByResetLink, auth, claimUsername, redeemRecoveryCode,
-  resendVerification, retryAuth,
-  sendPasswordReset, setPassword, signIn, signInWithGoogle, signOut, signUp,
-  listFactors, verifyEmailCode, verifyTotp,
+  arrivedByResetLink, auth, claimUsername, declinePasskeyOffer, listPasskeys,
+  passkeysAvailable, redeemRecoveryCode, registerPasskey, resendVerification,
+  retryAuth, sendEmailCode, sendPasswordReset, setPassword, signIn,
+  signInWithGoogle, signInWithPasskey, signOut, startAutofill, stopAutofill,
+  takePasskeyOffer, listFactors, verifyEmailCode, verifyTotp,
 } from "../auth.js";
 import {
   card, el, field, form, googleButton, inputOf, link, note, orDivider,
+  passkeyButton,
 } from "../ui/dom.js";
 import { codeClock, codeField, tryCode } from "../ui/code.js";
 import { captcha } from "../captcha.js";
-import { go, rerender } from "../router.js";
+import { go, home, rerender } from "../router.js";
 import { ageCleared, ageGate } from "../age.js";
 
 /** Google makes accounts as well as signing them in, so it waits on the age screen too. */
@@ -33,33 +35,24 @@ export function signUpScreen(host: HTMLElement): void | (() => void) {
       note("Already have one? ", link("Sign In", "#/login"))));
     return;
   }
+  // No password: an address and the code mailed to it make the account, and
+  // a passkey is offered as soon as it exists. See `sendEmailCode`.
   const email = field("Email", { type: "email", required: true,
                                  autocomplete: "email" });
-  const pw = field("Password", { type: "password", required: true,
-                                 minlength: 8, autocomplete: "new-password" });
-  const again = field("Repeat password", { type: "password", required: true,
-                                           autocomplete: "new-password" });
   const human = captcha();
 
   host.append(card("Make an Account",
     google(),
     orDivider(),
     form({
-      submit: "Sign Up",
-      children: [email, pw, again],
+      submit: "Email me a code",
+      children: [email],
       captcha: human.node,
       onSubmit: async () => {
-        if (inputOf(pw).value !== inputOf(again).value) {
-          throw new Error("Those two passwords are not the same.");
-        }
-        if (inputOf(pw).value.length < 8) {
-          throw new Error("Use at least 8 characters.");
-        }
         const address = inputOf(email).value.trim();
-        const { existing } = await signUp(address, inputOf(pw).value,
-                                          await human.token());
+        await sendEmailCode(address, true, await human.token());
         awaiting = address;
-        awaitingExisting = existing;
+        awaitingCreate = true;
         awaitingSince = Date.now();
         go("/verify");
       },
@@ -107,12 +100,63 @@ export function loginScreen(host: HTMLElement): () => void {
   // about to -- and the field it rescues is directly above it. In the footer it
   // shared a line with "Make an account", which put the way OUT of a stuck
   // sign-in next to the way to abandon signing in altogether.
-  const forgot = el("p", { class: "field-aside" },
-    link("Forgot password?", "#/reset"));
   const human = captcha();
+  // "Email me a code" uses the address already typed above it, and the same
+  // Turnstile widget as the form: both are one press at a time.
+  const codeInstead = el("a", { href: "#", onclick: async (e: Event) => {
+    e.preventDefault();
+    const input = inputOf(email);
+    if (!input.reportValidity()) return;
+    refused.hidden = true;
+    try {
+      await sendEmailCode(input.value.trim(), false, await human.token());
+      awaiting = input.value.trim();
+      awaitingCreate = false;
+      awaitingSince = Date.now();
+      go("/verify");
+    } catch (err) {
+      refused.textContent = (err as Error).message;
+      refused.hidden = false;
+    }
+  } }, "Email me a code");
+  const forgot = el("p", { class: "field-aside" },
+    link("Forgot password?", "#/reset"), " · ", codeInstead);
+
+  // A second, separate widget for the passkey challenges: the autofill
+  // request takes a token the moment the screen opens and holds it, and a
+  // press of the button must not wait on the form's.
+  const keyCheck = captcha();
+  const passkeys = el("div", {});
+  // The browser lists this site's passkeys in the email field's autofill
+  // (`webauthn` below) as well as behind the button.
+  inputOf(email).autocomplete = "email webauthn";
+  // Ends with the screen, so nothing it started outlives it.
+  const screen = new AbortController();
+  const autofill = () => void startAutofill(keyCheck.token, () => {
+    refused.textContent = "That took too long. Pick your passkey again.";
+    refused.hidden = false;
+  }, screen.signal).catch((err: Error) => {
+    refused.textContent = err.message;
+    refused.hidden = false;
+  });
+  void passkeysAvailable().then((yes) => {
+    if (!yes || screen.signal.aborted) return;
+    passkeys.replaceWith(passkeyButton(async () => {
+      let signedIn = false;
+      try {
+        signedIn = await signInWithPasskey(await keyCheck.token());
+      } finally {
+        // The button took the browser's one WebAuthn request; give the
+        // field its autofill back unless this screen is on its way out.
+        if (!signedIn) autofill();
+      }
+    }), keyCheck.node);
+    autofill();
+  });
 
   host.append(card("Sign In",
     refused,
+    passkeys,
     google(),
     orDivider(),
     form({
@@ -129,7 +173,7 @@ export function loginScreen(host: HTMLElement): () => void {
       footer: el("div", { class: "after-form" },
         el("a", { class: "secondary", href: "#/signup" }, "Make an Account")),
     })));
-  return human.remove;
+  return () => { screen.abort(); stopAutofill(); human.remove(); keyCheck.remove(); };
 }
 
 /**
@@ -149,14 +193,18 @@ export function loginScreen(host: HTMLElement): () => void {
  * admits `out` as well, and this is what tells it who it is waiting for.
  */
 let awaiting = "";
-/** Whether that address turned out to already have an account. */
-let awaitingExisting = false;
+/** Whether the code came from the sign-up form, which may make the account. */
+let awaitingCreate = false;
 /** When its code was sent, for the clock; 0 when this page does not know. */
 let awaitingSince = 0;
 
 export function verifyScreen(host: HTMLElement): () => void {
   const known = awaiting || auth().user?.email || "";
-  const existing = awaitingExisting;
+  // A session here is a password sign-up from before sign-ups stopped taking
+  // passwords, still unconfirmed: its code is a `signup` code. Everybody
+  // else is holding a code from `sendEmailCode`.
+  const legacy = !!auth().session;
+  const kind = legacy ? "signup" as const : "email" as const;
   // A reload forgets the address, and so does arriving from another device.
   // Asking for it again is all either needs: the code is useless without it.
   const email = known ? null : field("Email", { type: "email", required: true,
@@ -169,11 +217,10 @@ export function verifyScreen(host: HTMLElement): () => void {
   const startOver = async (e: Event) => {
     e.preventDefault();
     awaiting = "";
-    awaitingExisting = false;
     awaitingSince = 0;
     // Signing out matters only when there IS a session; after a plain
     // sign-up there is none, and this is simply the way back.
-    if (auth().session) await signOut(); else go("/signup");
+    if (auth().session) await signOut(); else go(awaitingCreate ? "/signup" : "/login");
   };
 
   host.append(card("Check your email",
@@ -182,35 +229,26 @@ export function verifyScreen(host: HTMLElement): () => void {
     known
       ? note("We sent a code to ", el("strong", {}, known), ". ",
              el("a", { href: "#", onclick: startOver }, "Change"))
-      : note("Enter the address you signed up with and the code we sent it."),
-    // The one sentence that serves both people without telling either about
-    // the other.
-    //
-    // Supabase deliberately will not say "that address is taken" -- see
-    // `signUp` -- so neither will this. But somebody who already has an account
-    // is standing here waiting for mail that is never coming, and the only
-    // thing that helps them is the door they actually need. Saying it to
-    // everybody costs the genuinely new person one line of text and costs the
-    // returning person nothing at all.
-    existing
-      ? note("Already had an account with that address? Nothing will arrive — ",
-             link("sign in instead", "#/login"),
-             ", including with Google if that is how you made it.")
+      : note("Enter your address and the code we sent it."),
+    // Worded so it does not say whether the address has an account: from the
+    // sign-in form, an unknown address is sent nothing (see `sendEmailCode`).
+    !awaitingCreate && known && !legacy
+      ? note("If that address has an account, the code is on its way.")
       : null,
     form({
       submit: "Continue",
       children: [email, code,
         codeClock(awaitingSince || null, async () => {
           if (!address()) throw new Error("Enter your email first.");
-          await resendVerification(address(), await human.token());
+          if (legacy) await resendVerification(address(), await human.token());
+          else await sendEmailCode(address(), awaitingCreate, await human.token());
           awaitingSince = Date.now();
         })],
       captcha: human.node,
       onSubmit: async () => {
-        await tryCode(code, (c) => verifyEmailCode("signup", address(), c));
+        await tryCode(code, (c) => verifyEmailCode(kind, address(), c));
         // The session is in. The router moves on when the stage changes.
         awaiting = "";
-        awaitingExisting = false;
         awaitingSince = 0;
       },
       footer: note("It can take a minute, and it does sometimes land in spam."),
@@ -430,7 +468,7 @@ export function usernameScreen(host: HTMLElement): void {
       onSubmit: async () => {
         await claimUsername(inputOf(name).value.trim());
         rerender();
-        go("/play");
+        go(home("in"));
       },
       footer: el("p", { class: "note" },
         el("a", { href: "#", onclick: async (e: Event) => {
@@ -478,4 +516,39 @@ export function troubleScreen(host: HTMLElement): void {
           await signOut();
         } }, "Sign out")),
     })));
+}
+
+/**
+ * "Sign in faster next time": one offer of a passkey, straight after a
+ * sign-in that used something else.
+ *
+ * Skipped, without drawing anything, when there is nothing to offer: the
+ * browser or project cannot do passkeys, the account already has one, or
+ * this account said "Not now" in the last month. Both answers lead to the
+ * game; neither is a gate.
+ */
+export function passkeyOfferScreen(host: HTMLElement): void {
+  const wanted = takePasskeyOffer();
+  const onward = () => go("/play");
+  void (async () => {
+    const offer = wanted && await passkeysAvailable()
+      && (await listPasskeys().catch(() => [null])).length === 0;
+    if (!offer) { onward(); return; }
+    host.append(card("Sign in faster next time",
+      note("Save a passkey and sign in with your face, fingerprint or device " +
+           "PIN. Nothing to type, nothing to remember, and nothing anybody " +
+           "can steal from this game."),
+      form({
+        submit: "Save a passkey",
+        children: [],
+        onSubmit: async () => { if (await registerPasskey()) onward(); },
+        footer: el("p", { class: "note" },
+          el("a", { href: "#", onclick: (e: Event) => {
+            e.preventDefault();
+            declinePasskeyOffer();
+            onward();
+          } }, "Not now"),
+          " · You can add one any time in Settings."),
+      })));
+  })();
 }

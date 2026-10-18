@@ -51,5 +51,9 @@ export const supabase = createClient(__SUPABASE_URL__, __SUPABASE_KEY__, {
     // the URL fragment.
     detectSessionInUrl: true,
     flowType: "pkce",
+    // Passkeys are a beta in supabase-js and refuse to run without this.
+    // The version is pinned in package.json for the same reason: the beta's
+    // API "may change without notice".
+    experimental: { passkey: true },
   },
 });

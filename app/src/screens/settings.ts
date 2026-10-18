@@ -8,8 +8,9 @@
  * authenticator and the codes.
  */
 import {
-  auth, changeEmail, changePassword, claimUsername, deleteAccount, enrolTotp,
-  generateRecoveryCodes, hasPassword, listFactors, recoveryCodesLeft,
+  auth, changeEmail, changePassword, claimUsername, deleteAccount, deletePasskey,
+  enrolTotp, generateRecoveryCodes, hasPassword, listFactors, listPasskeys,
+  passkeysAvailable, recoveryCodesLeft, registerPasskey,
   ReauthenticationNeeded, sendReauthenticationCode, setPassword,
   signOutOtherDevices, unenrolTotp, verifyTotp,
   resendEmailChange, verifyEmailCode,
@@ -68,6 +69,11 @@ export function settingsScreen(host: HTMLElement): () => void {
   const twoFactorValue = el("span", { class: "settings-value" }, "Checking…");
   const boardValue = el("span", { class: "settings-value" }, "Checking…");
   const passwordValue = el("span", { class: "settings-value" }, "Checking…");
+  const passkeyValue = el("span", { class: "settings-value" }, "Checking…");
+  // Spaced as the two-factor row is: a list, then its buttons, 8px apart.
+  const passkeys = el("div", { class: "passkey-row" }, note("Checking…"));
+  const passkeyRow = group("Passkeys", passkeyValue, passkeys);
+  passkeyRow.hidden = true;
   const password = el("div", {}, note("Checking…"));
   const email = el("div", {}, note("Checking…"));
 
@@ -91,6 +97,7 @@ export function settingsScreen(host: HTMLElement): () => void {
             // happened.
           },
         })),
+      passkeyRow,
       group("Password", passwordValue, password),
       group("Email", auth().user?.email ?? "Not set", email),
       group("Two-factor", twoFactorValue, factors),
@@ -101,6 +108,11 @@ export function settingsScreen(host: HTMLElement): () => void {
       el("a", { href: "#/play" }, "Back to the game"))));
 
   void drawFactors(factors, twoFactorValue);
+  void passkeysAvailable().then((yes) => {
+    if (!yes) return;
+    passkeyRow.hidden = false;
+    void drawPasskeys(passkeys, passkeyValue);
+  });
   void drawPassword(password, passwordValue, email, human);
   return () => { for (const w of widgets) w.remove(); };
 }
@@ -259,10 +271,10 @@ function passwordSection(has: boolean, value: HTMLElement,
   const check = has ? human() : null;
 
   return el("div", {},
-    has ? null : note("You signed in with Google, so this account has no " +
-                      "password. Setting one ADDS a second way in; Google " +
-                      "keeps working either way. We email a code to your " +
-                      "address first."),
+    has ? null : note("This account has no password: you sign in with a " +
+                      "passkey, Google or an emailed code. Setting one ADDS " +
+                      "another way in, and the others keep working. We email " +
+                      "a code to your address first."),
     // Not "to prove it is you": Supabase checks that code only for a session
     // over a day old, so for a younger one it is this screen's check, not the
     // server's. Saying it proved anything would overstate it.
@@ -623,4 +635,63 @@ async function drawFirstCodes(host: HTMLElement, value: HTMLElement): Promise<vo
     el("label", { class: "check" }, acknowledged,
       el("span", {}, "I have saved these somewhere I can get to them")),
     done);
+}
+
+/**
+ * The passkeys on this account: each one by name, a way to remove it, and a
+ * way to add one for this device.
+ *
+ * Removing the last one is allowed and says what is left, rather than being
+ * refused: an emailed code and Google still sign the account in, so it is
+ * never the way to lock yourself out.
+ */
+async function drawPasskeys(host: HTMLElement, value: HTMLElement): Promise<void> {
+  let keys;
+  try {
+    keys = await listPasskeys();
+  } catch (e) {
+    host.replaceChildren(note((e as Error).message));
+    value.textContent = "Unknown";
+    return;
+  }
+  value.textContent = keys.length ? `${keys.length} saved` : "None";
+  const said = note("");
+  said.hidden = true;
+  const say = (text: string) => { said.textContent = text; said.hidden = false; };
+  const date = (iso: string) => new Date(iso).toLocaleDateString(undefined,
+    { year: "numeric", month: "short", day: "numeric" });
+
+  const add = el("button", { class: "ghost", onclick: async () => {
+    add.disabled = true;
+    try {
+      if (await registerPasskey()) await drawPasskeys(host, value);
+    } catch (e) {
+      say((e as Error).message);
+    } finally {
+      add.disabled = false;
+    }
+  } }, keys.length ? "Add another passkey" : "Add a passkey");
+
+  host.replaceChildren(...[
+    note("Sign in with your face, fingerprint or device PIN instead of a " +
+         "password. Passkeys saved to a password manager or iCloud Keychain " +
+         "follow you to your other devices."),
+    keys.length ? el("ul", { class: "passkeys" }, ...keys.map((k) => {
+      const remove = el("button", { class: "ghost small", onclick: async () => {
+        remove.disabled = true;
+        try {
+          await deletePasskey(k.id);
+          await drawPasskeys(host, value);
+        } catch (e) {
+          remove.disabled = false;
+          say((e as Error).message);
+        }
+      } }, "Remove");
+      return el("li", {},
+        el("span", {}, el("strong", {}, k.name), el("br"),
+          el("span", { class: "note" }, `Added ${date(k.created)}` +
+            (k.lastUsed ? ` · last used ${date(k.lastUsed)}` : ""))),
+        remove);
+    })) : null,
+    add, said].filter((n): n is HTMLElement => n !== null));
 }

@@ -17,7 +17,7 @@
  * Sent from here, not from the page, with a non-browser User-Agent and no
  * Origin: Supabase refuses a secret key that arrives looking like a browser.
  */
-const GUARDED = /\/auth\/v1\/(signup|recover|resend|token\?grant_type=password)/;
+const GUARDED = /\/auth\/v1\/(signup|recover|resend|otp|passkeys\/authentication\/options|token\?grant_type=password)/;
 
 const STAND_IN = `(() => {
   let n = 0;
@@ -33,8 +33,19 @@ const STAND_IN = `(() => {
 /**
  * Set up `context` as above. `missing` is called with the path of any guarded
  * request that arrived without a token.
+ *
+ * Also takes WebAuthn away unless `passkeys` is set. With it, every password
+ * sign-in on a project with Passkeys on stops at the "save a passkey" offer,
+ * and suites about friends or play would each have to step around it; the
+ * app hides every passkey control in a browser without WebAuthn, so here
+ * they simply never appear. `passkeys.mjs` is the suite that wants them.
  */
-export async function passCaptcha(context, api, secret, missing) {
+export async function passCaptcha(context, api, secret, missing, { passkeys = false } = {}) {
+  if (!passkeys) {
+    await context.addInitScript(() => {
+      Object.defineProperty(window, "PublicKeyCredential", { value: undefined, configurable: true });
+    });
+  }
   await context.route("https://challenges.cloudflare.com/turnstile/**",
     (route) => route.fulfill({ contentType: "text/javascript", body: STAND_IN }));
   await context.route((url) => url.href.startsWith(api) && GUARDED.test(url.href),
@@ -49,7 +60,11 @@ export async function passCaptcha(context, api, secret, missing) {
       delete headers.origin;
       delete headers.referer;
       const response = await route.fetch({ headers });
+      // supabase-js reads error codes only when it can see the API version
+      // header, so it has to stay visible to the page, as Supabase's own CORS
+      // keeps it; without it every refusal arrives with no code.
       await route.fulfill({ response, headers: { ...response.headers(),
-                                                 "access-control-allow-origin": "*" } });
+                                                 "access-control-allow-origin": "*",
+                                                 "access-control-expose-headers": "x-supabase-api-version" } });
     });
 }

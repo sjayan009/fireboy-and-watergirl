@@ -181,7 +181,33 @@ function googleMark(): HTMLElement {
  * flash a second press people can actually land.
  */
 export function googleButton(onPress: () => Promise<void>): HTMLElement {
-  const said = "Continue with Google";
+  return providerButton(googleMark(), "Continue with Google", onPress);
+}
+
+/**
+ * A key, in the text colour: unlike Google's G there is no mark to honour,
+ * and the browser's own passkey sheet is what the press opens.
+ */
+function passkeyMark(): HTMLElement {
+  const mark = el("span", { class: "google-g", "aria-hidden": "true" });
+  mark.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">' +
+    '<circle cx="8" cy="15" r="4"/><path d="M10.85 12.15 19 4M18 5l2 2M15 8l2 2"/></svg>';
+  return mark;
+}
+
+/**
+ * "Sign in with a passkey". A press that comes back without a session --
+ * the person closed the browser's sheet -- resolves rather than throws, so
+ * changing your mind is not reported as an error.
+ */
+export function passkeyButton(onPress: () => Promise<void>): HTMLElement {
+  return providerButton(passkeyMark(), "Sign in with a passkey", onPress, true);
+}
+
+function providerButton(mark: HTMLElement, said: string, onPress: () => Promise<void>,
+                        restore = false): HTMLElement {
   const error = el("p", { class: "error", role: "alert" });
   error.hidden = true;
   const label = el("span", {}, said);
@@ -193,14 +219,15 @@ export function googleButton(onPress: () => Promise<void>): HTMLElement {
       label.textContent = "…";
       try {
         await onPress();
+        if (!restore) return;
       } catch (err) {
         error.textContent = (err as Error).message || String(err);
         error.hidden = false;
-        button.disabled = false;
-        label.textContent = said;
       }
+      button.disabled = false;
+      label.textContent = said;
     },
-  }, googleMark(), label);
+  }, mark, label);
 
   return el("div", { class: "provider-block" }, button, error);
 }

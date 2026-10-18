@@ -12,7 +12,7 @@
  * `/settings` would need a rewrite rule and a serverless hop to answer; a deep
  * link to `#/settings` needs neither.
  */
-import { auth, onAuth, Stage } from "./auth.js";
+import { auth, onAuth, passkeyOfferPending, Stage } from "./auth.js";
 
 export interface Route {
   path: string;
@@ -34,6 +34,15 @@ const HOME: Record<Stage, string> = {
   // whichever answer the error happened to look like.
   unavailable: "/trouble",
 };
+
+/**
+ * Where a stage goes now. The same as `HOME`, except that somebody who has
+ * just signed in without a passkey is offered one on the way to the game
+ * (see `takePasskeyOffer`).
+ */
+export function home(stage: Stage): string {
+  return stage === "in" && passkeyOfferPending() ? "/passkey" : HOME[stage];
+}
 
 let routes: Route[] = [];
 let host: HTMLElement;
@@ -72,8 +81,8 @@ function render(): void {
   const stage = auth().stage;
   const route = routes.find((r) => r.path === path);
 
-  if (!route) { go(HOME[stage]); return; }
-  if (!route.stages.includes(stage)) { go(HOME[stage]); return; }
+  if (!route) { go(home(stage)); return; }
+  if (!route.stages.includes(stage)) { go(home(stage)); return; }
 
   // Re-rendering the screen already showing would tear down a running game to
   // put the same one back.
@@ -97,7 +106,7 @@ export function startRouter(mount: HTMLElement, table: Route[]): void {
     const route = routes.find((r) => r.path === current());
     if (!route || !route.stages.includes(auth().stage)) {
       showing = null;
-      go(HOME[auth().stage]);
+      go(home(auth().stage));
     }
   });
   render();

@@ -38,6 +38,26 @@ an established player to the username form asking for an invite code they no
 longer had. Both are the wrong direction to fail in and both were
 indistinguishable from the truth.
 
+### Ways in
+
+New accounts have no password. Sign-up mails a code (`sendEmailCode`); the code
+makes the account and signs it in. After that an account signs in with a
+passkey, Google, an emailed code, or a password if it has one (accounts from
+before this change, or anybody who adds one in Settings).
+
+Passkeys use Supabase Auth's passkey beta, behind `auth.experimental.passkey`.
+The sign-in screen offers them twice: a button, and the email field's autofill
+list (conditional mediation, `autocomplete="email webauthn"`). After any other
+kind of sign-in the router stops once at `/passkey` to offer to save one. A
+passkey sign-in is `aal1`, so an account with TOTP still answers its code. Every
+passkey control hides itself unless `/auth/v1/settings` reports
+`passkeys_enabled` and the browser has WebAuthn. `app/test/passkeys.mjs` drives
+the whole flow with a Chrome virtual authenticator.
+
+The passkey relying-party ID is the production hostname. Moving the site to
+another domain makes every saved passkey unusable, so a domain change has to
+come before people save them, or come with a plan to re-enrol.
+
 **Every one of these gates is also enforced in Postgres.** The router decides
 what to *draw*; `has_profile()`, `assurance_satisfied()` and `caller_allowed()`
 decide what is *allowed*. Bypassing the SPA reaches nothing.

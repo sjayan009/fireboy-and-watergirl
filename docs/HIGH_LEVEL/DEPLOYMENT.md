@@ -121,8 +121,9 @@ home-region-only, can lack capacity and can reclaim idle instances. No Oracle
 machine is required. Only Always Free resources qualify; trial credits and
 upgrading a tenancy are excluded.
 
-Google OAuth is implemented as an email-free sign-in route; production initiation
-redirects to Google. Email sign-up/reset uses Brevo Free, with a 300-email daily
+Google OAuth and passkeys are the email-free sign-in routes; production Google
+initiation redirects to Google. Email sign-up codes, sign-in codes and resets use
+Brevo Free, with a 300-email daily
 allowance and no expiry or automatic paid capacity. Keep its account on Free,
 without paid credits. Supabase's default sender is for testing and restricted
 to team addresses. Keep confirmation/MFA checks.
