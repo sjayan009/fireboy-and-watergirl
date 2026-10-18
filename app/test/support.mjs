@@ -105,7 +105,16 @@ try {
   await page.reload({ waitUntil: "load" });
   await page.waitForSelector(".ticket-tabs");
   check("a fixed ticket leaves the open pile", await page.locator(".ticket").count(), 0);
+  // Switching piles re-sorts what is loaded: no request, no loading line.
+  let fetched = 0;
+  const counting = (r) => { if (r.url().includes("/rest/v1/support_tickets")) fetched++; };
+  page.on("request", counting);
   await page.click(".ticket-tabs button:has-text('Completed')");
+  await page.click(".ticket-tabs button:has-text('Deleted')");
+  await page.click(".ticket-tabs button:has-text('Completed')");
+  check("switching piles fetches nothing", fetched, 0);
+  check("and never shows the loading line", await page.locator("text=Loading your tickets").count(), 0);
+  page.off("request", counting);
   await page.locator(".ticket > summary").first().click();
   check("and is under Completed, every step lit", await page.locator(".ticket-track li.done, .ticket-track li.now").count(), 4);
 
