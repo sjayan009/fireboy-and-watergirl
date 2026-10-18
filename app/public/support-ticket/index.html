@@ -1,0 +1,20 @@
+<!doctype html>
+<!--
+  /support-ticket, as a real address: the footers link here and anybody can be
+  told it. The app routes on the hash, so this forwards to /#/support-ticket.
+  A static file and not a Worker route, so the asset layer serves it for free
+  and nothing can use it up (see edge.mjs). No script: the CSP allows none
+  inline, and a refresh needs none.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <meta http-equiv="refresh" content="0; url=/#/support-ticket">
+  <title>Support · Fireboy &amp; Watergirl</title>
+</head>
+<body>
+  <p><a href="/#/support-ticket">Go to Support</a></p>
+</body>
+</html>

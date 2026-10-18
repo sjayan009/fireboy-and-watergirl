@@ -6,8 +6,9 @@
  * which part failed.
  */
 import {
-  arrivedByResetLink, auth, claimUsername, declinePasskeyOffer, listPasskeys,
-  passkeysAvailable, redeemRecoveryCode, registerPasskey, resendVerification,
+  arrivedByResetLink, askForPasskey, auth, claimUsername, declinePasskeyOffer,
+  listPasskeys, passkeyAskedFor,
+  passkeysAvailable, passkeyUsedHere, redeemRecoveryCode, registerPasskey, resendVerification,
   retryAuth, sendEmailCode, sendPasswordReset, setPassword, signIn,
   signInWithGoogle, signInWithPasskey, signOut, startAutofill, stopAutofill,
   takePasskeyOffer, listFactors, verifyEmailCode, verifyTotp,
@@ -100,6 +101,10 @@ export function loginScreen(host: HTMLElement): () => void {
   // about to -- and the field it rescues is directly above it. In the footer it
   // shared a line with "Make an account", which put the way OUT of a stuck
   // sign-in next to the way to abandon signing in altogether.
+  // Hidden until the project says passkeys are on, like the button above.
+  const createKey = el("a", { class: "tertiary", href: "#/create-passkey" }, "Create a Passkey");
+  createKey.hidden = true;
+  void passkeysAvailable().then((yes) => { createKey.hidden = !yes; });
   const human = captcha();
   // "Email me a code" uses the address already typed above it, and the same
   // Turnstile widget as the form: both are one press at a time.
@@ -123,7 +128,7 @@ export function loginScreen(host: HTMLElement): () => void {
     link("Forgot password?", "#/reset"), " · ", codeInstead);
 
   // A second, separate widget for the passkey challenges: the autofill
-  // request takes a token the moment the screen opens and holds it, and a
+  // request takes a token when the field is focused and holds it, and a
   // press of the button must not wait on the form's.
   const keyCheck = captcha();
   const passkeys = el("div", {});
@@ -132,6 +137,13 @@ export function loginScreen(host: HTMLElement): () => void {
   inputOf(email).autocomplete = "email webauthn";
   // Ends with the screen, so nothing it started outlives it.
   const screen = new AbortController();
+  // Started when somebody goes to the email field, not when the screen opens.
+  // A waiting request is invisible in Chrome, Edge and Safari, but some
+  // Chromium builds (measured in an Electron one) surface it as the system's
+  // "choose a passkey" window at the next click anywhere -- the passkey
+  // button included -- as though the site had asked.
+  let armed = false;
+  inputOf(email).addEventListener("focus", () => { if (!armed) { armed = true; autofill(); } });
   const autofill = () => void startAutofill(keyCheck.token, () => {
     refused.textContent = "That took too long. Pick your passkey again.";
     refused.hidden = false;
@@ -141,17 +153,43 @@ export function loginScreen(host: HTMLElement): () => void {
   });
   void passkeysAvailable().then((yes) => {
     if (!yes || screen.signal.aborted) return;
-    passkeys.replaceWith(passkeyButton(async () => {
+    const usePasskey = async () => {
       let signedIn = false;
+      none.hidden = true;
       try {
         signedIn = await signInWithPasskey(await keyCheck.token());
       } finally {
         // The button took the browser's one WebAuthn request; give the
-        // field its autofill back unless this screen is on its way out.
-        if (!signedIn) autofill();
+        // field its autofill back, if it had it, unless this screen is going.
+        if (!signedIn && armed) autofill();
       }
-    }), keyCheck.node);
-    autofill();
+    };
+    // Asked BEFORE the system's sheet, on a device that has never used a
+    // passkey here. The page cannot know whether one exists -- browsers will
+    // not say -- and with none on this device, Windows and macOS still open a
+    // "choose a passkey" sheet offering a phone or a security key, which reads
+    // as if the site thinks you have one. So the question comes from us first.
+    const none = el("div", { class: "passkey-hint", role: "group", "aria-label": "Passkey" },
+      el("p", {}, "Have you saved a passkey for this game?"),
+      el("div", { class: "passkey-choice" },
+        el("button", { type: "button", class: "ghost", onclick: () => {
+          refused.hidden = true;
+          usePasskey().catch((err: Error) => {
+            refused.textContent = err.message;
+            refused.hidden = false;
+          });
+        } }, "Yes, use it"),
+        el("a", { class: "tertiary", href: "#/create-passkey" }, "No, create one")),
+      el("p", { class: "note" }, "It can be on this device, your phone, or a security key."));
+    none.hidden = true;
+    const button = passkeyButton(async () => {
+      if (!passkeyUsedHere()) { none.hidden = !none.hidden; return; }
+      await usePasskey();
+    });
+    // Withdrawn before the click lands, so a waiting autofill request cannot
+    // be what answers it.
+    button.addEventListener("pointerdown", () => { stopAutofill(); armed = false; }, true);
+    passkeys.replaceWith(button, none, keyCheck.node);
   });
 
   host.append(card("Sign In",
@@ -171,7 +209,7 @@ export function loginScreen(host: HTMLElement): () => void {
       // signing in. Somebody with no account cannot use anything above it, and
       // a line of grey text was a poor way to say so.
       footer: el("div", { class: "after-form" },
-        el("a", { class: "secondary", href: "#/signup" }, "Make an Account")),
+        el("a", { class: "secondary", href: "#/signup" }, "Make an Account"), createKey),
     })));
   return () => { screen.abort(); stopAutofill(); human.remove(); keyCheck.remove(); };
 }
@@ -528,13 +566,18 @@ export function troubleScreen(host: HTMLElement): void {
  * game; neither is a gate.
  */
 export function passkeyOfferScreen(host: HTMLElement): void {
+  // Read before `takePasskeyOffer` spends it: pressed by name, the offer is
+  // made even to an account that has a passkey on some other device.
+  const asked = passkeyAskedFor();
   const wanted = takePasskeyOffer();
-  const onward = () => go("/play");
+  // The offer is spent by now, so this is the game, or Support if that is
+  // where the sign-in started.
+  const onward = () => go(home("in"));
   void (async () => {
     const offer = wanted && await passkeysAvailable()
-      && (await listPasskeys().catch(() => [null])).length === 0;
+      && (asked || (await listPasskeys().catch(() => [null])).length === 0);
     if (!offer) { onward(); return; }
-    host.append(card("Sign in faster next time",
+    host.append(card(asked ? "Create your passkey" : "Sign in faster next time",
       note("Save a passkey and sign in with your face, fingerprint or device " +
            "PIN. Nothing to type, nothing to remember, and nothing anybody " +
            "can steal from this game."),
@@ -551,4 +594,44 @@ export function passkeyOfferScreen(host: HTMLElement): void {
           " · You can add one any time in Settings."),
       })));
   })();
+}
+
+/**
+ * "Create a Passkey", from the sign-in screen: the whole way to one, for a
+ * new account or an existing one, without knowing beforehand which you are.
+ *
+ * A passkey belongs to an account, so the address comes first: a code is
+ * mailed (`sendEmailCode` with `create`, which signs an existing account in
+ * and makes a new one), and once it is in, the passkey offer follows at once
+ * -- for a new account, straight after its username. Behind the age screen
+ * like Make an Account, because this can make one.
+ */
+export function createPasskeyScreen(host: HTMLElement): void | (() => void) {
+  if (!ageCleared()) {
+    host.append(card("Create a Passkey", ageGate(rerender),
+      note("Already have one? ", link("Sign In", "#/login"))));
+    return;
+  }
+  const email = field("Email", { type: "email", required: true, autocomplete: "email" });
+  const human = captcha();
+  host.append(card("Create a Passkey",
+    note("A passkey signs you in with your face, fingerprint or device PIN. " +
+         "We email you a code first, to make sure the address is yours, then " +
+         "your device saves the passkey. New here or not, it's the same steps."),
+    form({
+      submit: "Email me a code",
+      children: [email],
+      captcha: human.node,
+      onSubmit: async () => {
+        const address = inputOf(email).value.trim();
+        await sendEmailCode(address, true, await human.token());
+        askForPasskey();
+        awaiting = address;
+        awaitingCreate = true;
+        awaitingSince = Date.now();
+        go("/verify");
+      },
+      footer: el("div", {}, agreement(), note("Rather use a password or Google? ", link("Sign In", "#/login"))),
+    })));
+  return human.remove;
 }

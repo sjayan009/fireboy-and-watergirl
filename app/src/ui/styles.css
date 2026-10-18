@@ -175,6 +175,15 @@ form { display: grid; gap: 14px; margin-top: 20px; }
 .secondary:hover, a.secondary:hover { background: #23B0CF; }
 /* Everything else on this card lifts a pixel when pressed; so does this. */
 a.secondary:active { transform: translateY(1px); }
+/*
+ * Create a Passkey: the lavender P lights in game, brought to the blue's
+ * brightness the same way the blue was (#BE9DF7 at H262 S85, L to luminance
+ * .283 -> #A679F4), so the two read as a pair under Sign In rather than over
+ * it. Hover matches the blue's step, .359 -> #B58FF6. Ink #150A29: 6.02:1.
+ */
+.tertiary, a.tertiary { display: flex; justify-content: center; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 9px 15px; border: 1px solid transparent; border-radius: 8px; background: #A679F4; color: #150A29; font-size: 1rem; font-weight: 600; text-decoration: none; box-shadow: inset 0 1px 0 #ffffff4d; }
+.tertiary:hover, a.tertiary:hover { background: #B58FF6; }
+a.tertiary:active { transform: translateY(1px); }
 /* Its own region, below the form's own business and marked off from it. */
 .after-form { padding-top: 16px; border-top: 1px solid var(--edge); display: grid; gap: 12px; }
 .after-form .note { margin: 0; text-align: center; }
@@ -191,7 +200,13 @@ a.secondary:active { transform: translateY(1px); }
 
 .provider-block { margin-top: 20px; }
 /* Passkey above Google: one pair of ways in, so one gap between them. */
-.provider-block + .captcha + .provider-block { margin-top: 10px; }
+.provider-block + .captcha + .provider-block,
+.provider-block + .passkey-hint[hidden] + .captcha + .provider-block { margin-top: 10px; }
+.passkey-hint { display: grid; gap: 10px; margin: 10px 0 0; padding: 12px; border: 1px solid #3b3150; border-radius: 10px; background: #1d1726; color: var(--ink); font-size: .875rem; }
+.passkey-hint p { margin: 0; }
+.passkey-hint .note { font-size: .8125rem; }
+.passkey-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.passkey-choice .ghost, .passkey-choice .tertiary { min-height: 40px; font-size: .875rem; }
 .provider { width: 100%; font-size: 1rem; }
 .card .provider { min-height: 44px; }
 .google-g { flex: none; display: flex; width: 18px; height: 18px; }
@@ -546,7 +561,7 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 /* A divider separates two things; under the last group it separates nothing. */
 .menu-group:last-child { padding-bottom:0; margin-bottom:0; border-bottom:0; }
 .menu-group h3 { margin:0 0 4px; color:var(--dim); font-size:.875rem; }
-.menu-group:not(:has(button,a,.control-keys,.note)) { display:none; }
+.menu-group:not(:has(:is(button,a):not([hidden]),.control-keys,.note)) { display:none; }
 .menu-group .ghost { justify-content:flex-start; }
 .menu-group .leave { margin-top:10px; color:#ffc2a9; border-color:#926753; }
 kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border-radius:5px; font:600 .8125rem var(--ui); color:var(--ink); }
@@ -870,3 +885,9 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
   .qm-seg button:active { transform:none; }
 }
 @media (prefers-reduced-transparency: reduce) { .glow-side, .logo-halo { mix-blend-mode:normal; } }
+
+/* The Menu's way to Support: first, full width, in the game's water blue. */
+.menu-support { display: grid; gap: 6px; }
+.menu-support .secondary { gap: 8px; }
+.menu-support .note { margin: 0; }
+

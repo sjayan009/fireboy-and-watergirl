@@ -82,7 +82,14 @@ export class PlayShell {
     for (const action of options.actions) (action.textContent === "Sign out" ? accountActions : sessionActions).append(action);
     this.panels = {
       friends: options.friends, leaderboard: options.board, progress: options.times,
-      menu: el("div", { class: "menu-actions" }, sessionActions,
+      menu: el("div", { class: "menu-actions" },
+        // First in the Menu and in the water blue, so somebody stuck finds it
+        // without reading the rest. A tab of its own keeps the game here.
+        el("section", { class: "menu-group menu-support" },
+          el("a", { class: "secondary", href: "/support-ticket", target: "_blank", rel: "noopener" },
+            "Contact Support"),
+          el("p", { class: "note" }, "Opens in a new tab. Screenshots welcome.")),
+        sessionActions,
         el("section", { class: "menu-group" }, el("h3", {}, "Game Display"), glowControl.root),
         el("section", { class: "menu-group" }, el("h3", {}, "At Your Fingertips"),
           options.watching ? el("p", { class: "note" }, "The two players have the controls. Watching does not change your own progress.") :

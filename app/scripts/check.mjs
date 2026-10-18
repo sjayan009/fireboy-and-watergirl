@@ -219,7 +219,10 @@ console.log("\nthe download is the size it should be");
   // The live keycaps, the stage glow, the toolbar emblem's hover and the
   // sliding character picker add ~15 kB (~910 kB); the ceiling moves to keep
   // its headroom.
-  const BUDGET = 925_000;
+  // Support (the ticket board and form, its own lazy chunk of ~8 kB) and the
+  // passkey flows on the sign-in screens bring it to ~933 kB; the ceiling
+  // moves to keep its headroom.
+  const BUDGET = 945_000;
   console.log(`  ${(bytes / 1000).toFixed(0)} kB of javascript and css ` +
               `across ${code.length} files`);
   check(`under the ${BUDGET / 1000} kB budget`, bytes < BUDGET,

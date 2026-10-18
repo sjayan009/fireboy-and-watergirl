@@ -64,6 +64,26 @@ then set `FBWG_CI_DB_PASSWORD`, `FBWG_CI_SECRET_KEY` and
 (`full` by hand), and only then delete the three repository secrets -- and
 rotate them, since they lived in GitHub.
 
+## Support tickets
+
+`20261018000000_support_tickets.sql` adds the table, the private
+`support-attachments` bucket and `submit_ticket` / `delete_ticket`; it is
+applied by `deployed` like any other migration. Tickets are filed and listed
+without anything else. Mailing each new ticket to the developer is the
+`support-ticket` Edge Function, deployed by hand:
+
+```bash
+npx supabase functions deploy support-ticket --project-ref <ref> --use-api
+```
+
+with Edge Function secrets `BREVO_API_KEY` (a Brevo API key, not the SMTP
+password), `SUPPORT_EMAIL_FROM` (a sender Brevo has verified) and
+`SUPPORT_EMAIL_TO`. It allows the origins in `SUPPORT_ALLOWED_ORIGINS`, or
+`TURN_ALLOWED_ORIGINS` when that is unset. Until it is deployed, tickets are
+still stored; the browser's call to it simply fails. Move a ticket along by
+editing `stage` in the Table Editor (`sent`, `reviewed`, `in_progress`,
+`fixed`); the dates fill in themselves. `supporttest.mjs` proves the rules.
+
 ## An applied migration is history
 
 `migrate.mjs` records the SHA-256 of every file it applies and checks it on

@@ -168,6 +168,17 @@ async function passwordSignIn(page, u) {
   await page.click("button[type=submit]");
 }
 
+/**
+ * Press "Sign In with a Passkey", and answer "Yes, use it" if this device is
+ * asked first (it is when its localStorage has been cleared, as `signOut`
+ * below does).
+ */
+async function usePasskey(page) {
+  await page.click("button:has-text('Sign In with a Passkey')");
+  const asked = page.locator(".passkey-hint button:has-text('Yes, use it')");
+  if (await asked.isVisible().catch(() => false)) await asked.click();
+}
+
 async function signOut(page) {
   await page.evaluate(async () => {
     localStorage.clear();
@@ -242,6 +253,20 @@ try {
   if (!enabled) {
     console.log("\nPasskeys are switched off for this project -- passkey checks skipped");
   } else {
+    console.log("\na device with no passkey is told how to get one");
+    {
+      const bare = await newPage({ autofill: false });
+      await bare.goto(URL_ + "#/login", { waitUntil: "load" });
+      await bare.click("button:has-text('Sign In with a Passkey')");
+      check("it asks first, instead of opening the system's sheet",
+            await bare.waitForSelector(".passkey-hint:visible", { timeout: 10000 }).then(() => true, () => false), true);
+      check("whether a passkey was ever saved", (await bare.locator(".passkey-hint").innerText()).includes("Have you saved a passkey"), true);
+      await bare.click(".passkey-hint a:has-text('No, create one')");
+      check("and No leads to Create a Passkey",
+            await bare.waitForFunction(() => location.hash === "#/create-passkey", null, { timeout: 10000 }).then(() => true, () => false), true);
+      await bare.close();
+    }
+
     console.log("\na passkey is offered after a password sign-in, and saved");
     const u = await makeUser("key");
     const page = await newPage({ autofill: false });
@@ -261,7 +286,7 @@ try {
 
     console.log("\nthe passkey signs back in, with no address and no offer");
     await signOut(page);
-    await page.click("button:has-text('Sign in with a passkey')");
+    await usePasskey(page);
     check("straight to the game", await arrived(page, "#/play"), true);
 
     console.log("\nthe email field offers it too (autofill)");
@@ -273,8 +298,11 @@ try {
     await synced.give(key);
     await synced.goto(URL_ + "#/login", { waitUntil: "load" });
     if (await synced.evaluate(() => PublicKeyCredential.isConditionalMediationAvailable?.() ?? false)) {
-      // Nothing is pressed: the virtual authenticator answers the waiting
-      // autofill request, which is what picking the passkey from the list does.
+      check("nothing is asked of the browser before the field is used",
+            await synced.waitForFunction(() => location.hash === "#/play", null, { timeout: 4000 }).then(() => true, () => false), false);
+      // Focusing the field starts the autofill request, and the virtual
+      // authenticator answers it, which is what picking the passkey does.
+      await synced.click("input[type=email]");
       check("picking it from the list signs in", await arrived(synced, "#/play"), true);
     } else {
       console.log("  skipped: this browser has no conditional mediation");
@@ -290,7 +318,7 @@ try {
     const challenge = await as(`factors/${factor.id}/challenge`, {});
     await as(`factors/${factor.id}/verify`, { challenge_id: challenge.id, code: totp(factor.totp.secret) });
     await signOut(page);
-    await page.click("button:has-text('Sign in with a passkey')");
+    await usePasskey(page);
     const where = await page.waitForFunction(() => ["#/unlock", "#/play"].includes(location.hash),
       null, { timeout: 30000 }).then(() => page.evaluate(() => location.hash), () => "nowhere");
     check("a passkey sign-in still asks for the code", where, "#/unlock");
@@ -310,7 +338,7 @@ try {
     check("the row says none are left", await row2.locator(".settings-value")
       .filter({ hasText: "None" }).waitFor({ timeout: 15000 }).then(() => true, () => false), true);
     await signOut(page2);
-    await page2.click("button:has-text('Sign in with a passkey')");
+    await usePasskey(page2);
     await page2.waitForSelector(".error:visible", { timeout: 30000 }).catch(() => {});
     check("and the removed passkey no longer signs in", await page2.evaluate(() => location.hash), "#/login");
     await page2.close();
