@@ -1,0 +1,15 @@
+<!--
+  The "Magic link" email. Paste into Supabase: Authentication -> Emails ->
+  Magic link. Subject: Your Fireboy & Watergirl sign-in code
+
+  Sent by "Email me a code" on the sign-in screen, and by the sign-up form
+  when the address already has an account. A code and no link, for the reason
+  confirm-signup.html gives: a mail scanner that fetches the link spends the
+  token the code is made of.
+-->
+<h2>Your sign-in code</h2>
+<p>Enter this on the Fireboy &amp; Watergirl page that asked for it:</p>
+<p style="font-size:32px;font-weight:bold;letter-spacing:6px;font-family:monospace">{{ .Token }}</p>
+<p>It works once, and only for a short while. If it runs out, ask for a new one on the same page.</p>
+<p>Never share this code. We will never ask you for it, by email, chat or anywhere else.</p>
+<p>Did not try to sign in? Ignore this email. Nothing happens without the code.</p>

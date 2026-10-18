@@ -9,7 +9,7 @@ import { auth, onAuth, preloadAuth, startAuth } from "./auth.js";
 import { rerender, startRouter, Route } from "./router.js";
 import {
   loginScreen, passwordScreen, reportSignInTrouble, resetScreen, signUpScreen,
-  troubleScreen, unlockScreen, usernameScreen, verifyScreen,
+  passkeyOfferScreen, troubleScreen, unlockScreen, usernameScreen, verifyScreen,
 } from "./screens/accounts.js";
 function lazy(load: () => Promise<Route["render"]>): Route["render"] {
   return (host) => {
@@ -90,6 +90,7 @@ const routes: Route[] = [
   { path: "/verify", stages: ["out", "unverified"], render: warm(verifyScreen) },
   { path: "/unlock", stages: ["locked"], render: unlockScreen },
   { path: "/username", stages: ["nameless"], render: usernameScreen },
+  { path: "/passkey", stages: ["in"], render: passkeyOfferScreen },
   { path: "/play", stages: ["in", "out"], render: play },
   { path: "/friends", stages: ["in"], render: lazy(async () => (await import("./screens/friends.js")).friendsScreen) },
   { path: "/watch", stages: ["in"], render: lazy(async () => (await import("./screens/watch.js")).watchScreen) },

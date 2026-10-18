@@ -328,37 +328,42 @@ function landing(intent?: string): string {
 }
 
 /**
- * Sign up, and say whether the address was already spoken for.
+ * Mail a code that signs this address in -- and, when `create` is set, makes
+ * the account first if there is none.
  *
- * Supabase does not refuse a duplicate. Asked to register an address that
- * already has a CONFIRMED account it answers `200`, sends no mail, changes
- * nothing, and hands back a user whose `identities` list is EMPTY -- so that a
- * stranger cannot use this form to find out who has an account here. The empty
- * list is the only thing that distinguishes it from a real sign-up, and it is
- * documented as the way to tell.
+ * This is how new accounts are made: an address and a code, no password.
+ * The password was the one credential the server had to hash on every
+ * attempt and the one people reuse, so new accounts never get one; they sign
+ * in with a passkey, Google, or another code. (Settings can still ADD a
+ * password, for somebody who wants one.)
  *
- * Passed back rather than acted on, because the screen has to be careful with
- * it: saying "that address is taken" would hand back exactly the answer
- * Supabase just refused to give. See `verifyScreen` for the wording that is
- * useful to both people without telling either of them about the other.
+ * `create` is the sign-up form, behind the age screen. An address that
+ * already has an account is simply sent a sign-in code, so the form says the
+ * same thing either way and cannot be asked who plays here.
  *
- * Note also what this does NOT return: a session. With email confirmation on,
- * there is no session until the link is followed, so the stage stays `out` and
- * nothing about the auth state changes here.
+ * Without `create` -- "Email me a code" on the sign-in form -- Supabase
+ * refuses an unknown address with `otp_disabled`, which WOULD say who plays
+ * here. That one refusal is swallowed, and the screen says "if it has an
+ * account, a code is on its way", the reset form's wording.
+ *
+ * No session comes back. The code does that, through `verifyEmailCode`.
  */
-export async function signUp(email: string, password: string,
-                             captchaToken?: string): Promise<{ existing: boolean }> {
+export async function sendEmailCode(email: string, create: boolean,
+                                    captchaToken?: string): Promise<void> {
   const supabase = await client();
-  const { data, error } = await supabase.auth.signUp({
-    email, password,
-    options: { emailRedirectTo: landing(), captchaToken },
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: { shouldCreateUser: create, emailRedirectTo: landing(), captchaToken },
   });
+  if (!create && error?.code === "otp_disabled") return;
   fail(error);
-  return { existing: (data.user?.identities ?? []).length === 0 };
 }
 
-/** What an emailed code is for. Each kind is its own token on the server. */
-export type CodeKind = "signup" | "recovery" | "email_change";
+/**
+ * What an emailed code is for. Each kind is its own token on the server.
+ * `email` is a code from `sendEmailCode`, which makes and signs in an account.
+ */
+export type CodeKind = "email" | "signup" | "recovery" | "email_change";
 
 /**
  * Prove an inbox with the code from the email, in the tab that asked for it.
@@ -383,7 +388,10 @@ export async function verifyEmailCode(kind: CodeKind, email: string,
                                       code: string): Promise<void> {
   const supabase = await client();
   const { error } = await supabase.auth.verifyOtp({ email, token: code, type: kind });
-  if (!error) return;
+  if (!error) {
+    if (kind === "email" || kind === "signup") offerPasskeyNext();
+    return;
+  }
   if (error.status === 429 || error.code === "over_request_rate_limit") {
     throw new Error("Too many tries. Wait a few minutes, then try again.");
   }
@@ -400,6 +408,7 @@ export async function signIn(email: string, password: string,
     email, password, options: { captchaToken },
   });
   fail(error);
+  offerPasskeyNext();
 }
 
 /**
@@ -421,6 +430,7 @@ export async function signIn(email: string, password: string,
  */
 export async function signInWithGoogle(): Promise<void> {
   const supabase = await client();
+  offerPasskeyNext();
   const { error } = await supabase.auth.signInWithOAuth({
     provider: "google",
     options: { redirectTo: landing() },
@@ -495,6 +505,10 @@ export async function signOut(): Promise<void> {
   await refresh(null);
 }
 
+/**
+ * Mail the confirmation code again, for a sign-up made with a password before
+ * sign-ups stopped taking one: it has a session and an unconfirmed address.
+ */
 export async function resendVerification(email: string,
                                          captchaToken?: string): Promise<void> {
   const supabase = await client();
@@ -865,4 +879,217 @@ export async function unenrolTotp(factorId: string): Promise<void> {
   const supabase = await client();
   const { error } = await supabase.auth.mfa.unenroll({ factorId });
   fail(error);
+}
+
+// ---- passkeys ------------------------------------------------------------
+
+/**
+ * Can this browser and this project use passkeys at all?
+ *
+ * Both halves are asked. The browser needs WebAuthn; the project needs
+ * Passkeys switched on in the dashboard, which `/auth/v1/settings` reports as
+ * `passkeys_enabled`. Asked with a plain fetch, so a signed-out visitor on the
+ * sign-in form does not download the client to find out. Once per page, and a
+ * failure is a "no": a button that cannot work is worse than no button.
+ */
+let available: Promise<boolean> | null = null;
+export function passkeysAvailable(): Promise<boolean> {
+  return available ??= (async () => {
+    if (typeof PublicKeyCredential !== "function") return false;
+    try {
+      const response = await fetch(`${__SUPABASE_URL__}/auth/v1/settings`,
+                                   { headers: { apikey: __SUPABASE_KEY__ } });
+      return response.ok && (await response.json()).passkeys_enabled === true;
+    } catch {
+      return false;
+    }
+  })();
+}
+
+/**
+ * Whether the browser's sheet was closed rather than something failing.
+ *
+ * Every browser reports "the person said no" and "it timed out" as the same
+ * `NotAllowedError`, on purpose, so a page cannot tell which. Neither is worth
+ * an error message: the button is still there.
+ */
+function dismissed(error: { code?: string; cause?: unknown } | null): boolean {
+  const cause = error?.cause as { name?: string } | undefined;
+  return error?.code === "ERROR_CEREMONY_ABORTED" || cause?.name === "NotAllowedError"
+    || cause?.name === "AbortError";
+}
+
+/** Supabase's passkey refusals, in the words the screens use. */
+function passkeyFail(error: { message: string; code?: string } | null): void {
+  if (!error) return;
+  if (error.code === "webauthn_verification_failed" || error.code === "passkey_not_found") {
+    throw new Error("That passkey is not one this game knows. It may have been removed from your account.");
+  }
+  if (error.code === "webauthn_challenge_expired") {
+    throw new Error("That took too long. Try again.");
+  }
+  if (error.code === "too_many_passkeys") {
+    throw new Error("This account has as many passkeys as it can hold. Remove one in Settings first.");
+  }
+  fail(error);
+}
+
+/**
+ * Sign in with a passkey from this device, or a phone held up to it.
+ *
+ * No address first: the passkey says which account it belongs to. The
+ * challenge is guarded by Turnstile like a password sign-in, but what comes
+ * back is a signature, checked in microseconds, with nothing to guess.
+ *
+ * Resolves `false` when the person closed the browser's sheet.
+ */
+export async function signInWithPasskey(captchaToken?: string): Promise<boolean> {
+  stopAutofill();
+  const supabase = await client();
+  const { error } = await supabase.auth.signInWithPasskey({ options: { captchaToken } });
+  if (dismissed(error as { code?: string; cause?: unknown } | null)) return false;
+  passkeyFail(error);
+  return true;
+}
+
+/** The native JSON helpers that conditional mediation is built on. */
+type ParseRequest = { parseRequestOptionsFromJSON?: (o: unknown) => PublicKeyCredentialRequestOptions };
+type ToJSON = { toJSON?: () => unknown };
+
+/** Can the browser offer passkeys in a field's autofill list? */
+async function autofillSupported(): Promise<boolean> {
+  if (typeof PublicKeyCredential !== "function") return false;
+  if (typeof (PublicKeyCredential as unknown as ParseRequest).parseRequestOptionsFromJSON !== "function") return false;
+  try { return await PublicKeyCredential.isConditionalMediationAvailable?.() === true; }
+  catch { return false; }
+}
+
+let autofill: AbortController | null = null;
+
+/** Withdraw the passkeys from the autofill list, before anything else asks. */
+export function stopAutofill(): void {
+  autofill?.abort();
+  autofill = null;
+}
+
+/**
+ * Offer this site's passkeys in the email field's autofill list.
+ *
+ * "Conditional mediation": the request waits silently, and the browser lists
+ * passkeys beside saved addresses when somebody focuses a field marked
+ * `autocomplete="... webauthn"`. Picking one signs in, with no button.
+ *
+ * Built on the two-step calls, because the one-step one always opens the
+ * full sheet. Only one WebAuthn request can be pending, so this one is
+ * aborted whenever the button asks (`stopAutofill`) and started again after.
+ *
+ * Supabase's challenge lives five minutes. A passkey picked after that is
+ * refused as expired, and the request starts over with a new one, so the
+ * next pick works; the caller hears about it to say so.
+ */
+export async function startAutofill(token: () => Promise<string | undefined>,
+                                    expired: () => void,
+                                    screen: AbortSignal): Promise<void> {
+  if (!(await autofillSupported()) || !(await passkeysAvailable())) return;
+  // The screen may have gone while the checks above were out; a request
+  // started now would outlive it, still waiting on a field that is gone.
+  if (screen.aborted) return;
+  stopAutofill();
+  const mine = new AbortController();
+  autofill = mine;
+  screen.addEventListener("abort", () => mine.abort(), { once: true });
+  const supabase = await client();
+  while (!mine.signal.aborted) {
+    const { data, error } = await supabase.auth.passkey.startAuthentication(
+      { options: { captchaToken: await token() } });
+    if (mine.signal.aborted) return;
+    // A refused challenge is not worth a message on a form the person has not
+    // touched yet; the button still works.
+    if (error || !data) { console.warn("passkey autofill unavailable:", error?.message); return; }
+    const publicKey = (PublicKeyCredential as unknown as Required<ParseRequest>)
+      .parseRequestOptionsFromJSON(data.options);
+    let credential: Credential | null;
+    try {
+      credential = await navigator.credentials.get(
+        { publicKey, mediation: "conditional", signal: mine.signal } as CredentialRequestOptions);
+    } catch {
+      return; // aborted, or the browser gave up on the request
+    }
+    if (!credential || mine.signal.aborted) return;
+    const { error: verify } = await supabase.auth.passkey.verifyAuthentication({
+      challengeId: data.challenge_id,
+      credential: (credential as unknown as Required<ToJSON>).toJSON() as never,
+    });
+    if (!verify) return;
+    if (verify.code !== "webauthn_challenge_expired") passkeyFail(verify);
+    expired();
+  }
+}
+
+export interface Passkey { id: string; name: string; created: string; lastUsed?: string }
+
+export async function listPasskeys(): Promise<Passkey[]> {
+  const supabase = await client();
+  const { data, error } = await supabase.auth.passkey.list();
+  fail(error);
+  return (data ?? []).map((p) => ({ id: p.id, name: p.friendly_name || "Passkey",
+                                    created: p.created_at, lastUsed: p.last_used_at }));
+}
+
+/**
+ * Make a passkey for the signed-in account, on this device or a phone.
+ * Resolves `false` when the person closed the browser's sheet.
+ */
+export async function registerPasskey(): Promise<boolean> {
+  stopAutofill();
+  const supabase = await client();
+  const { error } = await supabase.auth.registerPasskey();
+  if (error?.code === "ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED") {
+    throw new Error("This device already has a passkey for this account.");
+  }
+  if (dismissed(error as { code?: string; cause?: unknown } | null)) return false;
+  passkeyFail(error);
+  return true;
+}
+
+export async function deletePasskey(id: string): Promise<void> {
+  const supabase = await client();
+  const { error } = await supabase.auth.passkey.delete({ passkeyId: id });
+  fail(error);
+}
+
+/**
+ * Offering a passkey, once, right after a sign-in that used something else.
+ *
+ * That moment is when people make them: the sign-in they just finished is
+ * fresh, and the offer is one press. Set by the password, Google and emailed
+ * code sign-ins (in this tab's sessionStorage, so it survives Google's
+ * redirect), read by the router, spent by the screen that makes the offer.
+ * "Not now" is remembered per account for a month, so it is not asked again
+ * at every sign-in.
+ */
+const OFFER_KEY = "fbwg.offerPasskey";
+const DECLINED_KEY = "fbwg.passkeyDeclined:";
+
+function offerPasskeyNext(): void {
+  try { sessionStorage.setItem(OFFER_KEY, "1"); } catch { /* no offer, nothing lost */ }
+}
+
+export function passkeyOfferPending(): boolean {
+  try { return sessionStorage.getItem(OFFER_KEY) === "1"; } catch { return false; }
+}
+
+/** Spend the offer, and say whether this account still wants to hear it. */
+export function takePasskeyOffer(): boolean {
+  try {
+    sessionStorage.removeItem(OFFER_KEY);
+    const declined = Number(localStorage.getItem(DECLINED_KEY + state.user?.id) ?? 0);
+    return Date.now() - declined > 30 * 86_400_000;
+  } catch {
+    return false;
+  }
+}
+
+export function declinePasskeyOffer(): void {
+  try { localStorage.setItem(DECLINED_KEY + state.user?.id, String(Date.now())); } catch { /* asked again next time */ }
 }

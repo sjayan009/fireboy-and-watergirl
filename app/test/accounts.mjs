@@ -209,34 +209,15 @@ const openSetting = async (page, name) => {
 };
 
 try {
-  // ---- sign-up validation, before anything reaches the server -------------
+  // ---- sign-up takes an address, not a password ---------------------------
 
-  console.log("the sign-up form refuses what it should");
+  console.log("the sign-up form asks for an address and nothing else");
   {
     const page = await newPage();
     await page.goto(URL_ + "#/signup", { waitUntil: "load" });
     await page.waitForSelector("text=Make an Account");
     await passAgeGate(page);
-
-    const fill = async (email, pw, again) => {
-      await page.fill("input[type=email]", email);
-      const pws = page.locator("input[type=password]");
-      await pws.nth(0).fill(pw);
-      await pws.nth(1).fill(again);
-      await page.click("button[type=submit]");
-      await page.waitForTimeout(400);
-      return errorText(page);
-    };
-
-    check("mismatched passwords",
-          /not the same/.test(await fill("a@example.com", "abcdefgh", "abcdefgi")),
-          true);
-    // The input carries `minlength`, so the browser refuses to submit at all
-    // and the script's own check never runs. Asserting on the error text would
-    // be asserting that the weaker of the two guards is the one doing the work.
-    await fill("a@example.com", "abc", "abc");
-    check("a short password never leaves the form",
-          await page.locator("text=Make an Account").isVisible(), true);
+    check("no password field", await page.locator("input[type=password]").count(), 0);
     await page.close();
   }
 
@@ -244,13 +225,11 @@ try {
 
   console.log("\na sign-up says what happened, either way");
   {
-    // This is a regression test for a silence. `signUp` sent everybody to
-    // `/verify`, which admitted only the `unverified` stage -- and with email
-    // confirmation on there is no session at sign-up, so the stage is `out` and
-    // the router turned every single one of them around to `/login`. Nobody was
-    // ever told an email had been sent. It was invisible because the account
-    // really was created and the mail really was sent; only the screen was
-    // wrong.
+    // This is a regression test for a silence. Sign-up once sent everybody to
+    // `/verify`, which admitted only the `unverified` stage -- and with no
+    // session at sign-up the stage is `out`, so the router turned every single
+    // one of them around to `/login`. Nobody was ever told an email had been
+    // sent.
     const page = await newPage();
 
     const signUpWith = async (address) => {
@@ -258,19 +237,15 @@ try {
       await page.waitForSelector("text=Make an Account");
       await passAgeGate(page);
       await page.fill("input[type=email]", address);
-      const pws = page.locator("input[type=password]");
-      await pws.nth(0).fill(`pw_${stamp}_trial!A`);
-      await pws.nth(1).fill(`pw_${stamp}_trial!A`);
       await page.click("button[type=submit]");
-      // Waited on by CONDITION, not by clock. A fixed pause was long enough for
-      // the second sign-up and not the first, which made this test look like it
-      // had found a bug in the case that works.
+      // Waited on by CONDITION, not by clock.
       await page.waitForFunction(
         () => location.hash.includes("/verify")
               || !!document.querySelector(".error:not([hidden])"),
         null, { timeout: 25000 }).catch(() => {});
       return page.url();
     };
+    const screenText = () => page.locator(".card").innerText();
 
     const fresh = `fbwg_new_${stamp}@example.com`;
     const where = await signUpWith(fresh);
@@ -279,25 +254,22 @@ try {
           where.includes("#/verify"), true);
     check("and told WHICH address",
           await page.locator(`text=${fresh}`).count() > 0, true);
+    const said = (await screenText()).replace(fresh, "ADDRESS");
 
-    // The duplicate. Supabase answers a taken address with 200, no mail and an
-    // EMPTY identities list rather than an error, so that this form cannot be
-    // used to discover who has an account. That protection is kept -- the page
-    // still says a link is on its way -- but somebody standing there waiting
-    // for mail that is not coming is given the door they actually need.
+    // A taken address is simply sent a sign-in code, so the screen must read
+    // exactly as it does for a new one -- anything else would tell a stranger
+    // who has an account here.
     const taken = await makeUser("taken");
     await signUpWith(taken.email);
     check("a taken address reaches the same screen",
           page.url().includes("#/verify"), true);
-    check("and is pointed at signing in instead",
-          await page.locator("text=Nothing will arrive").count() > 0, true);
+    check("in the same words",
+          (await screenText()).replace(taken.email, "ADDRESS").replace(/\d+:\d\d/g, "")
+            === said.replace(/\d+:\d\d/g, ""), true);
 
-    // The reverse must NOT be true, or the line becomes an enumeration oracle.
     const fresh2 = `fbwg_new2_${stamp}@example.com`;
     await signUpWith(fresh2);
     await claimForCleanup(fresh2);
-    check("a new address is NOT told that",
-          await page.locator("text=Nothing will arrive").count(), 0);
 
     // How long the code has, and when another can be asked for. Supabase
     // sends one email per address per minute, so the button says so rather
@@ -334,8 +306,7 @@ try {
     // fresh one for the same unfinished sign-up and returns it in plain.
     const issued = await (await admin("/auth/v1/admin/generate_link", {
       method: "POST",
-      body: JSON.stringify({ type: "signup", email: fresh2,
-                             password: `pw_${stamp}_trial!A` }),
+      body: JSON.stringify({ type: "magiclink", email: fresh2 }),
     })).json();
     check("a code was issued", /^\d{6,10}$/.test(issued.email_otp ?? ""), true);
     // Pasted with a space in the middle, as codes often are.
@@ -349,7 +320,7 @@ try {
     const again = await fetch(`${API}/auth/v1/verify`, {
       method: "POST",
       headers: { apikey: PUB, "content-type": "application/json" },
-      body: JSON.stringify({ type: "signup", email: fresh2, token: issued.email_otp }),
+      body: JSON.stringify({ type: "email", email: fresh2, token: issued.email_otp }),
     });
     check("a code works once", again.ok, false);
     await page.close();
@@ -783,7 +754,7 @@ try {
       authorize = null;
       await page.goto(URL_ + hash, { waitUntil: "load" });
       check(`the ${screen} screen offers it`,
-            await page.locator(".provider").innerText(), "Continue with Google");
+            await page.locator(".provider:has-text('Google')").innerText(), "Continue with Google");
 
       // Pressed from inside the page, and read back in the same breath.
       //
@@ -794,7 +765,7 @@ try {
       // page and takes the button with it. A locator asked afterwards waits
       // thirty seconds for an element that no longer exists.
       const held = await page.evaluate(() => {
-        const b = document.querySelector(".provider");
+        const b = [...document.querySelectorAll(".provider")].find((x) => x.textContent.includes("Google"));
         b.click();
         return b.disabled && b.textContent.trim() === "…";
       });

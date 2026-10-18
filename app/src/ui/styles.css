@@ -190,6 +190,8 @@ a.secondary:active { transform: translateY(1px); }
 .field-aside { margin: -6px 0 0; text-align: right; font-size: .8125rem; letter-spacing: .006em; }
 
 .provider-block { margin-top: 20px; }
+/* Passkey above Google: one pair of ways in, so one gap between them. */
+.provider-block + .captcha + .provider-block { margin-top: 10px; }
 .provider { width: 100%; font-size: 1rem; }
 .card .provider { min-height: 44px; }
 .google-g { flex: none; display: flex; width: 18px; height: 18px; }
@@ -202,8 +204,12 @@ a.secondary:active { transform: translateY(1px); }
 .qr { max-width: 100%; margin-top: 10px; background: white; padding: 8px; border-radius: 8px; }
 .codelist { padding-left: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
 .codelist code { font-size: .9375rem; }
-.factors, .codes { display: grid; gap: 8px; }
-.factors button, .codes button { justify-self: start; }
+.factors, .codes, .passkey-row { display: grid; gap: 8px; }
+.factors button, .codes button, .passkey-row > button { justify-self: start; }
+/* One row per passkey: its name and dates, and Remove level with them. */
+.passkeys { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.passkeys li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.passkeys .note { margin: 0; }
 .check { display: flex; align-items: flex-start; gap: 10px; margin-top: 12px; }
 .check input { flex:none; width:18px; height:18px; accent-color:var(--water); }
 
