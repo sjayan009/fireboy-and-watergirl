@@ -9,7 +9,7 @@ import { auth, onAuth, preloadAuth, startAuth } from "./auth.js";
 import { rerender, startRouter, Route } from "./router.js";
 import {
   loginScreen, passwordScreen, reportSignInTrouble, resetScreen, signUpScreen,
-  createPasskeyScreen, passkeyOfferScreen, troubleScreen, unlockScreen, usernameScreen, verifyScreen,
+  passkeyOfferScreen, troubleScreen, unlockScreen, usernameScreen, verifyScreen,
 } from "./screens/accounts.js";
 function lazy(load: () => Promise<Route["render"]>): Route["render"] {
   return (host) => {
@@ -73,7 +73,8 @@ const routes: Route[] = [
   { path: "/", stages: ["out"], render: lazy(async () => (await import("./screens/landing.js")).landingScreen) },
   { path: "/login", stages: ["out"], render: warm(loginScreen) },
   { path: "/signup", stages: ["out"], render: warm(signUpScreen) },
-  { path: "/create-passkey", stages: ["out"], render: warm(createPasskeyScreen) },
+  // Old links to the passkey sign-up land on the one sign-up there is now.
+  { path: "/create-passkey", stages: ["out"], render: () => { location.replace("#/signup"); } },
   // Signed-in stages too, because the reset code signs this tab in from the
   // reset screen itself; admitting them keeps the router from moving the tab
   // somewhere else before the screen sends it on to /password.

@@ -189,36 +189,58 @@ async function signOut(page) {
 }
 
 try {
-  // ---- the emailed code, from the sign-in form -----------------------------
+  // ---- Forgot password: the emailed code, for any account ------------------
 
-  console.log("an emailed code signs an existing account in");
+  console.log("Forgot password? signs in an account that never had a password");
   {
-    const u = await makeUser("code");
+    // Made the way sign-up makes them now: an address, no password.
+    const email = `fbwg_pk_nopw_${stamp}@example.com`;
+    const made = await (await admin("/auth/v1/admin/users", {
+      method: "POST", body: JSON.stringify({ email, email_confirm: true }) })).json();
+    users.push({ id: made.id, email });
     const page = await newPage();
     await page.goto(URL_ + "#/login", { waitUntil: "load" });
-    await page.fill("input[type=email]", u.email);
-    await page.click("text=Email me a code");
-    check("it goes to the code screen", await arrived(page, "#/verify"), true);
+    await page.waitForSelector(".doors");
+    check("the sign-in side offers only Forgot password?",
+          [await page.locator(".door-in .field-aside a").count(), await page.locator("text=Email me a code").count()], [1, 0]);
+    await page.click("text=Forgot password?");
+    await page.fill("input[type=email]", email);
+    await page.click("button[type=submit]");
+    await page.waitForSelector("text=Enter the code", { timeout: 30000 });
     check("worded so it does not say the account exists",
-          await page.locator("text=If that address has an account").count(), 1);
-    await page.fill("input[autocomplete=one-time-code]", await mintCode({ type: "magiclink", email: u.email }));
+          await page.locator("text=has an account, a code is on its way").count(), 1);
+    await page.fill("input[autocomplete=one-time-code]", await mintCode({ type: "recovery", email }));
     await page.locator("button[type=submit]").first().click().catch(() => {});
-    check("the code signs in", await page.waitForFunction(
-      () => ["#/play", "#/passkey"].includes(location.hash), null, { timeout: 30000 })
-      .then(() => true, () => false), true);
+    await page.waitForSelector("text=Choose a new password", { timeout: 30000 });
+    await page.click("text=Skip, I'll use a passkey or a code next time");
+    check("and a new password can be skipped",
+          await page.waitForFunction(() => ["#/play", "#/passkey", "#/username"].includes(location.hash), null, { timeout: 30000 })
+            .then(() => true, () => false), true);
     await page.close();
 
-    // The enumeration check. Supabase refuses a code for an unknown address
-    // with its own error; the form must read exactly as it did above.
     const other = await newPage();
-    await other.goto(URL_ + "#/login", { waitUntil: "load" });
+    await other.goto(URL_ + "#/reset", { waitUntil: "load" });
     await other.fill("input[type=email]", `fbwg_pk_nobody_${stamp}@example.com`);
-    await other.click("text=Email me a code");
-    check("an unknown address reaches the same screen", await arrived(other, "#/verify"), true);
-    check("with the same words",
-          await other.locator("text=If that address has an account").count(), 1);
+    await other.click("button[type=submit]");
+    await other.waitForSelector("text=Enter the code", { timeout: 30000 });
+    check("an unknown address reads the same", await other.locator("text=has an account, a code is on its way").count(), 1);
     check("and no error", await errorText(other), "");
     await other.close();
+  }
+
+  console.log("\nthe sign-in screen is two doors, with nothing below the fold");
+  {
+    const page = await newPage();
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto(URL_ + "#/login", { waitUntil: "load" });
+    await page.waitForSelector(".doors");
+    check("Sign In and New here? side by side",
+          await page.evaluate(() => { const [a, b] = document.querySelectorAll(".door"); return a.getBoundingClientRect().top === b.getBoundingClientRect().top && a.getBoundingClientRect().right <= b.getBoundingClientRect().left; }), true);
+    check("everything fits a 1280x720 screen",
+          await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight), true);
+    check("one Make an Account, and no separate Create a Passkey",
+          [await page.locator("a:has-text('Make an Account')").count(), await page.locator("text=Create a Passkey").count()], [1, 0]);
+    await page.close();
   }
 
   console.log("\nsign-up asks for an address, not a password");
@@ -261,9 +283,9 @@ try {
       check("it asks first, instead of opening the system's sheet",
             await bare.waitForSelector(".passkey-hint:visible", { timeout: 10000 }).then(() => true, () => false), true);
       check("whether a passkey was ever saved", (await bare.locator(".passkey-hint").innerText()).includes("Have you saved a passkey"), true);
-      await bare.click(".passkey-hint a:has-text('No, create one')");
-      check("and No leads to Create a Passkey",
-            await bare.waitForFunction(() => location.hash === "#/create-passkey", null, { timeout: 10000 }).then(() => true, () => false), true);
+      await bare.click(".passkey-hint a:has-text('No, make one')");
+      check("and No leads to Make an Account",
+            await bare.waitForFunction(() => location.hash === "#/signup", null, { timeout: 10000 }).then(() => true, () => false), true);
       await bare.close();
     }
 

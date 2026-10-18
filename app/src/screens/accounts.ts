@@ -37,14 +37,17 @@ export function signUpScreen(host: HTMLElement): void | (() => void) {
     return;
   }
   // No password: an address and the code mailed to it make the account, and
-  // a passkey is offered as soon as it exists. See `sendEmailCode`.
+  // the passkey is the last step of making it, not an afterthought -- it is
+  // offered straight after the username, even to an address that already had
+  // an account (which `sendEmailCode` simply signs in).
   const email = field("Email", { type: "email", required: true,
                                  autocomplete: "email" });
   const human = captcha();
 
   host.append(card("Make an Account",
-    google(),
-    orDivider(),
+    note("We email you a code to confirm the address, you pick a username, and " +
+         "your device saves a passkey: your face, fingerprint or device PIN signs " +
+         "you in from then on."),
     form({
       submit: "Email me a code",
       children: [email],
@@ -52,13 +55,16 @@ export function signUpScreen(host: HTMLElement): void | (() => void) {
       onSubmit: async () => {
         const address = inputOf(email).value.trim();
         await sendEmailCode(address, true, await human.token());
+        askForPasskey();
         awaiting = address;
         awaitingCreate = true;
         awaitingSince = Date.now();
         go("/verify");
       },
       footer: el("div", {}, agreement(), note("Already have one? ", link("Sign In", "#/login"))),
-    })));
+    }),
+    orDivider(),
+    google()));
   return human.remove;
 }
 
@@ -95,37 +101,12 @@ export function loginScreen(host: HTMLElement): () => void {
   refused.hidden = !trouble;
   trouble = "";
 
-  // Recovery sits under the password box, not in the footer.
-  //
-  // It is reached for at one moment only -- the password just failed, or is
-  // about to -- and the field it rescues is directly above it. In the footer it
-  // shared a line with "Make an account", which put the way OUT of a stuck
-  // sign-in next to the way to abandon signing in altogether.
-  // Hidden until the project says passkeys are on, like the button above.
-  const createKey = el("a", { class: "tertiary", href: "#/create-passkey" }, "Create a Passkey");
-  createKey.hidden = true;
-  void passkeysAvailable().then((yes) => { createKey.hidden = !yes; });
+  // Recovery sits under the password box: it is reached for at one moment
+  // only, when the password just failed or is about to. It is also where the
+  // emailed code lives now -- see `resetScreen` -- so somebody whose account
+  // has no password at all finds their way in from the same place.
+  const forgot = el("p", { class: "field-aside" }, link("Forgot password?", "#/reset"));
   const human = captcha();
-  // "Email me a code" uses the address already typed above it, and the same
-  // Turnstile widget as the form: both are one press at a time.
-  const codeInstead = el("a", { href: "#", onclick: async (e: Event) => {
-    e.preventDefault();
-    const input = inputOf(email);
-    if (!input.reportValidity()) return;
-    refused.hidden = true;
-    try {
-      await sendEmailCode(input.value.trim(), false, await human.token());
-      awaiting = input.value.trim();
-      awaitingCreate = false;
-      awaitingSince = Date.now();
-      go("/verify");
-    } catch (err) {
-      refused.textContent = (err as Error).message;
-      refused.hidden = false;
-    }
-  } }, "Email me a code");
-  const forgot = el("p", { class: "field-aside" },
-    link("Forgot password?", "#/reset"), " · ", codeInstead);
 
   // A second, separate widget for the passkey challenges: the autofill
   // request takes a token when the field is focused and holds it, and a
@@ -179,7 +160,7 @@ export function loginScreen(host: HTMLElement): () => void {
             refused.hidden = false;
           });
         } }, "Yes, use it"),
-        el("a", { class: "tertiary", href: "#/create-passkey" }, "No, create one")),
+        el("a", { class: "tertiary", href: "#/signup" }, "No, make one")),
       el("p", { class: "note" }, "It can be on this device, your phone, or a security key."));
     none.hidden = true;
     const button = passkeyButton(async () => {
@@ -192,11 +173,13 @@ export function loginScreen(host: HTMLElement): () => void {
     passkeys.replaceWith(button, none, keyCheck.node);
   });
 
-  host.append(card("Sign In",
+  // Two doors side by side, so neither is below the fold: signing in on the
+  // left, making an account on the right, and Google -- which does either --
+  // across the bottom of both.
+  const signIn_ = el("section", { class: "door door-in", "aria-labelledby": "door-in" },
+    el("h2", { id: "door-in" }, "Sign In"),
     refused,
     passkeys,
-    google(),
-    orDivider(),
     form({
       submit: "Sign In",
       children: [email, pw, forgot],
@@ -205,12 +188,17 @@ export function loginScreen(host: HTMLElement): () => void {
         await signIn(inputOf(email).value.trim(), inputOf(pw).value,
                      await human.token());
       },
-      // Below a rule, because this is where the screen stops being about
-      // signing in. Somebody with no account cannot use anything above it, and
-      // a line of grey text was a poor way to say so.
-      footer: el("div", { class: "after-form" },
-        el("a", { class: "secondary", href: "#/signup" }, "Make an Account"), createKey),
-    })));
+    }));
+  const join = el("section", { class: "door door-new", "aria-labelledby": "door-new" },
+    el("h2", { id: "door-new" }, "New here?"),
+    note("All it takes is your email. We send you a code, you pick a username, " +
+         "and your device saves a passkey, so there's no password to remember."),
+    el("a", { class: "secondary", href: "#/signup" }, "Make an Account"),
+    note("Free. Your progress is saved with the friend you play with."));
+  const doors = card("Sign In", el("div", { class: "doors" }, signIn_, join), orDivider(), google());
+  doors.classList.add("card-doors");
+  doors.querySelector("h1")?.classList.add("sr-only");
+  host.append(doors);
   return () => { screen.abort(); stopAutofill(); human.remove(); keyCheck.remove(); };
 }
 
@@ -297,6 +285,11 @@ export function verifyScreen(host: HTMLElement): () => void {
 /**
  * Forgotten password: an address, then the code mailed to it.
  *
+ * Also the way in for an account with no password, on a device without its
+ * passkey -- which is every account made since sign-up stopped taking one.
+ * The code signs this tab in either way; choosing a password afterwards can
+ * be skipped (see `passwordScreen`), so nobody is made to invent one.
+ *
  * One screen in two steps rather than two routes, because the second step is
  * meaningless without the first and must not be reachable on its own. The
  * code signs this tab in, and `#/password` lets it choose a new password
@@ -344,7 +337,9 @@ export function resetScreen(host: HTMLElement): () => void {
     inputOf(code).focus();
   };
 
-  const first = card("Reset your password",
+  const first = card("Forgot password?",
+    note("Enter your email and we'll send a code. It signs you in, and then you " +
+         "can choose a new password, or skip that and save a passkey instead."),
     form({
       submit: "Send a code",
       children: [email],
@@ -388,6 +383,12 @@ export function passwordScreen(host: HTMLElement): void {
     form({
       submit: "Save it",
       children: [pw, again],
+      // A code from Forgot password also signs in an account that never had
+      // a password; nobody should have to invent one to get past here.
+      footer: el("p", { class: "note" }, el("a", { href: "#", onclick: (e: Event) => {
+        e.preventDefault();
+        go(home("in"));
+      } }, "Skip, I'll use a passkey or a code next time")),
       onSubmit: async () => {
         if (inputOf(pw).value !== inputOf(again).value) {
           throw new Error("Those two passwords are not the same.");
@@ -401,7 +402,7 @@ export function passwordScreen(host: HTMLElement): void {
         // password is still changed, and staying on this screen to say so
         // would only hold up somebody who got what they came for.
         await setPassword(inputOf(pw).value);
-        go("/play");
+        go(home("in"));
       },
     })));
 }
@@ -594,44 +595,4 @@ export function passkeyOfferScreen(host: HTMLElement): void {
           " · You can add one any time in Settings."),
       })));
   })();
-}
-
-/**
- * "Create a Passkey", from the sign-in screen: the whole way to one, for a
- * new account or an existing one, without knowing beforehand which you are.
- *
- * A passkey belongs to an account, so the address comes first: a code is
- * mailed (`sendEmailCode` with `create`, which signs an existing account in
- * and makes a new one), and once it is in, the passkey offer follows at once
- * -- for a new account, straight after its username. Behind the age screen
- * like Make an Account, because this can make one.
- */
-export function createPasskeyScreen(host: HTMLElement): void | (() => void) {
-  if (!ageCleared()) {
-    host.append(card("Create a Passkey", ageGate(rerender),
-      note("Already have one? ", link("Sign In", "#/login"))));
-    return;
-  }
-  const email = field("Email", { type: "email", required: true, autocomplete: "email" });
-  const human = captcha();
-  host.append(card("Create a Passkey",
-    note("A passkey signs you in with your face, fingerprint or device PIN. " +
-         "We email you a code first, to make sure the address is yours, then " +
-         "your device saves the passkey. New here or not, it's the same steps."),
-    form({
-      submit: "Email me a code",
-      children: [email],
-      captcha: human.node,
-      onSubmit: async () => {
-        const address = inputOf(email).value.trim();
-        await sendEmailCode(address, true, await human.token());
-        askForPasskey();
-        awaiting = address;
-        awaitingCreate = true;
-        awaitingSince = Date.now();
-        go("/verify");
-      },
-      footer: el("div", {}, agreement(), note("Rather use a password or Google? ", link("Sign In", "#/login"))),
-    })));
-  return human.remove;
 }

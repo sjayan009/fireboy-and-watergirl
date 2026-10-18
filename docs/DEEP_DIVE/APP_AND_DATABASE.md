@@ -40,10 +40,17 @@ indistinguishable from the truth.
 
 ### Ways in
 
-New accounts have no password. Sign-up mails a code (`sendEmailCode`); the code
-makes the account and signs it in. After that an account signs in with a
-passkey, Google, an emailed code, or a password if it has one (accounts from
-before this change, or anybody who adds one in Settings).
+The sign-in screen is two doors side by side, so nothing is below the fold on a
+laptop: Sign In (passkey, then email and password) and New here? (Make an
+Account), with Google, which does either, across both.
+
+New accounts have no password. Make an Account mails a code (`sendEmailCode`);
+the code makes the account and signs it in, and the passkey is the last step
+of making it, offered straight after the username. After that an account signs
+in with a passkey, Google, or a password if it has one (accounts from before
+this change, or anybody who adds one in Settings). Forgot password? is also the
+emailed code for an account with none: the reset code signs in, and choosing a
+password afterwards can be skipped.
 
 Passkeys use Supabase Auth's passkey beta, behind `auth.experimental.passkey`.
 The sign-in screen offers them twice: a button, and the email field's autofill
@@ -57,9 +64,8 @@ the whole flow with a Chrome virtual authenticator.
 On a device that has never used a passkey here, "Sign In with a Passkey"
 first asks whether one was saved: with none on the device, Windows and macOS
 still open a "choose a passkey" window offering a phone or a security key,
-which reads as though the site expected one. "Create a Passkey" under Make an
-Account is the other way in: an emailed code (which makes the account if there
-is none), then the passkey. The autofill request starts only when the email
+which reads as though the site expected one; "No, make one" goes to Make an
+Account. The autofill request starts only when the email
 field is focused; one Chromium build was measured surfacing a waiting request
 as that same window at the next click.
 

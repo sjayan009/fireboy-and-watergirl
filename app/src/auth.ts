@@ -389,7 +389,7 @@ export async function verifyEmailCode(kind: CodeKind, email: string,
   const supabase = await client();
   const { error } = await supabase.auth.verifyOtp({ email, token: code, type: kind });
   if (!error) {
-    if (kind === "email" || kind === "signup") offerPasskeyNext();
+    if (kind === "email" || kind === "signup" || kind === "recovery") offerPasskeyNext();
     return;
   }
   if (error.status === 429 || error.code === "over_request_rate_limit") {
