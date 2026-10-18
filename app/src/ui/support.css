@@ -79,5 +79,5 @@
 @media (max-width: 520px) { .ticket-stats { grid-template-columns: 1fr; } }
 
 /* A pile, a ticket opening, or the form arriving: settle in, never pop. */
-.support-board > *, .ticket[open] > :not(summary) { animation: panel-arrive var(--settle) var(--ease); }
+.support-board > *, .ticket-pile > *, .ticket[open] > :not(summary) { animation: panel-arrive var(--settle) var(--ease); }
 .ticket-tabs .ghost { min-height: 40px; }
