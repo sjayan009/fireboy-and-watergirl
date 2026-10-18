@@ -81,3 +81,11 @@
 /* A pile, a ticket opening, or the form arriving: settle in, never pop. */
 .support-board > *, .ticket-pile > *, .ticket[open] > :not(summary) { animation: panel-arrive var(--settle) var(--ease); }
 .ticket-tabs .ghost { min-height: 40px; }
+
+/* The admin view: wider, five piles, and a stage picker in place of the track. */
+.card.support-card.support-admin { max-width: 760px; }
+.support-admin .ticket-tabs .ghost { padding-inline: 6px; }
+.stage-picker { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.stage-picker .ghost { min-height: 44px; }
+.stage-picker .ghost[aria-pressed='true'] { color: #150f08; background: var(--gold); border-color: var(--gold); box-shadow: inset 0 1px 0 #ffffff59; }
+.support-admin-link { margin: 0; text-align: right; font-size: .8125rem; }

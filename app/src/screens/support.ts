@@ -16,7 +16,7 @@
 import { auth, clearReturn, returnAfterSignIn } from "../auth.js";
 import "../ui/support.css";
 import { card as plainCard, el, form, note } from "../ui/dom.js";
-import { attachmentLink, deleteTicket, listTickets, submitTicket, type Stage, type Ticket } from "../support.js";
+import { attachmentLink, deleteTicket, isSupportAdmin, listTickets, submitTicket, type Stage, type Ticket } from "../support.js";
 
 export const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_FILES = 10;
@@ -52,6 +52,11 @@ export function supportScreen(host: HTMLElement): () => void {
   clearReturn();
   const box = el("div", { class: "support-board" });
   host.append(card("Support", box));
+  // The developer's way to every ticket; asked of the database, so it shows
+  // for the support admin and for nobody else.
+  void isSupportAdmin().then((yes) => {
+    if (yes) box.before(el("p", { class: "support-admin-link" }, el("a", { href: "#/support-admin" }, "Open the admin view")));
+  });
   let cleanup = () => {};
   // Fetched when the screen opens and after something changes them (a ticket
   // sent or deleted) -- never to switch piles, which only re-sorts what is

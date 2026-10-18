@@ -80,9 +80,15 @@ with Edge Function secrets `BREVO_API_KEY` (a Brevo API key, not the SMTP
 password), `SUPPORT_EMAIL_FROM` (a sender Brevo has verified) and
 `SUPPORT_EMAIL_TO`. It allows the origins in `SUPPORT_ALLOWED_ORIGINS`, or
 `TURN_ALLOWED_ORIGINS` when that is unset. Until it is deployed, tickets are
-still stored; the browser's call to it simply fails. Move a ticket along by
-editing `stage` in the Table Editor (`sent`, `reviewed`, `in_progress`,
-`fixed`); the dates fill in themselves. `supporttest.mjs` proves the rules.
+still stored; the browser's call to it simply fails.
+
+Tickets are moved along at `/#/support-admin` (linked from the top of
+Support for an admin): every player's tickets by stage, each with four stage
+buttons. An admin is a row in `play_private.support_admins`
+(`20261018020000_support_admin.sql` seeds the owner's account); add one by
+hand, by user id. Editing `stage` in the Table Editor still works too, and
+either way the dates fill in, or clear when a ticket is moved back.
+`supporttest.mjs` proves the rules.
 
 ## An applied migration is history
 
