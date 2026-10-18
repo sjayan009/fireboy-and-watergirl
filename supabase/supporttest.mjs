@@ -7,7 +7,7 @@
  *   3. the limits hold: 10 MB a ticket, three a day, no direct writes;
  *   4. moving the stage stamps the dates, and deleting keeps the ticket.
  */
-import { env } from "./connect.mjs";
+import { env, open } from "./connect.mjs";
 import { sweepStaleTestUsers } from "./sweep.mjs";
 
 const e = env();
@@ -98,6 +98,31 @@ try {
   await upload(b, `${b.id}/more/1-c.bin`, 9 * MB);
   await upload(b, `${b.id}/more/2-d.bin`, 9 * MB);
   check("uploads stop at 30 MB a day even with no ticket", (await upload(b, `${b.id}/more/3-e.bin`, 1 * MB)).ok, false);
+
+  console.log("\nthe support admin, and nobody else");
+  const boss = await makePlayer("admin");
+  check("a player is not an admin", await (await rpc(a, "is_support_admin", {})).json(), false);
+  check("and cannot list every ticket", (await rpc(a, "admin_tickets", {})).ok, false);
+  check("nor move one", (await rpc(b, "admin_set_ticket_stage", { ticket: id, new_stage: "fixed" })).ok, false);
+  // Made an admin the only way there is: a row, by hand, in play_private.
+  const db = await open({ quiet: true });
+  try {
+    await db.query("insert into play_private.support_admins (user_id) values ($1) on conflict do nothing", [boss.id]);
+  } finally {
+    await db.end();
+  }
+  check("a listed account is an admin", await (await rpc(boss, "is_support_admin", {})).json(), true);
+  const all = await (await rpc(boss, "admin_tickets", {})).json();
+  const seen = Array.isArray(all) ? all.find((t) => t.id === id) : null;
+  check("and sees another player's ticket, with who sent it",
+        [!!seen, seen?.email?.startsWith("support_a_"), typeof seen?.username], [true, true, "string"]);
+  check("and can open its attachment",
+        (await fetch(`${API}/storage/v1/object/support-attachments/${shot}`, { headers: as(boss) })).ok, true);
+  check("and move it in one call", (await rpc(boss, "admin_set_ticket_stage", { ticket: id, new_stage: "in_progress" })).ok, true);
+  check("but only to a real stage", (await rpc(boss, "admin_set_ticket_stage", { ticket: id, new_stage: "teleported" })).ok, false);
+  await rpc(boss, "admin_set_ticket_stage", { ticket: id, new_stage: "reviewed" });
+  const back = (await (await fetch(`${API}/rest/v1/support_tickets?id=eq.${id}&select=stage,reviewed_at,in_progress_at`, { headers: as(a) })).json())[0];
+  check("moving back clears the later step", [back.stage, !!back.reviewed_at, back.in_progress_at], ["reviewed", true, null]);
 
   console.log("\nthe stage, and deleting");
   await fetch(`${API}/rest/v1/support_tickets?id=eq.${id}`, {

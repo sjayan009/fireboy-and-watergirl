@@ -95,3 +95,34 @@ export async function attachmentLink(path: string): Promise<string> {
   if (error || !data) throw new Error("That attachment is no longer available.");
   return data.signedUrl;
 }
+
+// ---- the developer's side ---------------------------------------------------
+
+/** A ticket as an admin sees it: whose it is, as well as what it says. */
+export interface AdminTicket extends Ticket { username: string | null; email: string | null }
+
+interface AdminRow extends Row { username: string | null; email: string | null }
+
+/** Whether this account may open the admin view. Answered by the database. */
+export async function isSupportAdmin(): Promise<boolean> {
+  const { data, error } = await supabase.rpc("is_support_admin");
+  return !error && data === true;
+}
+
+/** Every player's tickets, newest first. Refused unless `isSupportAdmin`. */
+export async function adminTickets(): Promise<AdminTicket[]> {
+  const { data, error } = await supabase.rpc("admin_tickets");
+  if (error) throw new Error(error.code === "42501" ? "This page is for the support admin." : error.message);
+  return (data as AdminRow[]).map((r) => ({
+    id: r.id, message: r.message, stage: r.stage, created: r.created_at,
+    reached: { sent: r.created_at, reviewed: r.reviewed_at ?? undefined,
+               in_progress: r.in_progress_at ?? undefined, fixed: r.fixed_at ?? undefined },
+    attachments: r.attachments ?? [], deleted: r.deleted_at ?? undefined,
+    username: r.username, email: r.email,
+  }));
+}
+
+export async function setTicketStage(id: number, stage: Stage): Promise<void> {
+  const { error } = await supabase.rpc("admin_set_ticket_stage", { ticket: id, new_stage: stage });
+  if (error) throw new Error(error.message);
+}

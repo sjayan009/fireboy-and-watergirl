@@ -94,6 +94,7 @@ const routes: Route[] = [
   { path: "/username", stages: ["nameless"], render: usernameScreen },
   { path: "/passkey", stages: ["in"], render: passkeyOfferScreen },
   { path: "/support-ticket", stages: ["in", "out"], render: lazy(async () => (await import("./screens/support.js")).supportScreen) },
+  { path: "/support-admin", stages: ["in"], render: lazy(async () => (await import("./screens/supportadmin.js")).supportAdminScreen) },
   { path: "/play", stages: ["in", "out"], render: play },
   { path: "/friends", stages: ["in"], render: lazy(async () => (await import("./screens/friends.js")).friendsScreen) },
   { path: "/watch", stages: ["in"], render: lazy(async () => (await import("./screens/watch.js")).watchScreen) },

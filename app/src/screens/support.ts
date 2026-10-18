@@ -16,7 +16,7 @@
 import { auth, clearReturn, returnAfterSignIn } from "../auth.js";
 import "../ui/support.css";
 import { card as plainCard, el, form, note } from "../ui/dom.js";
-import { attachmentLink, deleteTicket, listTickets, submitTicket, type Stage, type Ticket } from "../support.js";
+import { attachmentLink, deleteTicket, isSupportAdmin, listTickets, submitTicket, type Stage, type Ticket } from "../support.js";
 
 export const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_FILES = 10;
@@ -52,13 +52,21 @@ export function supportScreen(host: HTMLElement): () => void {
   clearReturn();
   const box = el("div", { class: "support-board" });
   host.append(card("Support", box));
+  // The developer's way to every ticket; asked of the database, so it shows
+  // for the support admin and for nobody else.
+  void isSupportAdmin().then((yes) => {
+    if (yes) box.before(el("p", { class: "support-admin-link" }, el("a", { href: "#/support-admin" }, "Open the admin view")));
+  });
   let cleanup = () => {};
   // Fetched when the screen opens and after something changes them (a ticket
   // sent or deleted) -- never to switch piles, which only re-sorts what is
   // already here. The loading line shows on the first fetch alone; a refresh
   // leaves the board up until the new one is ready.
   let loaded = false;
-  const showBoard = async (tab: Tab = "open") => {
+  // The pile on show, kept here rather than in the board: a refresh that
+  // lands after somebody switched piles redraws the pile they switched to.
+  let current: Tab = "open";
+  const showBoard = async () => {
     cleanup();
     cleanup = () => {};
     if (!loaded) box.replaceChildren(note("Loading your tickets…"));
@@ -71,7 +79,8 @@ export function supportScreen(host: HTMLElement): () => void {
     }
     loaded = true;
     if (!tickets.length) { showForm(false); return; }
-    box.replaceChildren(...board(tickets, tab, () => showForm(), (next) => void showBoard(next)));
+    box.replaceChildren(...board(tickets, current, () => showForm(), () => void showBoard(),
+                                 (p) => { current = p; }));
   };
   const showForm = (canGoBack = true) => {
     cleanup();
@@ -94,7 +103,8 @@ const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { mont
  * the three piles -- open, completed, deleted. A deleted ticket is hidden
  * from the open pile, not erased, so it is still there to look back on.
  */
-function board(tickets: Ticket[], tab: Tab, compose: () => void, reload: (tab?: Tab) => void): Node[] {
+function board(tickets: Ticket[], tab: Tab, compose: () => void, reload: () => void,
+               chose: (tab: Tab) => void): Node[] {
   const pile = (t: Ticket): Tab => t.deleted ? "deleted" : t.stage === "fixed" ? "completed" : "open";
   const count = (p: Tab) => tickets.filter((t) => pile(t) === p).length;
   // Switching piles redraws the list and nothing else: the counts, the button
@@ -102,10 +112,11 @@ function board(tickets: Ticket[], tab: Tab, compose: () => void, reload: (tab?: 
   const list = el("div", { class: "ticket-pile", role: "tabpanel" });
   const show = (p: Tab) => {
     tab = p;
+    chose(p);
     for (const b of tabs.querySelectorAll("button")) b.setAttribute("aria-selected", String(b.dataset.pile === p));
     const shown = tickets.filter((t) => pile(t) === p);
     list.replaceChildren(shown.length
-      ? el("ul", { class: "tickets" }, ...shown.map((t) => ticketRow(t, () => reload(tab))))
+      ? el("ul", { class: "tickets" }, ...shown.map((t) => ticketRow(t, reload)))
       : note(p === "open" ? "Nothing open. If something goes wrong, New Ticket is right above."
            : p === "completed" ? "Nothing fixed yet." : "Nothing deleted."));
   };
