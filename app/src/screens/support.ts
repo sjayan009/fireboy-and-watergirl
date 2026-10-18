@@ -14,6 +14,7 @@
  * which is the check that counts.
  */
 import { auth, clearReturn, returnAfterSignIn } from "../auth.js";
+import "../ui/support.css";
 import { card as plainCard, el, form, note } from "../ui/dom.js";
 import { attachmentLink, deleteTicket, listTickets, submitTicket, type Stage, type Ticket } from "../support.js";
 
