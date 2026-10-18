@@ -12,7 +12,7 @@
  * `/settings` would need a rewrite rule and a serverless hop to answer; a deep
  * link to `#/settings` needs neither.
  */
-import { auth, onAuth, passkeyOfferPending, Stage } from "./auth.js";
+import { auth, onAuth, passkeyOfferPending, pendingReturn, Stage } from "./auth.js";
 
 export interface Route {
   path: string;
@@ -38,10 +38,13 @@ const HOME: Record<Stage, string> = {
 /**
  * Where a stage goes now. The same as `HOME`, except that somebody who has
  * just signed in without a passkey is offered one on the way to the game
- * (see `takePasskeyOffer`).
+ * (see `takePasskeyOffer`), and one who signed in from Support goes back there.
  */
 export function home(stage: Stage): string {
-  return stage === "in" && passkeyOfferPending() ? "/passkey" : HOME[stage];
+  if (stage !== "in") return HOME[stage];
+  if (passkeyOfferPending()) return "/passkey";
+  // Somebody who pressed Sign In on the Support page goes back to it.
+  return pendingReturn() ?? HOME.in;
 }
 
 let routes: Route[] = [];

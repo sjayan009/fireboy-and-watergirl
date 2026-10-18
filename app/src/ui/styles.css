@@ -175,6 +175,15 @@ form { display: grid; gap: 14px; margin-top: 20px; }
 .secondary:hover, a.secondary:hover { background: #23B0CF; }
 /* Everything else on this card lifts a pixel when pressed; so does this. */
 a.secondary:active { transform: translateY(1px); }
+/*
+ * Create a Passkey: the lavender P lights in game, brought to the blue's
+ * brightness the same way the blue was (#BE9DF7 at H262 S85, L to luminance
+ * .283 -> #A679F4), so the two read as a pair under Sign In rather than over
+ * it. Hover matches the blue's step, .359 -> #B58FF6. Ink #150A29: 6.02:1.
+ */
+.tertiary, a.tertiary { display: flex; justify-content: center; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 9px 15px; border: 1px solid transparent; border-radius: 8px; background: #A679F4; color: #150A29; font-size: 1rem; font-weight: 600; text-decoration: none; box-shadow: inset 0 1px 0 #ffffff4d; }
+.tertiary:hover, a.tertiary:hover { background: #B58FF6; }
+a.tertiary:active { transform: translateY(1px); }
 /* Its own region, below the form's own business and marked off from it. */
 .after-form { padding-top: 16px; border-top: 1px solid var(--edge); display: grid; gap: 12px; }
 .after-form .note { margin: 0; text-align: center; }
@@ -191,7 +200,13 @@ a.secondary:active { transform: translateY(1px); }
 
 .provider-block { margin-top: 20px; }
 /* Passkey above Google: one pair of ways in, so one gap between them. */
-.provider-block + .captcha + .provider-block { margin-top: 10px; }
+.provider-block + .captcha + .provider-block,
+.provider-block + .passkey-hint[hidden] + .captcha + .provider-block { margin-top: 10px; }
+.passkey-hint { display: grid; gap: 10px; margin: 10px 0 0; padding: 12px; border: 1px solid #3b3150; border-radius: 10px; background: #1d1726; color: var(--ink); font-size: .875rem; }
+.passkey-hint p { margin: 0; }
+.passkey-hint .note { font-size: .8125rem; }
+.passkey-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.passkey-choice .ghost, .passkey-choice .tertiary { min-height: 40px; font-size: .875rem; }
 .provider { width: 100%; font-size: 1rem; }
 .card .provider { min-height: 44px; }
 .google-g { flex: none; display: flex; width: 18px; height: 18px; }
@@ -546,7 +561,7 @@ html:has(.play-shell) { overflow: hidden; scrollbar-gutter: auto; }
 /* A divider separates two things; under the last group it separates nothing. */
 .menu-group:last-child { padding-bottom:0; margin-bottom:0; border-bottom:0; }
 .menu-group h3 { margin:0 0 4px; color:var(--dim); font-size:.875rem; }
-.menu-group:not(:has(button,a,.control-keys,.note)) { display:none; }
+.menu-group:not(:has(:is(button,a):not([hidden]),.control-keys,.note)) { display:none; }
 .menu-group .ghost { justify-content:flex-start; }
 .menu-group .leave { margin-top:10px; color:#ffc2a9; border-color:#926753; }
 kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border-radius:5px; font:600 .8125rem var(--ui); color:var(--ink); }
@@ -870,3 +885,82 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
   .qm-seg button:active { transform:none; }
 }
 @media (prefers-reduced-transparency: reduce) { .glow-side, .logo-halo { mix-blend-mode:normal; } }
+
+/*
+ * Support. The card wears the game's two elements across its top edge --
+ * fire into water -- and otherwise stays the plain sign-in card: one box to
+ * write in, one place for screenshots, one button.
+ */
+.card:has(.attach-drop), .card.support-card { max-width: 520px; position: relative; border-top-color: transparent; }
+.card:has(.attach-drop)::before, .card.support-card::before { content: ''; position: absolute; inset: -3px 18px auto; height: 3px; border-radius: 3px; background: linear-gradient(90deg, var(--fire), #f0ce7b 50%, var(--water)); }
+.support-message { width: 100%; min-height: 140px; resize: vertical; padding: 10px 12px; border: 1px solid #5b5346; border-radius: 7px; color: var(--ink); background: #16130f; font: inherit; line-height: 1.45; box-shadow: inset 0 2px 3px #0002; }
+.support-message::placeholder { color: #8f8574; }
+.support-message:focus-visible { border-color: var(--water); outline: none; }
+.attach-drop { display: block; padding: 18px 16px; border: 1.5px dashed #4f6f78; border-radius: 10px; background: #172024; color: var(--dim); font-size: .875rem; text-align: center; cursor: pointer; transition: border-color var(--press) var(--ease), background var(--press) var(--ease); }
+.attach-drop strong { color: var(--water); }
+.attach-drop:hover, .attach-drop:focus-visible, .attach-drop.over { border-color: var(--fire); background: #24190f; outline: none; }
+.attach-pick { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+.attach-meter { margin: -6px 0 0; color: var(--dim); font-size: .8125rem; text-align: right; font-variant-numeric: tabular-nums; }
+.attachments { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.attachments:empty { display: none; }
+.attachments li { display: flex; align-items: center; gap: 10px; }
+.attach-thumb { flex: none; width: 44px; height: 44px; border-radius: 6px; object-fit: cover; border: 1px solid var(--edge); background: #16130f; }
+.attach-file { display: grid; place-items: center; color: var(--dim); font-size: .625rem; font-weight: 700; letter-spacing: .06em; }
+.attach-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: .875rem; }
+.attach-name .note { margin: 0; font-size: .75rem; }
+.card a.primary.button-link { display: flex; justify-content: center; align-items: center; margin-top: 18px; border-radius: 8px; text-decoration: none; }
+
+/* The Menu's way to Support: first, full width, in the game's water blue. */
+.menu-support { display: grid; gap: 6px; }
+.menu-support .secondary { gap: 8px; }
+.menu-support .note { margin: 0; }
+
+/*
+ * The ticket board. Its marks are the game's own: the red and blue diamonds
+ * Fireboy and Watergirl collect stand for the counts and for each step of a
+ * ticket's progress, and the line between the steps runs fire into water.
+ */
+.card.support-card:has(.support-board .tickets, .support-board .ticket-tabs) { max-width: 640px; }
+.support-board { display: grid; gap: 16px; }
+.gem { display: inline-block; flex: none; width: 12px; height: 12px; transform: rotate(45deg); border-radius: 2px; background: #4a4236; box-shadow: inset 0 1px 0 #ffffff40; }
+.gem-fire { background: var(--fire); }
+.gem-water { background: var(--water); }
+.gem-gold { background: var(--gold); }
+.ticket-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.ticket-stat { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 10px; padding: 12px 14px; border: 1px solid var(--edge); border-radius: 12px; background: #19150f; }
+.ticket-stat .gem { grid-row: span 2; }
+.ticket-stat strong { font-size: 1.375rem; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.ticket-stat span:last-child { color: var(--dim); font-size: .8125rem; }
+.ticket-tabs { display: flex; gap: 6px; padding: 4px; border: 1px solid var(--edge); border-radius: 10px; background: #16130f; }
+.ticket-tabs .ghost { flex: 1; background: transparent; border-color: transparent; box-shadow: none; color: var(--dim); }
+.ticket-tabs .ghost[aria-selected='true'] { background: #2b251d; border-color: #4a4236; color: var(--ink); }
+.tickets { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.ticket { border: 1px solid var(--edge); border-radius: 12px; background: #19150f; }
+.ticket > summary { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 14px 16px; cursor: pointer; list-style: none; border-radius: 12px; }
+.ticket > summary::-webkit-details-marker { display: none; }
+.ticket[open] > summary { border-bottom: 1px solid var(--edge); border-radius: 12px 12px 0 0; }
+.ticket-head { font-size: .9375rem; }
+.ticket-head strong { font-variant-numeric: tabular-nums; }
+.ticket-preview { grid-column: 1 / -1; color: var(--dim); font-size: .875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ticket[open] .ticket-preview { display: none; }
+.ticket-badge { align-self: start; padding: 2px 9px; border-radius: 999px; font-size: .75rem; font-weight: 600; background: #2b251d; color: var(--dim); white-space: nowrap; }
+.ticket-badge.s-reviewed { background: #3a2a1a; color: #ffc49f; }
+.ticket-badge.s-in_progress { background: #3a2318; color: var(--fire); }
+.ticket-badge.s-fixed { background: #13303a; color: var(--water); }
+.ticket > :not(summary) { margin: 14px 16px; }
+.ticket > button { margin-top: 0; }
+.ticket-message { white-space: pre-wrap; line-height: 1.5; }
+/* Four steps on one line, the diamonds joined by a rule that fills as it goes. */
+.ticket-track { --done: 0; position: relative; display: grid; grid-template-columns: repeat(4, 1fr); list-style: none; padding: 0; }
+.ticket-track::before, .ticket-track::after { content: ''; position: absolute; top: 5px; left: 12.5%; height: 2px; border-radius: 2px; }
+.ticket-track::before { right: 12.5%; background: #3a332a; }
+.ticket-track::after { width: calc(75% * var(--done)); background: linear-gradient(90deg, var(--fire), var(--water)); }
+.ticket-track li { position: relative; z-index: 1; display: grid; justify-items: center; align-content: start; gap: 6px; text-align: center; }
+.ticket-track .gem { box-shadow: 0 0 0 4px #19150f; }
+.ticket-track li.done .gem { background: var(--fire); }
+.ticket-track li.done:nth-child(even) .gem { background: var(--water); }
+.ticket-track li.now .gem { background: var(--gold); box-shadow: 0 0 0 4px #19150f, 0 0 12px #f0ce7b80; }
+.ticket-step { font-size: .75rem; color: var(--dim); line-height: 1.25; }
+.ticket-track li.now .ticket-step, .ticket-track li.done .ticket-step { color: var(--ink); }
+.ticket-when { font-size: .6875rem; color: #8f8574; font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) { .ticket-stats { grid-template-columns: 1fr; } }

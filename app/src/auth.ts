@@ -949,7 +949,26 @@ export async function signInWithPasskey(captchaToken?: string): Promise<boolean>
   const { error } = await supabase.auth.signInWithPasskey({ options: { captchaToken } });
   if (dismissed(error as { code?: string; cause?: unknown } | null)) return false;
   passkeyFail(error);
+  rememberPasskeyHere();
   return true;
+}
+
+/**
+ * Whether this device has made or used a passkey for this site.
+ *
+ * The closest a page can come to "does this person have a passkey": browsers
+ * will not say, on purpose, so a site cannot test visitors for accounts. It
+ * decides only whether to explain, after the browser's sheet comes back
+ * empty, how a passkey gets made -- so it can be wrong without harm.
+ */
+const PASSKEY_HERE = "fbwg.passkeyHere";
+
+export function passkeyUsedHere(): boolean {
+  try { return localStorage.getItem(PASSKEY_HERE) === "1"; } catch { return false; }
+}
+
+function rememberPasskeyHere(): void {
+  try { localStorage.setItem(PASSKEY_HERE, "1"); } catch { /* the hint shows again, that is all */ }
 }
 
 /** The native JSON helpers that conditional mediation is built on. */
@@ -1020,7 +1039,7 @@ export async function startAutofill(token: () => Promise<string | undefined>,
       challengeId: data.challenge_id,
       credential: (credential as unknown as Required<ToJSON>).toJSON() as never,
     });
-    if (!verify) return;
+    if (!verify) { rememberPasskeyHere(); return; }
     if (verify.code !== "webauthn_challenge_expired") passkeyFail(verify);
     expired();
   }
@@ -1049,6 +1068,7 @@ export async function registerPasskey(): Promise<boolean> {
   }
   if (dismissed(error as { code?: string; cause?: unknown } | null)) return false;
   passkeyFail(error);
+  rememberPasskeyHere();
   return true;
 }
 
@@ -1079,10 +1099,26 @@ export function passkeyOfferPending(): boolean {
   try { return sessionStorage.getItem(OFFER_KEY) === "1"; } catch { return false; }
 }
 
+/**
+ * "Create a Passkey" was pressed: the offer comes after the emailed code even
+ * for an account that said "Not now" before, or already has one elsewhere.
+ */
+const ASKED_KEY_PASSKEY = "fbwg.passkeyAsked";
+
+export function askForPasskey(): void {
+  try { sessionStorage.setItem(ASKED_KEY_PASSKEY, "1"); } catch { /* offered as usual */ }
+}
+
+/** Whether the offer was asked for by name, and not just due. */
+export function passkeyAskedFor(): boolean {
+  try { return sessionStorage.getItem(ASKED_KEY_PASSKEY) === "1"; } catch { return false; }
+}
+
 /** Spend the offer, and say whether this account still wants to hear it. */
 export function takePasskeyOffer(): boolean {
   try {
     sessionStorage.removeItem(OFFER_KEY);
+    if (passkeyAskedFor()) { sessionStorage.removeItem(ASKED_KEY_PASSKEY); return true; }
     const declined = Number(localStorage.getItem(DECLINED_KEY + state.user?.id) ?? 0);
     return Date.now() - declined > 30 * 86_400_000;
   } catch {
@@ -1092,4 +1128,22 @@ export function takePasskeyOffer(): boolean {
 
 export function declinePasskeyOffer(): void {
   try { localStorage.setItem(DECLINED_KEY + state.user?.id, String(Date.now())); } catch { /* asked again next time */ }
+}
+
+/**
+ * Where to go once signed in, when it is not the game: a Sign In pressed on
+ * the Support page should come back to Support. One slot, this tab only.
+ */
+const RETURN_KEY = "fbwg.afterSignIn";
+
+export function returnAfterSignIn(path: string): void {
+  try { sessionStorage.setItem(RETURN_KEY, path); } catch { /* lands in the game instead */ }
+}
+
+export function pendingReturn(): string | null {
+  try { return sessionStorage.getItem(RETURN_KEY); } catch { return null; }
+}
+
+export function clearReturn(): void {
+  try { sessionStorage.removeItem(RETURN_KEY); } catch { /* nothing to clear */ }
 }

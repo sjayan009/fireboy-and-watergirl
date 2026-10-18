@@ -9,7 +9,7 @@ import { auth, onAuth, preloadAuth, startAuth } from "./auth.js";
 import { rerender, startRouter, Route } from "./router.js";
 import {
   loginScreen, passwordScreen, reportSignInTrouble, resetScreen, signUpScreen,
-  passkeyOfferScreen, troubleScreen, unlockScreen, usernameScreen, verifyScreen,
+  createPasskeyScreen, passkeyOfferScreen, troubleScreen, unlockScreen, usernameScreen, verifyScreen,
 } from "./screens/accounts.js";
 function lazy(load: () => Promise<Route["render"]>): Route["render"] {
   return (host) => {
@@ -73,6 +73,7 @@ const routes: Route[] = [
   { path: "/", stages: ["out"], render: lazy(async () => (await import("./screens/landing.js")).landingScreen) },
   { path: "/login", stages: ["out"], render: warm(loginScreen) },
   { path: "/signup", stages: ["out"], render: warm(signUpScreen) },
+  { path: "/create-passkey", stages: ["out"], render: warm(createPasskeyScreen) },
   // Signed-in stages too, because the reset code signs this tab in from the
   // reset screen itself; admitting them keeps the router from moving the tab
   // somewhere else before the screen sends it on to /password.
@@ -91,6 +92,7 @@ const routes: Route[] = [
   { path: "/unlock", stages: ["locked"], render: unlockScreen },
   { path: "/username", stages: ["nameless"], render: usernameScreen },
   { path: "/passkey", stages: ["in"], render: passkeyOfferScreen },
+  { path: "/support-ticket", stages: ["in", "out"], render: lazy(async () => (await import("./screens/support.js")).supportScreen) },
   { path: "/play", stages: ["in", "out"], render: play },
   { path: "/friends", stages: ["in"], render: lazy(async () => (await import("./screens/friends.js")).friendsScreen) },
   { path: "/watch", stages: ["in"], render: lazy(async () => (await import("./screens/watch.js")).watchScreen) },
@@ -163,6 +165,11 @@ startAuth().then(() => {
   // An address change lands signed in too, and with nothing left to do -- the
   // link WAS the confirmation. Settings is where the new address is on screen.
   if (wanted === "email") location.hash = "/settings";
+  // `/support-ticket` is a real address, for the footer and for anybody told
+  // to go there; the app routes on the hash, so it becomes `#/support-ticket`.
+  if (/^\/support-ticket\/?$/.test(location.pathname)) {
+    history.replaceState(null, "", "/#/support-ticket");
+  }
   startRouter(host, routes);
 }).catch((e) => {
   host.replaceChildren();

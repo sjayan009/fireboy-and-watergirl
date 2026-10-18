@@ -54,6 +54,15 @@ passkey control hides itself unless `/auth/v1/settings` reports
 `passkeys_enabled` and the browser has WebAuthn. `app/test/passkeys.mjs` drives
 the whole flow with a Chrome virtual authenticator.
 
+On a device that has never used a passkey here, "Sign In with a Passkey"
+first asks whether one was saved: with none on the device, Windows and macOS
+still open a "choose a passkey" window offering a phone or a security key,
+which reads as though the site expected one. "Create a Passkey" under Make an
+Account is the other way in: an emailed code (which makes the account if there
+is none), then the passkey. The autofill request starts only when the email
+field is focused; one Chromium build was measured surfacing a waiting request
+as that same window at the next click.
+
 The passkey relying-party ID is the production hostname. Moving the site to
 another domain makes every saved passkey unusable, so a domain change has to
 come before people save them, or come with a plan to re-enrol.
@@ -631,3 +640,15 @@ Specific hardening worth knowing about:
   just this once" is not something the platform can express.
 
 ---
+
+### Support
+
+`/support-ticket` (a static page that forwards to `#/support-ticket`) is one
+account's support desk: its tickets, counted and split into Open, Completed and
+Deleted, each with a Sent → Reviewed → In progress → Fixed track, and a form
+that takes a message plus pasted, dropped or picked files up to 10 MB. Only an
+account that is fully in can file or read one: reads are row level security,
+writes are `submit_ticket` and `delete_ticket`, and attachments live in a
+private bucket under the account's own folder. Three tickets a day, 30 MB of
+uploads a day, attachments kept 90 days. The Menu's Contact Support button
+opens it in a new tab. See `supabase/README.md` for the email to the developer.

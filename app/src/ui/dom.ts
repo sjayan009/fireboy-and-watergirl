@@ -198,12 +198,12 @@ function passkeyMark(): HTMLElement {
 }
 
 /**
- * "Sign in with a passkey". A press that comes back without a session --
+ * "Sign In with a Passkey". A press that comes back without a session --
  * the person closed the browser's sheet -- resolves rather than throws, so
  * changing your mind is not reported as an error.
  */
 export function passkeyButton(onPress: () => Promise<void>): HTMLElement {
-  return providerButton(passkeyMark(), "Sign in with a passkey", onPress, true);
+  return providerButton(passkeyMark(), "Sign In with a Passkey", onPress, true);
 }
 
 function providerButton(mark: HTMLElement, said: string, onPress: () => Promise<void>,
