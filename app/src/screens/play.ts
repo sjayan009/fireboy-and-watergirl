@@ -528,7 +528,7 @@ export function playScreen(host: HTMLElement,
       // itself the moment the art actually arrives.
       if (!v.artComplete) {
         notice("art", v.artStatus === "loading" ? "Additional artwork is loading. The level is ready to play." : "Some game art did not load. The level still plays.");
-      }
+      } else clearNotice("art");
       // Nothing left to wait for since the ranking registration went.
       return Promise.resolve();
     },

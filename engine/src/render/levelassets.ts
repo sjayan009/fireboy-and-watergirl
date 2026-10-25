@@ -68,7 +68,9 @@ export async function prepareLevelAssets(base: string, mode: string, num: number
     const load = async (files: string[], counts: PreparationCounts, stage: "critical" | "background", retry = false): Promise<void> => {
       await Promise.all(files.map(async file => {
         ensureLive();
-        const remaining = retry ? 15000 : Math.max(1, deadline - (performance.now() - started));
+        // The preparation deadline is for becoming playable. Background art
+        // arrives after the level has started, on each file's own deadline.
+        const remaining = retry || stage === "background" ? 15000 : Math.max(1, deadline - (performance.now() - started));
         try {
           const resourceOptions = { priority: stage === "critical" ? "critical" as const : "background" as const, deadlineMs: Math.min(15000, remaining) };
           try { await owner.image(assetUrl(base, file), resourceOptions).ready; }
@@ -92,6 +94,10 @@ export async function prepareLevelAssets(base: string, mode: string, num: number
       ensureLive();
     };
     await load(criticalFiles, critical, "critical");
+    // Playable now. Left armed, the timer aborted whatever background art was
+    // still in flight, `complete` rejected, and the status stayed "ready" --
+    // "Additional artwork is loading" on every later scene, never cleared.
+    clearTimeout(timer);
     const result: PreparedLevelAssets = {
       owner, identity: manifest.identity, critical, background,
       status: critical.failed ? "partial" : "ready", release,
