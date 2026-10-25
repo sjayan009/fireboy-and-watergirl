@@ -11,10 +11,11 @@
  *     sizes its own text fields use (18 and 15);
  *   - the cards sit between the title art, whose ink ends at y=170, and the
  *     map's bottom-left button, whose cap height starts at y=428;
- *   - Back IS that button: 24.45px (41 x 0.49 x 1.2168), #89681D lifting to
- *     #FFCC00, on its baseline, y=446.5. The map draws it from x=29.5, which on
- *     the title screen is where Watergirl stands (ink x=69..93), so Back starts
- *     12px to her right instead;
+ *   - Back takes the map button's colours, #89681D lifting to #FFCC00, and its
+ *     black outline. The title screen's Watergirl stands where the map draws
+ *     that button, so Back sits in the corner under her, at 18px -- a size the
+ *     SWF's own text uses -- 9px in from both edges, as the title's own corner
+ *     text is;
  *   - the soft glow around the chosen card is the menu's own hover glow, a
  *     white GlowFilter of blur 29, three passes, strength 4.3. Three box passes
  *     of width 29 are a Gaussian of sigma sqrt(3(29^2-1)/12) = 14.49, and
@@ -35,6 +36,13 @@ const STAGE_W = 640;
 /** The Flash glow's sigma in stage pixels, from blur 29 at quality 3. */
 const GLOW_SIGMA = Math.sqrt(3 * (29 * 29 - 1) / 12);
 const GLOW_STRENGTH = 4.3;
+/**
+ * The map button's own text treatment: a black GlowFilter, blur 2 at one pass
+ * (sigma sqrt((2^2-1)/12) = 0.5), strength 10 -- a hard outline that keeps the
+ * word legible over vines, wood and the title screen's characters.
+ */
+const OUTLINE_SIGMA = Math.sqrt((2 * 2 - 1) / 12);
+const OUTLINE_STRENGTH = 10;
 const reduce = matchMedia("(prefers-reduced-motion: reduce)");
 
 type Screen = "root" | "local" | "online";
@@ -69,7 +77,8 @@ const door = (src: string, open: boolean) => frame(src, 22, 237, 253, 92, open ?
 interface Card { title: string; sub: string; art: () => HTMLElement[]; act?: () => void; }
 
 export class ModeCards {
-  readonly root = el("div", { class: "mode-cards", hidden: true });
+  readonly root = el("div", { class: "mode-cards" });
+  private readonly screenEl = el("div", { class: "mc-screen", hidden: true });
   private readonly row = el("div", { class: "mc-row", role: "group" });
   private readonly crumb = el("p", { class: "mc-crumb" });
   private readonly back = el("button", { type: "button", class: "mc-back" }, "Back");
@@ -89,29 +98,39 @@ export class ModeCards {
       <feFlood flood-color="#fff" result="white"/>
       <feComposite in="white" in2="strong" operator="in" result="glow"/>
       <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="mc-outline" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="${OUTLINE_SIGMA}" result="blur"/>
+      <feComponentTransfer in="blur" result="strong"><feFuncA type="linear" slope="${OUTLINE_STRENGTH}"/></feComponentTransfer>
+      <feMerge><feMergeNode in="strong"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>`;
-    this.blur = svg.querySelector("feGaussianBlur")!;
-    this.root.append(svg, this.crumb, this.row, this.back);
+    const [glowBlur, outlineBlur] = svg.querySelectorAll("feGaussianBlur");
+    this.blur = glowBlur;
+    this.screenEl.append(this.crumb, this.row, this.back);
+    this.root.append(svg, this.screenEl);
     this.back.addEventListener("click", () => this.goBack());
     this.root.addEventListener("keydown", (e) => this.key(e));
     // The filter works in CSS pixels, so its sigma follows the stage's scale.
     new ResizeObserver(() => {
-      this.blur.setAttribute("stdDeviation", String(GLOW_SIGMA * this.root.clientWidth / STAGE_W));
+      const scale = this.root.clientWidth / STAGE_W;
+      this.blur.setAttribute("stdDeviation", String(GLOW_SIGMA * scale));
+      outlineBlur.setAttribute("stdDeviation", String(OUTLINE_SIGMA * scale));
     }).observe(this.root);
   }
 
-  get open(): boolean { return !this.root.hidden; }
+  get open(): boolean { return !this.screenEl.hidden; }
 
-  show(): void {
-    this.root.hidden = false;
-    this.draw("root", 0, 0, false);
+  /** Open on a given screen -- the first, or the one a Back returns to. */
+  show(screen: Screen = "root"): void {
+    this.screenEl.hidden = false;
+    this.draw(screen, 0, undefined, false);
     // Not during the press that opened us: an Enter on the canvas would go on
     // to click whichever card had just been focused, and skip a screen.
     setTimeout(() => this.row.querySelector<HTMLElement>("[data-selected]")?.focus({ preventScroll: true }));
   }
 
   hide(): void {
-    this.root.hidden = true;
+    this.screenEl.hidden = true;
   }
 
   private cards(screen: Screen): Card[] {
@@ -139,7 +158,6 @@ export class ModeCards {
   private draw(screen: Screen, from: -1 | 0 | 1, focus?: number, takeFocus = true): void {
     this.screen = screen;
     this.crumb.textContent = screen === "local" ? "Local Play" : screen === "online" ? "Online Play" : "";
-    this.back.hidden = screen === "root";
     this.row.setAttribute("aria-label", screen === "root" ? "How to play" : this.crumb.textContent);
     const buttons = this.cards(screen).map(card => {
       const b = el("button", { type: "button", class: "mc-card", "aria-disabled": card.act ? null : "true" },

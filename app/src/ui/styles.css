@@ -925,7 +925,9 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
  * which in font 49 puts the baseline 0.8599em down and the cap height 0.1070em
  * down, and every top below is a cap height or baseline turned into a box top.
  */
-.mode-cards { position:absolute; inset:0; z-index:2; container-type:size; --u:calc(100cqw / 640); font-family:"swf-font-49", Georgia, serif; font-weight:400; letter-spacing:0; }
+.mode-cards { position:absolute; inset:0; z-index:2; container-type:size; --u:calc(100cqw / 640); font-family:"swf-font-49", Georgia, serif; font-weight:400; letter-spacing:0; pointer-events:none; }
+.mc-screen, .mc-back { pointer-events:auto; }
+.mc-screen { position:absolute; inset:0; }
 .mc-defs { position:absolute; width:0; height:0; }
 /* Cap height centred between the title art (ink to y=170) and the rings (y=203). */
 .mc-crumb { position:absolute; left:0; width:100%; top:calc(177.81 * var(--u)); margin:0; text-align:center; font-size:calc(18 * var(--u)); line-height:1; color:#ffcc00; }
@@ -949,12 +951,16 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
 .mc-card:not([aria-disabled]):active { transform:scale(.97); }
 .mc-card[aria-disabled] { cursor:default; }
 .mc-card[aria-disabled] .mc-title, .mc-card[aria-disabled] .mc-sub { color:#89681d; }
-/* The map's own "Main Menu" button: same size, colours and baseline, starting
-   12px right of the title screen's Watergirl (ink to x=93; the face's B starts
-   1px into its box). */
-.mc-back { position:absolute; left:calc(104 * var(--u)); top:calc(425.48 * var(--u)); padding:0; border:0; background:none; font:inherit; font-size:calc(24.45 * var(--u)); line-height:1; color:#89681d; cursor:pointer; outline:none; }
+/*
+ * Back, on every card screen: the bottom-left corner, under the title screen's
+ * Watergirl (ink to y=458), mirroring the title's own corner text -- "(c) Oslo
+ * Albet 2009" sits 9px in from the top and right, so Back's ink sits 9px in
+ * from the left (the B starts 1.14px into its box) and its baseline 9px up.
+ * Set by size, baseline and left; the box top is the baseline less 0.8599em.
+ */
+.mc-back { --size:18; --baseline:471; --left:7.86; position:absolute; left:calc(var(--left) * var(--u)); top:calc((var(--baseline) - 0.8599 * var(--size)) * var(--u)); padding:0; border:0; background:none; font:inherit; font-size:calc(var(--size) * var(--u)); line-height:1; color:#89681d; cursor:pointer; outline:none; }
+.mc-back { filter:url(#mc-outline); }
 .mc-back:hover, .mc-back:focus-visible { color:#ffcc00; }
-.mc-back:focus-visible { filter:url(#mc-glow); }
 @media (prefers-reduced-transparency: reduce) {
   .mc-card { -webkit-backdrop-filter:none; backdrop-filter:none; background:rgb(16,12,6); }
 }

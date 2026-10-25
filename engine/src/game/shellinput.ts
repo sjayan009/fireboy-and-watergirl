@@ -83,7 +83,9 @@ export type Intent =
   | { kind: "start"; mode: string; num: number }
   // The title screen's Play, which the page may answer with its own choice of
   // how to play before the map. Not shared state; it is asked all the same.
-  | { kind: "play" };
+  | { kind: "play" }
+  // The map's own way back to the title screen, likewise.
+  | { kind: "back" };
 
 function roll(target: Ported, over: boolean): void {
   if (!target) return;
@@ -148,6 +150,7 @@ export class ShellInput {
 
     if (g.m_muter && target === g.m_muter.muteBtn) return { kind: "mute" };
     if (this.has(g.m_introMenu) && target === g.m_introMenu.Buttons?.Starter) return { kind: "play" };
+    if (this.has(g.m_mainMenu) && target === g.m_mainMenu.BackToIntro) return { kind: "back" };
 
     if (g.m_pauseMenu) {
       if (target === g.m_pauseMenu.btn) return { kind: "pause" };

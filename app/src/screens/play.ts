@@ -101,19 +101,25 @@ type NoticeKind = "stall" | "chooser" | "map" | "session" | "art" | "suspend";
 /** Kinds a level starting makes untrue. */
 const BETWEEN_LEVELS: NoticeKind[] = ["map", "chooser", "suspend"];
 
-/** Kinds that also come down on their own, having been read. */
-const FADES: NoticeKind[] = ["map", "chooser", "suspend"];
-
 /**
  * How long an informational line stays up with nothing else happening.
  *
  * The backstop for the case the rule above does not cover: the pick was handed
  * over and then nobody started anything. Long enough to read twice, short
- * enough that it is gone before it becomes furniture. `session`, `art` and
- * `stall` ignore it -- each of those is either something the reader has to act
- * on or something with an owner that will take it down itself.
+ * enough that it is gone before it becomes furniture. `session` and `stall`
+ * ignore it -- each is either something the reader has to act on or something
+ * with an owner that will take it down itself.
  */
 const NOTICE_MS = 8000;
+
+/**
+ * Kinds that also come down on their own, having been read, and after how long.
+ *
+ * `art` is shorter: the level plays either way and the line is one sentence,
+ * so five seconds reads it and gets it off the stage. A pointer resting on the
+ * banner holds any of them, so it never goes from under a reach for Retry.
+ */
+const FADES: Partial<Record<NoticeKind, number>> = { map: NOTICE_MS, chooser: NOTICE_MS, suspend: NOTICE_MS, art: 5000 };
 
 /**
  * How long the other peer may be silent before it is worth saying so.
@@ -226,6 +232,12 @@ export function playScreen(host: HTMLElement,
     class: "banner", role: "alert", "aria-live": "assertive",
   });
   banner.hidden = true;
+  // A notice that fades waits while somebody is pointing at it or tabbing
+  // through its buttons, and starts its count again when they leave.
+  const holdFade = () => { if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; } };
+  for (const type of ["pointerenter", "focusin"]) banner.addEventListener(type, holdFade);
+  banner.addEventListener("pointerleave", () => { if (!banner.contains(document.activeElement)) armFade(); });
+  banner.addEventListener("focusout", (e) => { if (!banner.contains(e.relatedTarget as Node | null)) armFade(); });
   const panel = el("div", { class: "panel" });
   const times = el("div", { class: "panel" });
   const board = el("div", { class: "panel" });
@@ -529,6 +541,13 @@ export function playScreen(host: HTMLElement,
       showCards();
       return true;
     },
+    // And the map's own "Main Menu" leads to them again, on the screen that
+    // led to the map, rather than to the title's own menu.
+    onBack: () => {
+      if (gone || match || pending) return false;
+      backToCards();
+      return true;
+    },
     onPrepareRun: v => {
       // Said once per prepared scene, so a level that starts with holes in it
       // says so rather than looking like a rendering bug somebody should
@@ -572,6 +591,7 @@ export function playScreen(host: HTMLElement,
     },
     onFrame: () => {
       noticeCleared();
+      followTitle();
       const request = view.session?.pendingControl;
       const next = request ? `${request.command}:${request.frame}` : "";
       if (next !== pendingControl) {
@@ -947,13 +967,14 @@ export function playScreen(host: HTMLElement,
     onTwoPlayers: () => { hideCards(); view.openMap(); },
     // Searching starts at once, with the character picked on the Quick Match
     // card, and the panel opens on that card so the search can be seen and
-    // cancelled. A guest is taken to the account card instead.
+    // cancelled. A guest is taken to the account card instead. The cards stay
+    // where they are: the choice was made here, and here is where to come back
+    // to if the search is cancelled. A match starting takes them down.
     onQuickMatch: () => {
-      hideCards();
       shell.open("friends");
       if (quickCard) void startQuick(quickCard.chosenRole);
     },
-    onFriends: () => { hideCards(); shell.open("friends"); },
+    onFriends: () => { shell.open("friends"); },
     onClose: () => hideCards(),
   });
   shell.screen.append(modeCards.root);
@@ -1085,10 +1106,15 @@ export function playScreen(host: HTMLElement,
     clear(banner);
     banner.append(el("span", {}, text), ...extra,
       el("button", { class: "ghost", onclick: () => clearNotice() }, "Dismiss"));
+    armFade();
+  }
+
+  /** (Re)start the current notice's countdown, if it is a kind that fades. */
+  function armFade(): void {
     if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
-    if (FADES.includes(kind)) {
-      noticeTimer = setTimeout(() => { noticeTimer = null; clearNotice(kind); }, NOTICE_MS);
-    }
+    const kind = noticed?.kind;
+    const ms = kind && FADES[kind];
+    if (kind && ms) noticeTimer = setTimeout(() => { noticeTimer = null; clearNotice(kind); }, ms);
   }
 
   /**
@@ -1576,9 +1602,24 @@ export function playScreen(host: HTMLElement,
   }
 
   /** Hand the clock to the session, and start the level if we are the host. */
-  function showCards(): void {
+  function showCards(screen?: "local"): void {
     view.introMenuVisible = false;
-    modeCards.show();
+    modeCards.show(screen);
+  }
+
+  /** Set between the map's Back and the title screen it fades to. */
+  let cardsOnTitle = false;
+  function backToCards(): void {
+    cardsOnTitle = true;
+    view.openTitle();
+  }
+
+  /** Every frame: the cards come back once the fade to the title has ended. */
+  function followTitle(): void {
+    if (cardsOnTitle && view.onTitle) {
+      cardsOnTitle = false;
+      showCards("local");
+    }
   }
 
   function hideCards(): void {
