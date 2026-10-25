@@ -80,7 +80,10 @@ export type Intent =
   | { kind: "quit" }
   | { kind: "pause" }
   | { kind: "mute" }
-  | { kind: "start"; mode: string; num: number };
+  | { kind: "start"; mode: string; num: number }
+  // The title screen's Play, which the page may answer with its own choice of
+  // how to play before the map. Not shared state; it is asked all the same.
+  | { kind: "play" };
 
 function roll(target: Ported, over: boolean): void {
   if (!target) return;
@@ -119,6 +122,9 @@ export class ShellInput {
     return () => { if (this.intentHandler === fn) this.intentHandler = null; };
   }
 
+  /** Run a button's own handler without asking anybody what it means. */
+  activate(target: Ported): void { dispatch(target); }
+
   /** Ask about the button, then dispatch it if nobody claimed it. */
   private click(target: Ported): void {
     if (!target) return;
@@ -141,6 +147,7 @@ export class ShellInput {
     const g = this.game as Ported;
 
     if (g.m_muter && target === g.m_muter.muteBtn) return { kind: "mute" };
+    if (this.has(g.m_introMenu) && target === g.m_introMenu.Buttons?.Starter) return { kind: "play" };
 
     if (g.m_pauseMenu) {
       if (target === g.m_pauseMenu.btn) return { kind: "pause" };

@@ -917,3 +917,47 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
   .door-in { padding: 0 0 24px; border-right: 0; border-bottom: 1px solid var(--edge); margin-bottom: 24px; }
   .door-new { padding: 0; }
 }
+
+/*
+ * How to play: the cards between the title screen's Play and the map. See
+ * modecards.ts for where every number comes from. One --u is one stage pixel,
+ * so the overlay scales with the canvas exactly. Type boxes are line-height 1,
+ * which in font 49 puts the baseline 0.8599em down and the cap height 0.1070em
+ * down, and every top below is a cap height or baseline turned into a box top.
+ */
+.mode-cards { position:absolute; inset:0; z-index:2; container-type:size; --u:calc(100cqw / 640); font-family:"swf-font-49", Georgia, serif; font-weight:400; letter-spacing:0; }
+.mc-defs { position:absolute; width:0; height:0; }
+/* Cap height centred between the title art (ink to y=170) and the rings (y=203). */
+.mc-crumb { position:absolute; left:0; width:100%; top:calc(177.81 * var(--u)); margin:0; text-align:center; font-size:calc(18 * var(--u)); line-height:1; color:#ffcc00; }
+.mc-row { position:absolute; left:0; top:calc(210 * var(--u)); width:100%; display:flex; justify-content:center; gap:calc(24 * var(--u)); }
+.mc-card { position:relative; flex:none; width:calc(264 * var(--u)); height:calc(202 * var(--u)); padding:0; border:0; border-radius:calc(12 * var(--u)); font:inherit; color:#ffcc00; cursor:pointer; outline:none;
+  background:linear-gradient(180deg, rgba(30,24,10,.5), rgba(12,9,4,.8));
+  -webkit-backdrop-filter:blur(calc(6 * var(--u))) saturate(140%); backdrop-filter:blur(calc(6 * var(--u))) saturate(140%);
+  box-shadow:inset 0 calc(1 * var(--u)) 0 rgba(255,236,170,.16), 0 0 0 calc(1 * var(--u)) rgba(255,204,0,.2), 0 calc(10 * var(--u)) calc(24 * var(--u)) rgba(0,0,0,.45);
+  transition:transform 100ms cubic-bezier(.23,1,.32,1); -webkit-tap-highlight-color:transparent; }
+.mc-art, .mc-title, .mc-sub { position:absolute; left:0; width:100%; }
+.mc-art { top:calc(26.17 * var(--u)); height:calc(92 * var(--u)); display:flex; align-items:flex-end; justify-content:center; gap:calc(4 * var(--u)); }
+.mc-frame { display:block; flex:none; width:calc(var(--w) * var(--u)); height:calc(var(--h) * var(--u)); background-repeat:no-repeat; }
+.mc-dim { opacity:.4; filter:grayscale(.5); }
+.mc-title { top:calc(128.99 * var(--u)); font-size:calc(29.71 * var(--u)); line-height:1; white-space:nowrap; text-align:center; }
+.mc-sub { top:calc(162.93 * var(--u)); font-size:calc(15 * var(--u)); line-height:1; white-space:nowrap; text-align:center; color:rgba(255,204,0,.72); }
+/* The ring sits 5 stage px off the card, 2 wide, so its outer edge is 7 out. */
+.mc-ring { position:absolute; inset:calc(-7 * var(--u)); border:calc(2 * var(--u)) solid #ffcc00; border-radius:calc(19 * var(--u)); opacity:0; filter:url(#mc-glow); pointer-events:none; transition:opacity 120ms ease-out; }
+.mc-card[data-selected] .mc-ring { opacity:1; }
+/* On a card that cannot be chosen yet, the ring says where you are, dimly. */
+.mc-card[aria-disabled] .mc-ring { border-color:#89681d; filter:none; }
+.mc-card:not([aria-disabled]):active { transform:scale(.97); }
+.mc-card[aria-disabled] { cursor:default; }
+.mc-card[aria-disabled] .mc-title, .mc-card[aria-disabled] .mc-sub { color:#89681d; }
+/* The map's own "Main Menu" button: same size, colours and baseline, starting
+   12px right of the title screen's Watergirl (ink to x=93; the face's B starts
+   1px into its box). */
+.mc-back { position:absolute; left:calc(104 * var(--u)); top:calc(425.48 * var(--u)); padding:0; border:0; background:none; font:inherit; font-size:calc(24.45 * var(--u)); line-height:1; color:#89681d; cursor:pointer; outline:none; }
+.mc-back:hover, .mc-back:focus-visible { color:#ffcc00; }
+.mc-back:focus-visible { filter:url(#mc-glow); }
+@media (prefers-reduced-transparency: reduce) {
+  .mc-card { -webkit-backdrop-filter:none; backdrop-filter:none; background:rgb(16,12,6); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mc-card:not([aria-disabled]):active { transform:none; }
+}

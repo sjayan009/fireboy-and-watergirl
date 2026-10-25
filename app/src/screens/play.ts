@@ -52,6 +52,7 @@ import type { FriendState, Lobby, Ready } from "../lobby.js";
 import { PlayShell } from "../ui/playshell.js";
 import { ProgressPanel } from "../ui/progress.js";
 import { guestBoard, guestFriends } from "../ui/guestpanels.js";
+import { ModeCards } from "../ui/modecards.js";
 import { PlayController, loadSelection, selectionKey } from "../playstate.js";
 import type { MatchSharing, SharingState } from "../sharing.js";
 import { QoeRecorder } from "../net/qoe.js";
@@ -512,6 +513,13 @@ export function playScreen(host: HTMLElement,
         else notice("art", "Some game art could not load.", el("button", { class: "ghost", onclick: () => { void view.prepare().catch(() => {}); } }, "Retry loading"));
       }
     },
+    // Play on the title screen asks how before it goes to the map. Not inside
+    // a match: the pair is already playing online.
+    onPlay: () => {
+      if (gone || match || pending) return false;
+      showCards();
+      return true;
+    },
     onPrepareRun: v => {
       // Said once per prepared scene, so a level that starts with holes in it
       // says so rather than looking like a rendering bug somebody should
@@ -925,6 +933,21 @@ export function playScreen(host: HTMLElement,
       quickCard?.timedOut();
     },
   });
+  const modeCards = new ModeCards({
+    guest,
+    onTwoPlayers: () => { hideCards(); view.openMap(); },
+    // Searching starts at once, with the character picked on the Quick Match
+    // card, and the panel opens on that card so the search can be seen and
+    // cancelled. A guest is taken to the account card instead.
+    onQuickMatch: () => {
+      hideCards();
+      shell.open("friends");
+      if (quickCard) void startQuick(quickCard.chosenRole);
+    },
+    onFriends: () => { hideCards(); shell.open("friends"); },
+    onClose: () => hideCards(),
+  });
+  shell.screen.append(modeCards.root);
   const friendsUI = quickCard && new FriendsPanel(panel, { onInvite: showInviteForm, busy: () => match !== null || pending !== null || quickSearch !== null, quickMatch: quickCard.root });
   const watchList = el("section", { class: "watch-list" });
   panel.append(watchList);
@@ -1539,8 +1562,21 @@ export function playScreen(host: HTMLElement,
   }
 
   /** Hand the clock to the session, and start the level if we are the host. */
+  function showCards(): void {
+    view.introMenuVisible = false;
+    modeCards.show();
+  }
+
+  function hideCards(): void {
+    if (!modeCards.open) return;
+    modeCards.hide();
+    view.introMenuVisible = true;
+    canvas.focus({ preventScroll: true });
+  }
+
   function begin(ready: Ready, invite: Invite, quick?: QuickMatch): void {
     if (gone) { ready.transport.close(); return; }
+    hideCards();
     shell.invite(false);
     shell.notify("");
     shell.close(true);

@@ -92,6 +92,11 @@ export interface GameViewOptions {
   onConfirmed?: (view: GameView, frame: number) => void;
   /** Runs after scene preparation and before the first simulation frame. */
   onPrepareRun?: (view: GameView) => Promise<void>;
+  /**
+   * The title screen's Play was pressed. True takes it over -- the page shows
+   * its own choice of how to play, and `openMap` carries on to the map.
+   */
+  onPlay?: () => boolean;
   /** Unique resource counts for the current level preparation, outside simulation state. */
   onPreparationProgress?: LevelPreparationOptions["onProgress"];
   /**
@@ -171,6 +176,7 @@ export class GameView {
   private needsVisualReconcile = false;
   private readonly onRefused?: (reason: RefusedReason) => void;
   private readonly onPrepareRun?: (view: GameView) => Promise<void>;
+  private readonly onPlay?: () => boolean;
   private readonly onPreparationProgress?: LevelPreparationOptions["onProgress"];
 
   sprites: SpriteRenderer | null = null;
@@ -208,6 +214,7 @@ export class GameView {
     this.onConfirmed = o.onConfirmed;
     this.onRefused = o.onRefused;
     this.onPrepareRun = o.onPrepareRun;
+    this.onPlay = o.onPlay;
     this.onPreparationProgress = o.onPreparationProgress;
     this.smoothing = o.smoothing !== false;
     this.visuals = new VisualSnapshots({ rollbackSmoothing: o.rollbackSmoothing,
@@ -265,6 +272,7 @@ export class GameView {
    */
   private handleIntent(intent: Intent): boolean {
     const s = this.session;
+    if (intent.kind === "play") return this.onPlay?.() ?? false;
 
     // Mute is this player's preference and always has been -- one of them
     // wanting quiet says nothing about the other. The ported button writes
@@ -490,6 +498,18 @@ export class GameView {
     return ((h.has("ArrowLeft") || h.has("a")) ? 1 : 0) |
            ((h.has("ArrowRight") || h.has("d")) ? 2 : 0) |
            ((h.has("ArrowUp") || h.has("w")) ? 4 : 0);
+  }
+
+  /** From the title screen to the map, as its Play would have gone. */
+  openMap(): void {
+    const intro = this.game.m_introMenu;
+    if (intro?.parent === this.game) this.shell.activate(intro.Buttons.Starter);
+  }
+
+  /** Show or hide the title screen's own menu, for a page that draws over it. */
+  set introMenuVisible(visible: boolean) {
+    const buttons = this.game.m_introMenu?.Buttons;
+    if (buttons) buttons.visible = visible;
   }
 
   setInputEnabled(enabled: boolean): void {
