@@ -1560,7 +1560,7 @@ export function playScreen(host: HTMLElement,
     };
     // Watching stays a friends feature; the server refuses it for a match.
     if (!match.quick) consent ??= new MatchSharing(invite.session, ready.friend.id, updateSharing);
-    befriend.hidden = blockButton.hidden = !match.quick;
+    befriend.hidden = blockButton.hidden = !match.quick || match.quick.friend;
     if (quick) {
       befriend.disabled = false;
       befriend.textContent = `Add ${quick.username} as a friend`;
