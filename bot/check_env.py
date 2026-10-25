@@ -11,6 +11,7 @@ hand-made grids, so you can finish them before the server works.
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import sys
 import time
@@ -25,9 +26,10 @@ from fbwg_env import (  # noqa: E402
     EnvClient, LevelInfo, State, bfs_field, encode,
 )
 
+LEVEL_DIR = SERVER.parents[3] / "extracted" / "levels"
 LEVELS = sorted(
     (p.stem.rsplit("-", 1)[0], int(p.stem.rsplit("-", 1)[1]))
-    for p in (SERVER.parents[3] / "extracted" / "levels").glob("*.json")
+    for p in LEVEL_DIR.glob("*.json")
     if not p.stem.startswith("test")
 )
 F = {name: i for i, name in enumerate(STATE_FIELDS)}
@@ -73,11 +75,12 @@ def _():
     fire = bfs_field(G, (1, 1), FIRE_HAZARDS)
     water = bfs_field(G, (1, 1), WATER_HAZARDS)
     assert fire.dtype == np.float32 and fire.shape == G.shape, (fire.dtype, fire.shape)
-    # Fireboy cannot enter the water at (2,5), so (3,5) is cut off. Max is 4.
-    want_fire = {(1, 1): 0, (1, 2): .25, (1, 3): .5, (1, 5): 1, (3, 3): 1,
+    # Fireboy cannot enter the water at (2,5), so (3,5) is cut off. Max is 4,
+    # so reachable cells are d/5 and only cut-off or solid cells reach 1.
+    want_fire = {(1, 1): 0, (1, 2): .2, (1, 3): .4, (1, 5): .8, (3, 3): .8,
                  (2, 5): 1, (3, 5): 1, (0, 0): 1, (2, 2): 1}
     # Watergirl walks through water: (2,5) is 5 steps, (3,5) is 6. Max is 6.
-    want_water = {(1, 1): 0, (1, 3): 2 / 6, (2, 5): 5 / 6, (3, 5): 1, (3, 3): 4 / 6}
+    want_water = {(1, 1): 0, (1, 3): 2 / 7, (2, 5): 5 / 7, (3, 5): 6 / 7, (3, 3): 4 / 7}
     for (cell, want), got in [((c, w), fire) for c, w in want_fire.items()] + \
                              [((c, w), water) for c, w in want_water.items()]:
         assert abs(got[cell] - want) < 1e-6, f"cell {cell}: got {got[cell]:.4f}, want {want:.4f}"
@@ -86,7 +89,7 @@ def _():
 @check("bfs: no wrap-around at the edges")
 def _():
     got = bfs_field(np.zeros((1, 5), np.int8), (0, 0), FIRE_HAZARDS)
-    assert np.allclose(got, [[0, .25, .5, .75, 1]]), f"got {got}  (np.roll wraps; use slices)"
+    assert np.allclose(got, [[0, .2, .4, .6, .8]]), f"got {got}  (np.roll wraps; use slices)"
 
 
 # ---- encode, on a fake level ---------------------------------------------
@@ -182,6 +185,22 @@ def _():
         c.close()
 
 
+@server_check("server: the dyn grid puts each diamond on exactly its own cell")
+def _():
+    c = EnvClient(1)
+    try:
+        for mode, num in [("adventure", 1), ("puzzle", 3), ("speed", 2)]:
+            dyn = c.reset(0, mode, num).dyn
+            grid = json.loads((LEVEL_DIR / f"{mode}-{num:02d}.json").read_text())["grid"]
+            for code, bit in [("rd", DYN_RED), ("bd", DYN_BLUE), ("gr", DYN_GREEN)]:
+                want = sorted((r, col) for r, row in enumerate(grid)
+                              for col, v in enumerate(row) if v == code)
+                got = sorted((int(r), int(col)) for r, col in np.argwhere(dyn & bit))
+                assert got == want, f"{mode} {num} {code}: got {got[:6]}, want {want[:6]}"
+    finally:
+        c.close()
+
+
 @server_check("invariant: same actions, same digests")
 def _():
     c = EnvClient(1)
@@ -207,6 +226,23 @@ def _():
         ha = [a.reset(0, "puzzle", 3).hash] + [s[0].hash for s in run(a, [bits])]
         hb = [b.reset(0, "puzzle", 3).hash] + [s[0].hash for s in run(b, [bits])]
         assert ha == hb, f"diverged at step {next(i for i in range(len(ha)) if ha[i] != hb[i])}"
+    finally:
+        a.close()
+        b.close()
+
+
+@server_check("invariant: switching levels and coming back restores exactly")
+def _():
+    bits = rand_bits(9, 40)
+    a, b = EnvClient(1), EnvClient(1)
+    try:
+        a.reset(0, "adventure", 1)
+        run(a, [rand_bits(10, 80)])
+        a.reset(0, "puzzle", 3)              # a second level in the same env
+        run(a, [rand_bits(11, 80)])
+        ha = [a.reset(0, "adventure", 1).hash] + [s[0].hash for s in run(a, [bits])]
+        hb = [b.reset(0, "adventure", 1).hash] + [s[0].hash for s in run(b, [bits])]
+        assert ha == hb, "restoring a level after playing another one diverged"
     finally:
         a.close()
         b.close()

@@ -91,7 +91,7 @@ class EnvClient:
     @staticmethod
     def parse_state(buf: bytes, off: int = 0) -> State:
         """One STATE record starting at `off`."""
-        vec = np.frombuffer(buf, np.float32, STATE_FLOATS, off).copy()
+        vec = np.frombuffer(buf, "<f4", STATE_FLOATS, off).astype(np.float32)
         (h,) = struct.unpack_from("<I", buf, off + STATE_FLOATS * 4)
         dyn = np.frombuffer(buf, np.uint8, ROWS * COLS, off + STATE_FLOATS * 4 + 4)
         return State(vec, h, dyn.reshape(ROWS, COLS).copy())
@@ -124,8 +124,10 @@ def bfs_field(grid: np.ndarray, door: tuple[int, int], hazards: tuple[int, ...])
     """Distance from every cell to `door`, 4-connected, normalised to [0, 1].
 
     Passable: any cell that is not SOLID and not in `hazards`. The door cell
-    is 0. Divide by the largest reachable distance. Unreachable and impassable
-    cells are 1.0. Returns float32, (ROWS, COLS).
+    is 0. Reachable cells are divided by (largest reachable distance + 1), so
+    they stay below 1.0 and unreachable and impassable cells, at exactly 1.0,
+    are distinguishable from the farthest reachable one. Returns float32,
+    (ROWS, COLS).
 
     Vectorise it: keep a boolean frontier, grow it by shifting it one cell in
     each direction (slices, not np.roll, which wraps around the edges), and
@@ -148,7 +150,7 @@ def bfs_field(grid: np.ndarray, door: tuple[int, int], hazards: tuple[int, ...])
         grown[:, :-1] |= frontier[:, 1:]
         frontier = grown & passable & (dist < 0)
         dist[frontier] = d
-    far = max(int(dist.max()), 1)
+    far = int(dist.max()) + 1
     return np.where(dist >= 0, dist / far, 1.0).astype(np.float32)
 
 

@@ -61,7 +61,7 @@
  */
 import { level, tickClock, getClock, setClock } from "../game/game.js";
 import { hostLevel } from "../game/headless.js";
-import { Event, advanceTree, enterFrameTree } from "../flash/flash.js";
+import { Event, SoundBus, advanceTree, enterFrameTree } from "../flash/flash.js";
 import { applyInput, hashLevel } from "../net/hash.js";
 import { Snapshot } from "../net/snapshot.js";
 import { b2AABB } from "../box2d/box2d.js";
@@ -81,6 +81,8 @@ export const DYN_MOVING = 1;
 export const DYN_RED = 2;
 export const DYN_BLUE = 4;
 export const DYN_GREEN = 8;
+
+const EDGE = 1e-6;
 
 /** A built level, its snapshot at frame zero, and the clock that goes with it. */
 interface Cached {
@@ -120,7 +122,8 @@ class Env {
       if (lv.LevelArray.length !== ROWS || lv.LevelArray[0].length !== COLS) {
         throw new Error(`${key} is not ${ROWS}x${COLS}`);
       }
-      c = { lv, host, snap: new Snapshot().capture([host]), clock: getClock() };
+      // Clock 0, not getClock(): the global still holds whichever env ran last.
+      c = { lv, host, snap: new Snapshot().capture([host]), clock: 0 };
       this.cache.set(key, c);
     }
     this.cur = c;
@@ -174,10 +177,12 @@ class Env {
       if (!bit) continue;
       for (let s = b.GetShapeList(); s; s = s.GetNext()) {
         s.ComputeAABB(this.aabb, b.GetXForm());
-        const r0 = Math.max(0, Math.round(this.aabb.lowerBound.y));
-        const r1 = Math.min(ROWS - 1, Math.round(this.aabb.upperBound.y));
-        const c0 = Math.max(0, Math.round(this.aabb.lowerBound.x));
-        const c1 = Math.min(COLS - 1, Math.round(this.aabb.upperBound.x));
+        // Bounds sit on half-cells (a tile is c-0.5..c+0.5), and Math.round
+        // takes c+0.5 up into the next cell; nudge both ends inward.
+        const r0 = Math.max(0, Math.round(this.aabb.lowerBound.y + EDGE));
+        const r1 = Math.min(ROWS - 1, Math.round(this.aabb.upperBound.y - EDGE));
+        const c0 = Math.max(0, Math.round(this.aabb.lowerBound.x + EDGE));
+        const c1 = Math.min(COLS - 1, Math.round(this.aabb.upperBound.x - EDGE));
         for (let r = r0; r <= r1; r++) {
           for (let c = c0; c <= c1; c++) {
             const at = grid + r * COLS + c;
@@ -215,6 +220,10 @@ class Env {
     return out;
   }
 }
+
+// Nothing here plays audio, and Sound.play would otherwise grow SoundBus.queue
+// for the life of the process.
+SoundBus.replaying = true;
 
 const envs: Env[] = Array.from({ length: Number(process.argv[2] ?? 1) }, () => new Env());
 
