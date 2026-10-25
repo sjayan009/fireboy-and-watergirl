@@ -296,6 +296,15 @@ console.log("\nthe command the hook sends, applied");
   host.start("adventure", 1);
   check("starting a level sweeps a board away as well", boards(), 0);
 
+  // A map the game no longer points at -- `CreateMainMenu` reassigns
+  // `m_mainMenu` -- must not survive under the level the other player picked.
+  game.EndGame();
+  game.CreateMainMenu();
+  check("two maps, one of them orphaned", symbols().filter((s: string) => s === "MainMenu").length, 2);
+  host.start("adventure", 1);
+  check("starting a level takes both away",
+        symbols().filter((s: string) => s === "MainMenu" || s === "IntroMenu" || s === "Trans"), []);
+
   session.depart();
   run(2);
   check("and leaving for good ends on a clean map",
