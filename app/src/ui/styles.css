@@ -929,20 +929,74 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
 .mc-screen, .mc-back { pointer-events:auto; }
 .mc-screen { position:absolute; inset:0; }
 .mc-defs { position:absolute; width:0; height:0; }
-/* Cap height centred between the title art (ink to y=170) and the rings (y=203). */
-.mc-crumb { position:absolute; left:0; width:100%; top:calc(177.81 * var(--u)); margin:0; text-align:center; font-size:calc(18 * var(--u)); line-height:1; color:#ffcc00; }
-.mc-row { position:absolute; left:0; top:calc(210 * var(--u)); width:100%; display:flex; justify-content:center; gap:calc(24 * var(--u)); }
-.mc-card { position:relative; flex:none; width:calc(264 * var(--u)); height:calc(202 * var(--u)); padding:0; border:0; border-radius:calc(12 * var(--u)); font:inherit; color:#ffcc00; cursor:pointer; outline:none;
+/*
+ * Where you are, in the top-left corner, mirroring the title's own corner text
+ * in the top-right: 15px, cap height 9px down, ink 9px in (P starts 0.95px
+ * into its box).
+ */
+.mc-crumb { position:absolute; left:calc(8.05 * var(--u)); top:calc((9 - 0.107 * 15) * var(--u)); margin:0; font-size:calc(15 * var(--u)); line-height:1; color:#ffcc00; filter:url(#mc-outline); }
+/* 2 x 270 + 20 = 560: 40px either side. Top 208.7 centres the row between the title art and Back. */
+.mc-row { position:absolute; left:0; top:calc(208.7 * var(--u)); width:100%; display:flex; justify-content:center; gap:calc(20 * var(--u)); }
+.mc-card { position:relative; flex:none; width:calc(270 * var(--u)); height:calc(210 * var(--u)); padding:0; border:0; border-radius:calc(12 * var(--u)); font:inherit; color:#ffcc00; cursor:pointer; outline:none;
   background:linear-gradient(180deg, rgba(30,24,10,.5), rgba(12,9,4,.8));
   -webkit-backdrop-filter:blur(calc(6 * var(--u))) saturate(140%); backdrop-filter:blur(calc(6 * var(--u))) saturate(140%);
   box-shadow:inset 0 calc(1 * var(--u)) 0 rgba(255,236,170,.16), 0 0 0 calc(1 * var(--u)) rgba(255,204,0,.2), 0 calc(10 * var(--u)) calc(24 * var(--u)) rgba(0,0,0,.45);
   transition:transform 100ms cubic-bezier(.23,1,.32,1); -webkit-tap-highlight-color:transparent; }
 .mc-art, .mc-title, .mc-sub { position:absolute; left:0; width:100%; }
-.mc-art { top:calc(26.17 * var(--u)); height:calc(92 * var(--u)); display:flex; align-items:flex-end; justify-content:center; gap:calc(4 * var(--u)); }
-.mc-frame { display:block; flex:none; width:calc(var(--w) * var(--u)); height:calc(var(--h) * var(--u)); background-repeat:no-repeat; }
-.mc-dim { opacity:.4; filter:grayscale(.5); }
-.mc-title { top:calc(128.99 * var(--u)); font-size:calc(29.71 * var(--u)); line-height:1; white-space:nowrap; text-align:center; }
-.mc-sub { top:calc(162.93 * var(--u)); font-size:calc(15 * var(--u)); line-height:1; white-space:nowrap; text-align:center; color:rgba(255,204,0,.72); }
+/* Art 126 + 10 + title cap 22.37 + 9.93 + line cap 11.3 = 179.6, centred: 15.2 above and below. */
+.mc-art { top:calc(15.2 * var(--u)); height:calc(126 * var(--u)); display:flex; align-items:center; justify-content:center; gap:calc(8 * var(--u)); }
+.mc-title { top:calc((151.2 - 0.107 * 29.71) * var(--u)); font-size:calc(29.71 * var(--u)); line-height:1; white-space:nowrap; text-align:center; }
+.mc-sub { top:calc((183.5 - 0.107 * 15) * var(--u)); font-size:calc(15 * var(--u)); line-height:1; white-space:nowrap; text-align:center; color:rgba(255,238,200,.86); }
+
+/* The pictures. A screen on a stand, drawn in the game's black outline weight. */
+/* Flex items and absolute boxes are block already; nothing here may shrink. */
+.mc-art > *, .mc-pair > * { flex:none; }
+.mc-mon { display:flex; flex-direction:column; align-items:center; }
+.mc-scr { position:relative; overflow:hidden; border-radius:calc(4 * var(--u)); background:#000;
+  box-shadow:0 0 0 calc(2.6 * var(--u)) #2b241a, 0 0 0 calc(4 * var(--u)) #000, 0 0 0 calc(4.6 * var(--u)) rgba(255,204,0,.28), 0 calc(6 * var(--u)) calc(10 * var(--u)) rgba(0,0,0,.5); }
+.mc-neck { width:calc(10 * var(--u)); height:calc(7 * var(--u)); margin-top:calc(4 * var(--u)); background:#2b241a; box-shadow:0 0 0 calc(1.4 * var(--u)) #000; }
+.mc-foot { width:calc(40 * var(--u)); height:calc(4 * var(--u)); border-radius:calc(2 * var(--u)); background:#2b241a; box-shadow:0 0 0 calc(1.4 * var(--u)) #000; }
+/* The landing scene's 640 x 500 grid, in its own pixels, scaled by --k inline. */
+.mc-grid { position:absolute; left:0; top:0; width:640px; height:500px; transform-origin:0 0; }
+.mc-grid > * { position:absolute; }
+.mc-wall { left:-46.5px; top:-25px; width:733px; height:550px; background-size:100% 100%; filter:saturate(.9) brightness(.62); }
+.mc-shade { inset:0; background:radial-gradient(60% 46% at 50% 88%, #ffe7a01f, transparent 70%), linear-gradient(to bottom, #0d0b0999 0%, transparent 45%, #0d0b0966 100%); }
+.mc-door { top:263px; width:166px; height:177px; background-size:2200% 100%; background-repeat:no-repeat; }
+.mc-run { background-size:800% 100%; background-repeat:no-repeat; background-position:0 0; }
+.mc-fire { top:338.6px; width:129px; height:102px; filter:drop-shadow(0 0 8px rgba(255,90,30,.55)); }
+.mc-water { top:325px; width:142px; height:117px; transform:scaleX(-1); filter:drop-shadow(0 0 8px rgba(60,190,255,.55)); }
+.mc-robot { top:318px; width:110px; height:124px; }
+.mc-mystery { left:288px; top:240px; width:280px; height:218.75px; overflow:visible; filter:drop-shadow(0 0 8px rgba(255,204,0,.8)); }
+.mc-mystery text { transform-box:fill-box; transform-origin:center; }
+.mc-link { width:calc(36 * var(--u)); height:calc(27 * var(--u)); overflow:visible; }
+.mc-heart { width:calc(32 * var(--u)); height:calc(29 * var(--u)); transform-origin:50% 60%; filter:drop-shadow(0 0 calc(5 * var(--u)) rgba(255,120,160,.6)); }
+/* Two Players: the two of them running at each other above their own keys. */
+.mc-keys { flex-direction:column; gap:0; }
+.mc-pair { display:flex; align-items:flex-end; gap:calc(70 * var(--u)); margin-bottom:calc(-1.5 * var(--u)); transform:translateX(calc(-4 * var(--u))); position:relative; z-index:1; }
+.mc-left { width:calc(64 * var(--u)); height:calc(52.9 * var(--u)); filter:drop-shadow(0 0 calc(4 * var(--u)) rgba(60,190,255,.6)); }
+.mc-right { width:calc(60 * var(--u)); height:calc(47.4 * var(--u)); transform:scaleX(-1); filter:drop-shadow(0 0 calc(4 * var(--u)) rgba(255,90,30,.6)); }
+.mc-kb { display:flex; flex-direction:column; gap:calc(3 * var(--u)); padding:calc(6 * var(--u)); border-radius:calc(6 * var(--u)); background:linear-gradient(#3a3226, #241e16);
+  box-shadow:0 0 0 calc(1.6 * var(--u)) #000, inset 0 calc(1.2 * var(--u)) 0 rgba(255,236,190,.15), 0 calc(6 * var(--u)) calc(10 * var(--u)) rgba(0,0,0,.5); }
+.mc-krow { display:flex; gap:calc(3 * var(--u)); }
+.mc-key { display:grid; place-items:center; width:calc(14 * var(--u)); height:calc(13 * var(--u)); border-radius:calc(2.5 * var(--u)); background:#4a4032;
+  box-shadow:0 0 0 calc(1 * var(--u)) #000, inset 0 calc(-1.6 * var(--u)) 0 rgba(0,0,0,.35); font:700 calc(8 * var(--u))/1 system-ui, sans-serif; color:#fff; }
+.mc-key.w { background:#21b6f2; box-shadow:0 0 0 calc(1 * var(--u)) #000, inset 0 calc(-1.6 * var(--u)) 0 rgba(0,0,0,.3), 0 0 calc(6 * var(--u)) rgba(33,182,242,.8); }
+.mc-key.f { background:#ff5a26; box-shadow:0 0 0 calc(1 * var(--u)) #000, inset 0 calc(-1.6 * var(--u)) 0 rgba(0,0,0,.3), 0 0 calc(6 * var(--u)) rgba(255,90,38,.8); }
+.mc-key.space { width:calc(60 * var(--u)); }
+/*
+ * Motion, on the chosen card only, so what moves is what you are choosing.
+ * Runners step through their 8 run frames at the landing scene's 70ms; the
+ * link's dashes flow from one screen to the other; the "?" breathes; the heart
+ * beats twice and rests. The global reduced-motion rule stops all of it.
+ */
+.mc-card[data-selected]:not([aria-disabled]) .mc-run { animation:mc-run 560ms steps(8, jump-none) infinite; }
+.mc-card[data-selected] .mc-link path { animation:mc-flow 650ms linear infinite; }
+.mc-card[data-selected] .mc-mystery text { animation:mc-pulse 1.2s ease-in-out infinite; }
+.mc-card[data-selected] .mc-heart { animation:mc-beat 1.4s ease-out infinite; }
+@keyframes mc-run { from { background-position-x:0%; } to { background-position-x:100%; } }
+@keyframes mc-flow { to { stroke-dashoffset:-6.5; } }
+@keyframes mc-pulse { 0%, 100% { transform:scale(1); } 50% { transform:scale(1.1); } }
+@keyframes mc-beat { 0%, 44%, 100% { transform:scale(1); } 12% { transform:scale(1.18); } 26% { transform:scale(1.04); } 34% { transform:scale(1.12); } }
 /* The ring sits 5 stage px off the card, 2 wide, so its outer edge is 7 out. */
 .mc-ring { position:absolute; inset:calc(-7 * var(--u)); border:calc(2 * var(--u)) solid #ffcc00; border-radius:calc(19 * var(--u)); opacity:0; filter:url(#mc-glow); pointer-events:none; transition:opacity 120ms ease-out; }
 .mc-card[data-selected] .mc-ring { opacity:1; }

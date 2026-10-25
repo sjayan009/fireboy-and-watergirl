@@ -9,8 +9,10 @@
  *   - the face is the SWF's font 49, Trajan Pro Bold, the one every menu word
  *     is set in; titles are the menu's 29.7px (37px x 0.8031), the rest use the
  *     sizes its own text fields use (18 and 15);
- *   - the cards sit between the title art, whose ink ends at y=170, and the
- *     map's bottom-left button, whose cap height starts at y=428;
+ *   - the cards are centred in the band between the title art, whose ink ends
+ *     at y=170, and Back's cap height at y=457.4, so the ring clears each by
+ *     the same 31.7px; inside a card the art, title and line below are
+ *     centred too, 15.2px from the top and the bottom;
  *   - Back takes the map button's colours, #89681D lifting to #FFCC00, and its
  *     black outline. The title screen's Watergirl stands where the map draws
  *     that button, so Back sits in the corner under her, at 18px -- a size the
@@ -25,12 +27,25 @@
  * The ring marks what you are choosing; nothing is ever filled in. Exactly one
  * card holds it, moved by the pointer and the arrow keys alike, so hover and
  * focus can never ring two cards at once.
+ *
+ * ## The pictures
+ *
+ * Each card says what it does in a picture before a word is read: one screen
+ * for the same computer, two linked screens for different ones, a shared
+ * keyboard, a robot buddy, a stranger's "?" and a heart for friends. The
+ * screens show the landing page's own two-doors scene -- its temple wall, its
+ * exit doors and its runners -- at that scene's measured layout and scale
+ * (doors 166x177 at x=136 and 338, runners on one floor line), so everything in
+ * them is one drawing at one size. Only the selected card moves: the runners
+ * run, the link flows, the "?" pulses and the heart beats; reduced motion
+ * keeps them all still.
  */
 import { el } from "./dom.js";
 import fireRun from "../../../design/landing/assets/sprites/fire-run.webp";
 import waterRun from "../../../design/landing/assets/sprites/water-run.webp";
 import fireDoor from "../../../design/landing/assets/doors/fire.webp";
 import waterDoor from "../../../design/landing/assets/doors/water.webp";
+import templeWall from "../../../design/landing/assets/wall.webp";
 
 const STAGE_W = 640;
 /** The Flash glow's sigma in stage pixels, from blur 29 at quality 3. */
@@ -57,24 +72,66 @@ export interface ModeCardsOptions {
   onClose(): void;
 }
 
-/** A frame of one of the landing's sprite strips, at a given stage height. */
-function frame(src: string, frames: number, w: number, h: number, height: number, index: number, flip = false): HTMLElement {
-  const width = height * w / h;
-  const art = el("span", { class: "mc-frame", "aria-hidden": "true" });
-  art.style.cssText = `--w:${width};--h:${height};background-image:url("${src}");` +
-    `background-size:calc(${width * frames} * var(--u)) 100%;` +
-    `background-position:${index / (frames - 1) * 100}% 0;${flip ? "transform:scaleX(-1);" : ""}`;
-  return art;
-}
-const fire = () => frame(fireRun, 8, 205, 162, 66, 0);
-const water = (dim = false) => {
-  const art = frame(waterRun, 8, 225, 186, 74, 0, true);
-  if (dim) art.classList.add("mc-dim");
-  return art;
-};
-const door = (src: string, open: boolean) => frame(src, 22, 237, 253, 92, open ? 21 : 0);
+// ---- the pictures ---------------------------------------------------------
+//
+// Static markup: nothing in it comes from a player.
 
-interface Card { title: string; sub: string; art: () => HTMLElement[]; act?: () => void; }
+/**
+ * A screen on a stand, `w` stage px wide, looking at the window [x, y, vw] of
+ * the landing scene's 640 x 500 grid. The grid is drawn in its own pixels and
+ * scaled by `--k` (CSS px per stage px, set from the overlay's width), so the
+ * art inside keeps the scene's proportions at any size.
+ */
+function screenOf(w: number, [x, y, vw]: [number, number, number], scene: string): string {
+  return `<span class="mc-mon"><span class="mc-scr" style="width:calc(${w} * var(--u));height:calc(${w * 500 / 640} * var(--u))">` +
+    `<span class="mc-grid" style="transform:scale(calc(var(--k) * ${w / vw})) translate(${-x}px, ${-y}px)">` +
+    `<span class="mc-wall" style="background-image:url(&quot;${templeWall}&quot;)"></span><span class="mc-shade"></span>${scene}</span>` +
+    `</span><span class="mc-neck"></span><span class="mc-foot"></span></span>`;
+}
+const door = (src: string, left: number, open = false) =>
+  `<span class="mc-door" style="left:${left}px;background-image:url(&quot;${src}&quot;);background-position:${open ? 100 : 0}% 0"></span>`;
+const fireAt = (left: number) => `<span class="mc-run mc-fire" style="left:${left}px;background-image:url(&quot;${fireRun}&quot;)"></span>`;
+const waterAt = (left: number) => `<span class="mc-run mc-water" style="left:${left}px;background-image:url(&quot;${waterRun}&quot;)"></span>`;
+const robotAt = (left: number) => `<svg class="mc-robot" style="left:${left}px" viewBox="0 0 110 124">` +
+  `<g stroke="#000" stroke-width="6" stroke-linejoin="round"><line x1="55" y1="22" x2="55" y2="6"/><circle cx="55" cy="6" r="7" fill="#8fe3ff"/>` +
+  `<rect x="18" y="22" width="74" height="56" rx="16" fill="#9fb7c4"/><circle cx="40" cy="50" r="11" fill="#e9fbff"/><circle cx="70" cy="50" r="11" fill="#e9fbff"/>` +
+  `<rect x="34" y="82" width="42" height="24" rx="8" fill="#7f97a4"/><rect x="36" y="104" width="12" height="16" rx="4" fill="#6b8290"/>` +
+  `<rect x="62" y="104" width="12" height="16" rx="4" fill="#6b8290"/></g>` +
+  `<circle cx="42" cy="50" r="5" fill="#21b6f2"/><circle cx="72" cy="50" r="5" fill="#21b6f2"/></svg>`;
+/** The "?", centred on its cap height (0.753em) in Watergirl's window below. */
+const mystery = `<svg class="mc-mystery" viewBox="0 0 280 218.75">` +
+  `<text x="140" y="173.4" text-anchor="middle" font-family="swf-font-49" font-size="170" fill="#ffcc00" stroke="#000" stroke-width="5" paint-order="stroke">?</text></svg>`;
+const link = `<svg class="mc-link" viewBox="0 0 40 30"><path d="M2 22 Q20 -6 38 22" fill="none" stroke="#ffcc00" stroke-width="2.4" stroke-dasharray="3.5 3" stroke-linecap="round"/></svg>`;
+const heart = `<svg class="mc-heart" viewBox="0 0 44 40">` +
+  `<path d="M22 37 C4 25 1 14 6 8 C11 2 19 4 22 11 Z" fill="#ff5a26" stroke="#000" stroke-width="3" stroke-linejoin="round"/>` +
+  `<path d="M22 37 C40 25 43 14 38 8 C33 2 25 4 22 11 Z" fill="#21b6f2" stroke="#000" stroke-width="3" stroke-linejoin="round"/></svg>`;
+/** A keyboard with Watergirl's keys lit blue and Fireboy's red, where they really are. */
+const keyboard = (() => {
+  const key = (k: string, cls = "") => `<span class="mc-key${cls ? " " + cls : ""}">${k}</span>`;
+  const row = (keys: string[]) => `<span class="mc-krow">${keys.join("")}</span>`;
+  const plain = (ks: string) => [...ks].map(k => key(k));
+  return `<span class="mc-kb">` +
+    row([key("Q"), key("W", "w"), ...plain("ERTYUIOP")]) +
+    row([key("A", "w"), key("S"), key("D", "w"), ...plain("FGHJK"), key("↑", "f"), key("L")]) +
+    row([...plain("ZXC"), key("", "space"), key("M"), key("←", "f"), key("↓"), key("→", "f")]) + `</span>`;
+})();
+
+/** Windows onto the scene: both doors, or one player's side. */
+const BOTH: [number, number, number] = [130, 176, 380];
+const FIRE_SIDE: [number, number, number] = [96, 240, 280];
+const WATER_SIDE: [number, number, number] = [288, 240, 280];
+const ART = {
+  local: screenOf(140, BOTH, door(fireDoor, 136) + door(waterDoor, 338) + fireAt(160) + waterAt(352)),
+  online: screenOf(94, FIRE_SIDE, door(fireDoor, 136) + fireAt(176)) + link + screenOf(94, WATER_SIDE, door(waterDoor, 338) + waterAt(318)),
+  solo: screenOf(140, BOTH, door(fireDoor, 136) + door(waterDoor, 338) + fireAt(160) + robotAt(362)),
+  // Running at each other: Watergirl on the left over A W D, Fireboy on the right over the arrows.
+  two: `<span class="mc-pair"><span class="mc-run mc-onkeys mc-left" style="background-image:url(&quot;${waterRun}&quot;)"></span>` +
+    `<span class="mc-run mc-onkeys mc-right" style="background-image:url(&quot;${fireRun}&quot;)"></span></span>${keyboard}`,
+  quick: screenOf(94, FIRE_SIDE, door(fireDoor, 136) + fireAt(176)) + link + screenOf(94, WATER_SIDE, mystery),
+  friends: screenOf(94, FIRE_SIDE, door(fireDoor, 136, true) + fireAt(176)) + heart + screenOf(94, WATER_SIDE, door(waterDoor, 338, true) + waterAt(318)),
+};
+
+interface Card { title: string; sub: string; art: string; kind: string; act?: () => void; }
 
 export class ModeCards {
   readonly root = el("div", { class: "mode-cards" });
@@ -113,6 +170,7 @@ export class ModeCards {
     // The filter works in CSS pixels, so its sigma follows the stage's scale.
     new ResizeObserver(() => {
       const scale = this.root.clientWidth / STAGE_W;
+      this.root.style.setProperty("--k", String(scale));
       this.blur.setAttribute("stdDeviation", String(GLOW_SIGMA * scale));
       outlineBlur.setAttribute("stdDeviation", String(OUTLINE_SIGMA * scale));
     }).observe(this.root);
@@ -137,16 +195,16 @@ export class ModeCards {
     const needAccount = "Needs a free account";
     switch (screen) {
       case "root": return [
-        { title: "Local Play", sub: "On this device", art: () => [fire(), water()], act: () => this.draw("local", 1) },
-        { title: "Online Play", sub: "Two places, one temple", art: () => [door(fireDoor, true), door(waterDoor, true)], act: () => this.draw("online", 1) },
+        { title: "Local Play", sub: "Same computer", art: ART.local, kind: "screens", act: () => this.draw("local", 1) },
+        { title: "Online Play", sub: "Different computers", art: ART.online, kind: "screens", act: () => this.draw("online", 1) },
       ];
       case "local": return [
-        { title: "Solo + AI", sub: "Coming soon", art: () => [fire(), water(true)] },
-        { title: "Two Players", sub: "Couch co-op, one keyboard", art: () => [fire(), water()], act: () => this.o.onTwoPlayers() },
+        { title: "Solo + AI", sub: "With a robot buddy · soon", art: ART.solo, kind: "screens" },
+        { title: "Two Players", sub: "Share one keyboard", art: ART.two, kind: "keys", act: () => this.o.onTwoPlayers() },
       ];
       case "online": return [
-        { title: "Quick Match", sub: this.o.guest ? needAccount : "Paired with someone new", art: () => [door(fireDoor, true), door(waterDoor, false)], act: () => this.o.onQuickMatch() },
-        { title: "Friends", sub: this.o.guest ? needAccount : "Invite someone you know", art: () => [door(fireDoor, true), door(waterDoor, true)], act: () => this.o.onFriends() },
+        { title: "Quick Match", sub: this.o.guest ? needAccount : "Play someone new", art: ART.quick, kind: "screens", act: () => this.o.onQuickMatch() },
+        { title: "Friends", sub: this.o.guest ? needAccount : "Play with your friends", art: ART.friends, kind: "screens", act: () => this.o.onFriends() },
       ];
     }
   }
@@ -157,12 +215,12 @@ export class ModeCards {
    */
   private draw(screen: Screen, from: -1 | 0 | 1, focus?: number, takeFocus = true): void {
     this.screen = screen;
-    this.crumb.textContent = screen === "local" ? "Local Play" : screen === "online" ? "Online Play" : "";
-    this.row.setAttribute("aria-label", screen === "root" ? "How to play" : this.crumb.textContent);
+    this.crumb.textContent = screen === "local" ? "Play / Local Play" : screen === "online" ? "Play / Online Play" : "Play";
+    this.row.setAttribute("aria-label", screen === "root" ? "How to play" : screen === "local" ? "Local Play" : "Online Play");
     const buttons = this.cards(screen).map(card => {
       const b = el("button", { type: "button", class: "mc-card", "aria-disabled": card.act ? null : "true" },
         el("span", { class: "mc-ring", "aria-hidden": "true" }),
-        el("span", { class: "mc-art" }, ...card.art()),
+        el("span", { class: `mc-art mc-${card.kind}`, "aria-hidden": "true", html: card.art }),
         el("span", { class: "mc-title" }, card.title),
         el("span", { class: "mc-sub" }, card.sub));
       if (card.act) b.addEventListener("click", card.act);

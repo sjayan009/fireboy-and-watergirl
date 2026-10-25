@@ -223,8 +223,10 @@ console.log("\nthe download is the size it should be");
   // passkey flows on the sign-in screens bring it to ~933 kB; the ceiling
   // moves to keep its headroom.
   // The title screen's Local/Online cards (modecards.ts and their styles) add
-  // ~6 kB (~949 kB); the ceiling moves to keep its headroom.
-  const BUDGET = 960_000;
+  // ~6 kB (~949 kB); the ceiling moves to keep its headroom. Their picture art
+  // (screens, keyboard, robot, heart, as markup and styles) adds ~9 kB more
+  // (~958 kB); the ceiling moves with it.
+  const BUDGET = 975_000;
   console.log(`  ${(bytes / 1000).toFixed(0)} kB of javascript and css ` +
               `across ${code.length} files`);
   check(`under the ${BUDGET / 1000} kB budget`, bytes < BUDGET,
@@ -258,8 +260,9 @@ console.log("\nthe download is the size it should be");
   // guest features too (~15 kB, ~601 kB); the ceiling moves with them, still
   // far below what one stray static import of account code would add.
   // The title screen's Local/Online cards are a guest feature too (~6 kB,
-  // ~621 kB); the ceiling moves with them.
-  const GUEST_BUDGET = 635_000;
+  // ~621 kB); the ceiling moves with them, and again with their picture art
+  // (~630 kB).
+  const GUEST_BUDGET = 645_000;
   const html = readFileSync(join(DIST, "index.html"), "utf8");
   const entry = html.match(/<script type="module"[^>]*src="\/(assets\/index-[\w-]+\.js)"/)?.[1];
   const styles = [...html.matchAll(/<link rel="stylesheet"[^>]*href="\/(assets\/[\w-]+\.css)"/g)].map((m) => m[1]);

@@ -122,7 +122,7 @@ for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
     await page.locator(".mc-back").click();
     await page.locator(".mc-card", { hasText: "Local Play" }).click();
     assert.deepEqual(await titles(), ["Solo + AI", "Two Players"]);
-    assert.equal(await page.locator(".mc-card[aria-disabled]").textContent(), "Solo + AIComing soon", "the bot is not playable yet");
+    assert.equal(await page.locator(".mc-card[aria-disabled]").textContent(), "Solo + AIWith a robot buddy · soon", "the bot is not playable yet");
     assert.equal(await page.locator(".mc-card[data-selected] .mc-title").textContent(), "Two Players", "the ring starts on what can be chosen");
     await page.locator(".mc-card", { hasText: "Two Players" }).click();
     await page.waitForFunction(() => window.__fbwg.view.game.m_mainMenu?.b_1_1);
