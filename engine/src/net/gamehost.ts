@@ -14,6 +14,9 @@ import { MODES, SessionHost } from "./session.js";
 import { Snapshot } from "./snapshot.js";
 import type { Ported } from "../ported.js";
 
+/** The screens a level replaces, by library symbol. */
+const SCREENS = ["MainMenu", "IntroMenu", "Trans"];
+
 /**
  * Take down the results or game-over board, as the click that reached the
  * command would have.
@@ -125,8 +128,13 @@ export class GameHost implements SessionHost {
     if (g.m_level && g.m_level.parent === g) g.EndGame();
     // Tear down whatever screen we are on now, so a start is safe from
     // anywhere: the map, the intro, a transition, or a board.
-    for (const screen of [g.m_mainMenu, g.m_introMenu, g.m_transition]) {
-      if (screen && screen.parent === g) g.removeChild(screen);
+    //
+    // Every such screen, not only the ones the game still points at: a map the
+    // game lost its reference to stayed under the level, and a level started
+    // by the other player's pick was drawn over its crystals and paths.
+    const screens = new Set([g.m_mainMenu, g.m_introMenu, g.m_transition]);
+    for (const child of [...g.children]) {
+      if (screens.has(child) || SCREENS.includes(child.symbol)) g.removeChild(child);
     }
     closeBoards(g);
     // Last, so that whatever the teardown above started playing is stopped and

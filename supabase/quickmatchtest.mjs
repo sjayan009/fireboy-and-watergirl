@@ -118,7 +118,27 @@ try {
   check("the save is still theirs", (await api(alice, `/pair_progress?select=node&user_a=eq.${[alice.id, bob.id].sort()[0]}`)).body?.length, 1);
   await rpc(alice, "quick_match_end", { their_id: bob.id });
   check("ending a match that became a friendship changes nothing", (await row(db, alice, bob)).status, "accepted");
-  check("friends are never matched with each other", (await find(alice), await find(bob)), null);
+
+  console.log("\nfriends, last");
+  // Two Fireboys waiting cannot take each other, so both are still there when
+  // bob arrives -- alice, his friend, waiting longest.
+  check("alice waits", await find(alice, "fireboy"), null);
+  check("carol waits too", await find(carol, "fireboy"), null);
+  const bc = await find(bob, "watergirl");
+  check("bob gets the stranger, not his friend who has waited longer", bc?.partner, carol.id);
+  check("and she is not marked a friend", bc?.friend, false);
+  await rpc(bob, "quick_match_end", { their_id: carol.id });
+  await find(carol); await rpc(carol, "quick_match_leave");
+  const ab = await find(bob, "watergirl");
+  check("with no stranger left, he gets his friend", ab?.partner, alice.id);
+  check("marked as a friend", ab?.friend, true);
+  check("on the topic they already share", ab?.topic, "pair:" + (await row(db, alice, bob)).channel);
+  check("the row stays a friendship", (await row(db, alice, bob)).status, "accepted");
+  const ba = await find(alice, "fireboy");
+  check("alice hears about it too", [ba?.partner, ba?.friend, ba?.topic], [bob.id, true, ab?.topic]);
+  check("a friend's heartbeat is always live", (await rpc(alice, "quick_match_touch", { their_id: bob.id })).body, true);
+  await rpc(alice, "quick_match_end", { their_id: bob.id });
+  check("and ending it leaves them friends", (await row(db, alice, bob)).status, "accepted");
   await rpc(alice, "quick_match_leave"); await rpc(bob, "quick_match_leave");
 
   console.log("\na match that ends");

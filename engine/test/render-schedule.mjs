@@ -100,6 +100,13 @@ try {
     let receive;
     const session = corrected.join({ send() {}, onMessage(fn) { receive = fn; }, close() {}, rttMs: 0 }, 0);
     session.begin("adventure", 1); await corrected.prepare();
+    const { encodeInput } = await import("/dist/net/protocol.js");
+    // The partner's opening input, as a real peer sends the moment it is ready.
+    // Under rollback a level runs no frame until it has heard one (session.ts
+    // `ready`), so without it the session never leaves frame 0 and the late
+    // input below has no past to correct.
+    receive(encodeInput({ kind: 1, slot: 1, epoch: session.generation, frame: 0,
+      bits: [0], hashFrame: 0, hash: 0 }));
     const remote = corrected.game.m_level.pers2.m_userData;
     let correctionDraws = 0, presentedX = null;
     corrected.sprites.draw = (_ctx, _root, snapshots, alpha) => {
@@ -114,9 +121,9 @@ try {
     corrected.visuals.clear(); corrected.captureVisuals(); corrected.render();
     const beforeCorrection = { frame: corrected.simFrame, x: remote.x, draws: correctionDraws,
       motion: corrected.visuals.hasMotion, dirty: corrected.visuals.presentationDirty };
-    const { encodeInput } = await import("/dist/net/protocol.js");
+    // Frames 1 onward were predicted as no keys; the partner was holding right.
     receive(encodeInput({ kind: 1, slot: 1, epoch: session.generation, frame: session.frame - 1,
-      bits: Array(session.frame).fill(2), hashFrame: 0, hash: 0 }));
+      bits: Array(session.frame - 1).fill(2), hashFrame: 0, hash: 0 }));
     tick(0);
     const rollback = { before: beforeCorrection, frame: corrected.simFrame, realX: remote.x, presentedX,
       drawDelta: correctionDraws - beforeCorrection.draws, rollbacks: session.rollbacks,

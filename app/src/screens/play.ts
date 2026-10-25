@@ -406,6 +406,15 @@ export function playScreen(host: HTMLElement,
   let quickTouch: ReturnType<typeof setInterval> | null = null;
   /** Where the partner's invitation goes while this side waits for it. */
   let quickInvite: ((invite: Invite, from: FriendState) => void) | null = null;
+  /**
+   * A friend's invitation that arrived while this side was still searching.
+   *
+   * A friend Quick Match pairs is already present in the lobby, so as host they
+   * invite the moment the server pairs them -- often before this side's next
+   * poll has heard. Shown as an ordinary invitation, it started a new attempt,
+   * which cancelled the very search that was about to say who they were.
+   */
+  let earlyInvite: { invite: Invite; from: FriendState } | null = null;
   /** Set while the link is being rebuilt, so nothing tries twice at once. */
   let rebuilding: AbortController | null = null;
   /**
@@ -527,7 +536,7 @@ export function playScreen(host: HTMLElement,
       // itself the moment the art actually arrives.
       if (!v.artComplete) {
         notice("art", v.artStatus === "loading" ? "Additional artwork is loading. The level is ready to play." : "Some game art did not load. The level still plays.");
-      }
+      } else clearNotice("art");
       // Nothing left to wait for since the ranking registration went.
       return Promise.resolve();
     },
@@ -1468,6 +1477,11 @@ export function playScreen(host: HTMLElement,
       if (quickInvite) quickInvite(invite, from); else lobby?.decline(invite);
       return;
     }
+    if (quickSearch) {
+      if (earlyInvite) lobby?.decline(earlyInvite.invite);
+      earlyInvite = { invite, from };
+      return;
+    }
     if (match) return;                 // already playing
     // One at a time. Two people inviting each other in the same breath used to
     // replace one banner with the other and start two games.
@@ -1596,7 +1610,7 @@ export function playScreen(host: HTMLElement,
     };
     // Watching stays a friends feature; the server refuses it for a match.
     if (!match.quick) consent ??= new MatchSharing(invite.session, ready.friend.id, updateSharing);
-    befriend.hidden = blockButton.hidden = !match.quick;
+    befriend.hidden = blockButton.hidden = !match.quick || match.quick.friend;
     if (quick) {
       befriend.disabled = false;
       befriend.textContent = `Add ${quick.username} as a friend`;
@@ -1674,12 +1688,13 @@ export function playScreen(host: HTMLElement,
       found = await findPartner(role, auth().user!.id, abort.signal);
     } catch (e) {
       if (quickSearch === abort) quickSearch = null;
-      if (gone || abort.signal.aborted) return;
+      if (gone || abort.signal.aborted) { showHeldInvite(); return; }
       flow.finish(abort, "idle");
       quickCard?.idle((e as Error).message);
+      showHeldInvite();
       return;
     }
-    if (gone || quickSearch !== abort) { void endMatch(found.partner); return; }
+    if (gone || quickSearch !== abort) { void endMatch(found.partner); showHeldInvite(); return; }
     quickSearch = null;
     void quickCard?.found(found.username, found.iAmFireboy);
     await connectQuick(found, abort);
@@ -1693,7 +1708,19 @@ export function playScreen(host: HTMLElement,
    * the match topic, and the other side accepts that one invitation and no
    * other. Level one of Adventure; the map takes it from there.
    */
+  /** The search is over without using it: an invitation held back is shown after all. */
+  function showHeldInvite(): void {
+    const held = earlyInvite;
+    earlyInvite = null;
+    if (held && !gone) showInvite(held.invite, held.from);
+  }
+
   async function connectQuick(found: QuickMatch, abort: AbortController): Promise<void> {
+    // Their invitation may already be here (see `earlyInvite`). Anybody else's
+    // waits for this match, which is what being matched means.
+    const held = earlyInvite;
+    earlyInvite = null;
+    if (held && (found.host || held.from.id !== found.partner || held.invite.from !== found.partner)) lobby?.decline(held.invite);
     quickPending = { found, abort };
     pending = { session: null, friendId: found.partner, abort };
     showMatched(found);
@@ -1713,6 +1740,7 @@ export function playScreen(host: HTMLElement,
         if (from.id !== found.partner || i.from !== found.partner) { lobby?.decline(i); return; }
         clearTimeout(timer); quickInvite = null; resolve(i);
       };
+      if (held && held.from.id === found.partner && held.invite.from === found.partner) quickInvite(held.invite, held.from);
     });
     void invited?.catch(() => {});
     try {
