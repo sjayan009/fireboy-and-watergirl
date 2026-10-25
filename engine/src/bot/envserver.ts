@@ -7,7 +7,7 @@
  * `game/`, `flash/` or `box2d/`, because those three are hashed into
  * ENGINE_VERSION.
  *
- * ---- Framing (done for you, see the bottom of the file) --------------------
+ * ---- Framing (at the bottom of the file) ----------------------------------
  *
  * Every request and every reply is `u32 length` + `length` bytes. All numbers
  * are little-endian.
@@ -32,7 +32,7 @@
  *     DYN_MOVING  a non-static body other than pers1/pers2 covers the cell
  *     DYN_RED / DYN_BLUE / DYN_GREEN  an uncollected "rd" / "bd" / "gr" body
  *
- * ---- Engine facts you need -------------------------------------------------
+ * ---- Engine facts this relies on -------------------------------------------
  *
  * - Build:   `new (level as Ported)(mode, num)`, then `hostLevel(lv)` from
  *            game/headless.ts, which a death needs.
@@ -58,16 +58,14 @@
  * - Flags:   lv.myContactListener.{deadFire, deadWater, finish1, finish2}.
  * - Grid:    lv.LevelArray[row][col]; numbers go out as int8, anything else
  *            (the diamond strings) as 0, because diamonds travel in dyn.
- *
- * You will need roughly:
- *   import { level, tickClock, getClock, setClock } from "../game/game.js";
- *   import { hostLevel } from "../game/headless.js";
- *   import { Event, advanceTree, enterFrameTree } from "../flash/flash.js";
- *   import { applyInput, hashLevel } from "../net/hash.js";
- *   import { Snapshot } from "../net/snapshot.js";
- *   import { b2AABB } from "../box2d/box2d.js";
- *   import type { Ported } from "../ported.js";
  */
+import { level, tickClock, getClock, setClock } from "../game/game.js";
+import { hostLevel } from "../game/headless.js";
+import { Event, advanceTree, enterFrameTree } from "../flash/flash.js";
+import { applyInput, hashLevel } from "../net/hash.js";
+import { Snapshot } from "../net/snapshot.js";
+import { b2AABB } from "../box2d/box2d.js";
+import type { Ported } from "../ported.js";
 
 export const ROWS = 29;
 export const COLS = 39;
@@ -84,14 +82,55 @@ export const DYN_RED = 2;
 export const DYN_BLUE = 4;
 export const DYN_GREEN = 8;
 
+/** A built level, its snapshot at frame zero, and the clock that goes with it. */
+interface Cached {
+  lv: Ported;
+  host: Ported;
+  snap: Snapshot;
+  clock: number;
+}
+
+/** Which dyn bit a body sets, or 0 for none. */
+function dynBit(body: Ported): number {
+  const name: string | undefined = body.GetUserData()?.name;
+  if (name === "rd") return DYN_RED;
+  if (name === "bd") return DYN_BLUE;
+  if (name === "gr") return DYN_GREEN;
+  if (body.IsStatic() || name === "pers1" || name === "pers2") return 0;
+  return DYN_MOVING;
+}
+
 class Env {
-  // TODO: the current level, its host, and the clock that goes with it.
-  // TODO: a cache of snapshots, one per "mode-num" this env has played.
-  // TODO: the DELAY-long input queue.
+  /** One per "mode-num" this env has played; a reset restores, never rebuilds. */
+  private cache = new Map<string, Cached>();
+  private cur: Cached | null = null;
+  private clock = 0;
+  private queue: number[] = [];
+  private aabb = new b2AABB();
 
   /** Build or restore the level, empty the input queue. */
   reset(mode: string, num: number): void {
-    throw new Error(`TODO reset(${mode}, ${num})`);
+    const key = `${mode}-${num}`;
+    let c = this.cache.get(key);
+    if (c) {
+      c.snap.restore();
+    } else {
+      const lv: Ported = new (level as Ported)(mode, num);
+      const host = hostLevel(lv);
+      if (lv.LevelArray.length !== ROWS || lv.LevelArray[0].length !== COLS) {
+        throw new Error(`${key} is not ${ROWS}x${COLS}`);
+      }
+      c = { lv, host, snap: new Snapshot().capture([host]), clock: getClock() };
+      this.cache.set(key, c);
+    }
+    this.cur = c;
+    this.clock = c.clock;
+    this.queue = new Array<number>(DELAY).fill(0);
+  }
+
+  private get lv(): Ported {
+    if (!this.cur) throw new Error("step or read before the first reset");
+    return this.cur.lv;
   }
 
   /**
@@ -99,27 +138,123 @@ class Env {
    * runs with the oldest entry, so repeat=3 is the same as three repeat=1s.
    */
   step(bits: number, repeat: number): void {
-    throw new Error(`TODO step(${bits}, ${repeat})`);
+    const lv = this.lv;
+    // The clock is one global shared by every env in this process.
+    setClock(this.clock);
+    for (let i = 0; i < repeat; i++) {
+      this.queue.push(bits);
+      tickClock();
+      applyInput(lv, this.queue.shift());
+      advanceTree(lv);
+      enterFrameTree(lv);
+      lv.Update(new Event(Event.ENTER_FRAME));
+    }
+    this.clock = getClock();
   }
 
   /** Write one STATE record at `off` in `out`. */
   writeState(out: DataView, off: number): void {
-    throw new Error(`TODO writeState at ${off} of ${out.byteLength}`);
+    const lv = this.lv;
+    const cl = lv.myContactListener;
+    const p1 = lv.pers1.GetPosition();
+    const v1 = lv.pers1.GetLinearVelocity();
+    const p2 = lv.pers2.GetPosition();
+    const v2 = lv.pers2.GetLinearVelocity();
+    const floats = [
+      p1.x, p1.y, v1.x, v1.y, p2.x, p2.y, v2.x, v2.y,
+      cl.deadFire ? 1 : 0, cl.deadWater ? 1 : 0, cl.finish1, cl.finish2, this.clock,
+    ];
+    for (let i = 0; i < STATE_FLOATS; i++) out.setFloat32(off + 4 * i, floats[i], true);
+    out.setUint32(off + STATE_FLOATS * 4, parseInt(hashLevel(lv), 16), true);
+
+    const grid = off + STATE_FLOATS * 4 + 4;
+    for (let i = 0; i < ROWS * COLS; i++) out.setUint8(grid + i, 0);
+    for (let b = lv.m_world.GetBodyList(); b; b = b.GetNext()) {
+      const bit = dynBit(b);
+      if (!bit) continue;
+      for (let s = b.GetShapeList(); s; s = s.GetNext()) {
+        s.ComputeAABB(this.aabb, b.GetXForm());
+        const r0 = Math.max(0, Math.round(this.aabb.lowerBound.y));
+        const r1 = Math.min(ROWS - 1, Math.round(this.aabb.upperBound.y));
+        const c0 = Math.max(0, Math.round(this.aabb.lowerBound.x));
+        const c1 = Math.min(COLS - 1, Math.round(this.aabb.upperBound.x));
+        for (let r = r0; r <= r1; r++) {
+          for (let c = c0; c <= c1; c++) {
+            const at = grid + r * COLS + c;
+            out.setUint8(at, out.getUint8(at) | bit);
+          }
+        }
+      }
+    }
   }
 
   /** The OP_INFO reply for the current level. */
   info(): Uint8Array {
-    throw new Error("TODO info");
+    const lv = this.lv;
+    const out = new Uint8Array(ROWS * COLS + 4);
+    const dv = new DataView(out.buffer);
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const v: unknown = lv.LevelArray[r][c];
+        dv.setInt8(r * COLS + c, typeof v === "number" ? v : 0);
+      }
+    }
+    let k = ROWS * COLS;
+    for (const name of ["finish1", "finish2"]) {
+      let found = false;
+      for (let b = lv.m_world.GetBodyList(); b; b = b.GetNext()) {
+        if (b.GetUserData()?.name !== name) continue;
+        const p = b.GetPosition();
+        out[k++] = Math.round(p.y);
+        out[k++] = Math.round(p.x);
+        found = true;
+        break;
+      }
+      if (!found) throw new Error(`no ${name} body`);
+    }
+    return out;
   }
 }
 
 const envs: Env[] = Array.from({ length: Number(process.argv[2] ?? 1) }, () => new Env());
 
+function envAt(i: number): Env {
+  const e = envs[i];
+  if (!e) throw new Error(`env ${i} out of range (have ${envs.length})`);
+  return e;
+}
+
 /** Decode one request payload and return the reply payload. */
 function handle(req: DataView): Uint8Array {
-  // TODO: switch on req.getUint8(0) and call into `envs`. Each case encodes
-  // its reply as described at the top of the file.
-  throw new Error(`TODO handle op ${req.getUint8(0)} for ${envs.length} envs`);
+  const op = req.getUint8(0);
+  switch (op) {
+    case OP_RESET: {
+      const env = envAt(req.getUint16(1, true));
+      const len = req.getUint8(3);
+      const mode = Buffer.from(req.buffer, req.byteOffset + 4, len).toString("ascii");
+      env.reset(mode, req.getUint8(4 + len));
+      const out = new Uint8Array(STATE_BYTES);
+      env.writeState(new DataView(out.buffer), 0);
+      return out;
+    }
+    case OP_STEP: {
+      const repeat = req.getUint8(1);
+      if (req.byteLength !== 2 + envs.length) {
+        throw new Error(`step carries ${req.byteLength - 2} inputs for ${envs.length} envs`);
+      }
+      const out = new Uint8Array(STATE_BYTES * envs.length);
+      const dv = new DataView(out.buffer);
+      envs.forEach((e, i) => {
+        e.step(req.getUint8(2 + i), repeat);
+        e.writeState(dv, i * STATE_BYTES);
+      });
+      return out;
+    }
+    case OP_INFO:
+      return envAt(req.getUint16(1, true)).info();
+    default:
+      throw new Error(`unknown op ${op}`);
+  }
 }
 
 // ---- framing: u32 length + payload, both directions ------------------------

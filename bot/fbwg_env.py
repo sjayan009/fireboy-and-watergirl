@@ -6,7 +6,7 @@ constants below must match it. Build the server first:
 
     npm --prefix engine run build
 
-Then `python bot/check_env.py` tells you which parts still fail.
+Then `python bot/check_env.py` runs the invariant tests.
 """
 from __future__ import annotations
 
@@ -91,22 +91,29 @@ class EnvClient:
     @staticmethod
     def parse_state(buf: bytes, off: int = 0) -> State:
         """One STATE record starting at `off`."""
-        # TODO: np.frombuffer for the floats and the dyn grid, struct for the hash.
-        raise NotImplementedError("parse_state")
+        vec = np.frombuffer(buf, np.float32, STATE_FLOATS, off).copy()
+        (h,) = struct.unpack_from("<I", buf, off + STATE_FLOATS * 4)
+        dyn = np.frombuffer(buf, np.uint8, ROWS * COLS, off + STATE_FLOATS * 4 + 4)
+        return State(vec, h, dyn.reshape(ROWS, COLS).copy())
 
     def reset(self, env: int, mode: str, num: int) -> State:
-        # TODO: pack OP_RESET as documented, _call it, parse the reply.
-        raise NotImplementedError("reset")
+        m = mode.encode("ascii")
+        reply = self._call(struct.pack("<BHB", OP_RESET, env, len(m)) + m + bytes([num]))
+        return self.parse_state(reply)
 
     def step(self, bits: list[int], repeat: int = 1) -> list[State]:
         """`bits[i]` is env i's 6-bit input: 1/2/4 Fireboy left/right/up,
         8/16/32 Watergirl left/right/up."""
-        # TODO: pack OP_STEP, _call it, parse N records.
-        raise NotImplementedError("step")
+        if len(bits) != self.n:
+            raise ValueError(f"{len(bits)} inputs for {self.n} envs")
+        reply = self._call(bytes([OP_STEP, repeat]) + bytes(bits))
+        return [self.parse_state(reply, i * STATE_BYTES) for i in range(self.n)]
 
     def info(self, env: int) -> LevelInfo:
-        # TODO: pack OP_INFO, _call it, reshape the grid, read the doors.
-        raise NotImplementedError("info")
+        reply = self._call(struct.pack("<BH", OP_INFO, env))
+        grid = np.frombuffer(reply, np.int8, ROWS * COLS).reshape(ROWS, COLS).copy()
+        fr, fc, wr, wc = reply[ROWS * COLS:ROWS * COLS + 4]
+        return LevelInfo(grid, (fr, fc), (wr, wc))
 
     def close(self) -> None:
         self.proc.stdin.close()
@@ -124,8 +131,25 @@ def bfs_field(grid: np.ndarray, door: tuple[int, int], hazards: tuple[int, ...])
     each direction (slices, not np.roll, which wraps around the edges), and
     stop when it stops growing. No Python loop over cells.
     """
-    # TODO
-    raise NotImplementedError("bfs_field")
+    # ponytail: ignores moving platforms and jump height; it is a shaping
+    # potential, not a planner. Rasterise movers in if lever levels need it.
+    passable = (grid != SOLID) & ~np.isin(grid, hazards)
+    dist = np.full(grid.shape, -1, np.int32)
+    dist[door] = 0
+    frontier = np.zeros(grid.shape, bool)
+    frontier[door] = True
+    d = 0
+    while frontier.any():
+        d += 1
+        grown = np.zeros_like(frontier)
+        grown[1:] |= frontier[:-1]
+        grown[:-1] |= frontier[1:]
+        grown[:, 1:] |= frontier[:, :-1]
+        grown[:, :-1] |= frontier[:, 1:]
+        frontier = grown & passable & (dist < 0)
+        dist[frontier] = d
+    far = max(int(dist.max()), 1)
+    return np.where(dist >= 0, dist / far, 1.0).astype(np.float32)
 
 
 def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
@@ -139,5 +163,29 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
     vec:   float32, 1-D. Start with state.vec; scale positions by COLS/ROWS
            so everything is roughly in [-1, 1].
     """
-    # TODO
-    raise NotImplementedError("encode")
+    g, d = info.grid, state.dyn
+    fire_door = np.zeros(g.shape, bool)
+    fire_door[info.fire_door] = True
+    water_door = np.zeros(g.shape, bool)
+    water_door[info.water_door] = True
+    planes = {
+        "solid": g == SOLID,
+        "slope1": g == SLOPES[0], "slope2": g == SLOPES[1],
+        "slope3": g == SLOPES[2], "slope4": g == SLOPES[3],
+        "water": np.isin(g, WATER), "lava": np.isin(g, LAVA), "goo": np.isin(g, GOO),
+        "red_diamond": (d & DYN_RED) > 0, "blue_diamond": (d & DYN_BLUE) > 0,
+        "green_diamond": (d & DYN_GREEN) > 0,
+        "fire_door": fire_door, "water_door": water_door,
+        "moving": (d & DYN_MOVING) > 0,
+    }
+    vec = state.vec.astype(np.float32)
+    for name in ("fire_x", "water_x"):
+        vec[STATE_FIELDS.index(name)] /= COLS
+    for name in ("fire_y", "water_y"):
+        vec[STATE_FIELDS.index(name)] /= ROWS
+    # ponytail: the clock is raw frames; divide by the episode limit once one is fixed.
+    return {
+        "tiles": np.stack([planes[c] for c in CHANNELS]).astype(np.float32),
+        "bfs": np.stack([bfs_fire, bfs_water]).astype(np.float32),
+        "vec": vec,
+    }
