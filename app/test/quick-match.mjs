@@ -162,6 +162,51 @@ try {
   for (let i = 0; i < 20 && await row() !== "ended"; i++) await a.waitForTimeout(250);
   check("and the match is over on the server", await row(), "ended");
   check("bob can search again", await b.locator(".qm-go:not(.qm-keep)").isEnabled(), true);
+
+  console.log("\nfriends who both press Quick Match find each other");
+  // What two friend requests would have made of the ended match, without the
+  // round trips. Reloaded so each lobby starts out knowing the other.
+  await db.query("update public.friendships set status = 'accepted' where user_a = least($1::uuid,$2::uuid) and user_b = greatest($1::uuid,$2::uuid)", [alice.id, bob.id]);
+  for (const p of [a, b]) { await p.reload({ waitUntil: "load" }); await p.waitForSelector("#stage", { timeout: 30000 }); }
+  const sees = (p, id) => p.waitForFunction((them) => window.__fbwg?.lobby?.list.some(f => f.id === them && !f.stranger && f.activity !== null), id, { timeout: 30000 });
+  await sees(a, bob.id); await sees(b, alice.id);
+  await a.click(".qm-go");
+  await a.waitForSelector(".qm-ring.searching");
+  await b.click(".qm-go");
+  try {
+    for (const p of [a, b]) await p.waitForFunction("window.__fbwg && window.__fbwg.view.session", null, { timeout: 60000 });
+  } catch (err) {
+    // Not paired, paired but never connected, and connected on one side only
+    // all time out here alike; say which.
+    for (const [tag, p] of [["A", a], ["B", b]]) {
+      console.log(`  [${tag}] ` + JSON.stringify(await p.evaluate(() => ({
+        session: !!window.__fbwg.view.session,
+        card: document.querySelector(".qm-headline h4")?.textContent,
+        banner: document.querySelector(".banner")?.innerText,
+        friends: window.__fbwg.lobby.list.map(f => [f.username, f.status, f.stranger ?? false, f.activity, f.connection]),
+      }))));
+    }
+    console.log("  queue: " + JSON.stringify((await db.query("select role, partner is not null as found from play_private.quick_queue")).rows));
+    throw err;
+  }
+  check("they are playing together", await Promise.all([a, b].map((p) => p.evaluate(() => window.__fbwg.view.slot))).then(s => s.sort()), [0, 1]);
+  check("still friends on the server, not a match", await row(), "accepted");
+  check("nobody is offered to add a friend they have",
+        await Promise.all([a, b].map((p) => p.locator("button:has-text('as a friend')").isVisible())), [false, false]);
+  check("each side keeps the one friend channel it had",
+        await Promise.all([[a, bob.id], [b, alice.id]].map(([p, id]) => p.evaluate((them) => {
+          const l = window.__fbwg.lobby;
+          return [l.channels.has(them), l.list.filter(f => f.id === them).length, !!l.list.find(f => f.id === them)?.stranger];
+        }, id))), [[true, 1, false], [true, 1, false]]);
+  a.once("dialog", (d) => d.accept());
+  // In the Menu, which the reload above left closed.
+  if (!await a.locator("button.leave").isVisible()) await a.click("header button:has-text('Menu')");
+  await a.click("button.leave");
+  await b.waitForFunction("!window.__fbwg.view.session", null, { timeout: 30000 });
+  await a.waitForTimeout(2000);
+  check("leaving keeps the friendship", await row(), "accepted");
+  check("and the friend is still in bob's list",
+        await b.evaluate((them) => window.__fbwg.lobby.list.some(f => f.id === them && !f.stranger), alice.id), true);
 } catch (err) {
   failures++;
   console.log("  FAIL " + err.message);
