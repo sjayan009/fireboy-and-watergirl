@@ -89,6 +89,13 @@ try {
     let receive;
     const session = view.join({ send() {}, onMessage(fn) { receive = fn; }, close() {}, rttMs: 0 }, 0);
     session.begin("adventure", 1); await view.prepare();
+    const { encodeInput } = await import("/dist/net/protocol.js");
+    // The partner's opening input, as a real peer sends the moment it is ready.
+    // Under rollback a level runs no frame until it has heard one (session.ts
+    // `ready`), so without it the session never leaves frame 0 and the late
+    // input below has no past to correct.
+    receive(encodeInput({ kind: 1, slot: 1, epoch: session.generation, frame: 0,
+      bits: [0], hashFrame: 0, hash: 0 }));
     const remote = view.game.m_level.pers2.m_userData;
     let draws = 0, presentedX = null;
     const draw = view.sprites.draw.bind(view.sprites);
@@ -101,9 +108,9 @@ try {
     session.acc = 0;
     view.visuals.clear(); view.captureVisuals(); view.render();
     const before = { frame: view.simFrame, x: presentedX, draws };
-    const { encodeInput } = await import("/dist/net/protocol.js");
+    // Frames 1 onward were predicted as no keys; the partner was holding right.
     receive(encodeInput({ kind: 1, slot: 1, epoch: session.generation, frame: session.frame - 1,
-      bits: Array(session.frame).fill(2), hashFrame: 0, hash: 0 }));
+      bits: Array(session.frame - 1).fill(2), hashFrame: 0, hash: 0 }));
     tick(0);
     const samples = [{ now: 0, x: presentedX, draws }], correctedX = remote.x, digest = view.digest();
     // The session has already performed a real rollback. Isolate stalled
