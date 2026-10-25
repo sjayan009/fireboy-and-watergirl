@@ -26,11 +26,19 @@
  *
  *   STATE_FLOATS x f32, in this order:
  *     fireX, fireY, fireVX, fireVY, waterX, waterY, waterVX, waterVY,
- *     deadFire, deadWater, finish1, finish2, clock
+ *     deadFire, deadWater, finish1, finish2, clock,
+ *     complete   1 once the game's own level-complete (Recuent) has fired,
+ *                about 46 frames after both characters stand in their doors
+ *     gameOver   1 once the game's own GameOver has fired, after a death
+ *     LEVER_SLOTS levers, -1 fully off .. +1 fully on, in creation order,
+ *                0 for slots this level does not have
+ *     PUSHER_SLOTS button presses, 0 up .. 1 fully pressed, likewise
  *   u32 hashLevel(lv), parsed from its hex string
  *   ROWS*COLS x u8 "dyn" grid, row-major, bit flags per cell:
  *     DYN_MOVING  a non-static body other than pers1/pers2 covers the cell
  *     DYN_RED / DYN_BLUE / DYN_GREEN  an uncollected "rd" / "bd" / "gr" body
+ *     DYN_WIND_UP / _RIGHT / _DOWN / _LEFT  a fan that is on blows here.
+ *       Fans are not bodies, so without these the bot could not see them.
  *
  * ---- Engine facts this relies on -------------------------------------------
  *
@@ -39,7 +47,8 @@
  * - Frame:   tickClock(); applyInput(lv, bits); advanceTree(lv);
  *            enterFrameTree(lv); lv.Update(new Event(Event.ENTER_FRAME))
  *            -- the order in snapbench.ts.
- * - Reset:   capture `new Snapshot().capture([host])` once per (env, level),
+ * - Reset:   build, run one frame with no input so the level settles, then
+ *            capture `new Snapshot().capture([host])` once per (env, level),
  *            restore it on later resets. Never rebuild the level.
  * - Clock:   ONE module-global (getClock/setClock) shared by every env in this
  *            process, and the snapshot does not save it. Save it beside the
@@ -55,7 +64,11 @@
  *            pers1, pers2, finish1, finish2, rd, bd, gr, slide, box, ...
  *            Per shape (b.GetShapeList() / .GetNext()):
  *            shape.ComputeAABB(aabb, b.GetXForm()) with a `new b2AABB()`.
- * - Flags:   lv.myContactListener.{deadFire, deadWater, finish1, finish2}.
+ * - Flags:   lv.myContactListener.{deadFire, deadWater, finish1, finish2};
+ *            host.recuents / host.gameOvers count the game's own endings.
+ * - Fans:    lv.myWinds[i].{lower, upper, vertical 1 up 2 right 3 down
+ *            4 left, on}. Levers and buttons are joints in lv.myLevers and
+ *            lv.myPushers, which can list the same joint more than once.
  * - Grid:    lv.LevelArray[row][col]; numbers go out as int8, anything else
  *            (the diamond strings) as 0, because diamonds travel in dyn.
  */
@@ -70,7 +83,9 @@ import type { Ported } from "../ported.js";
 export const ROWS = 29;
 export const COLS = 39;
 export const DELAY = 4;
-export const STATE_FLOATS = 13;
+export const LEVER_SLOTS = 12;
+export const PUSHER_SLOTS = 12;
+export const STATE_FLOATS = 15 + LEVER_SLOTS + PUSHER_SLOTS;
 export const STATE_BYTES = STATE_FLOATS * 4 + 4 + ROWS * COLS;
 
 export const OP_RESET = 1;
@@ -81,6 +96,8 @@ export const DYN_MOVING = 1;
 export const DYN_RED = 2;
 export const DYN_BLUE = 4;
 export const DYN_GREEN = 8;
+/** Indexed by a fan's `vertical`, 1..4. */
+const DYN_WIND = [0, 16, 32, 64, 128];
 
 const EDGE = 1e-6;
 
@@ -90,6 +107,35 @@ interface Cached {
   host: Ported;
   snap: Snapshot;
   clock: number;
+  /** Each joint once, in creation order. Restores keep the same objects. */
+  levers: Ported[];
+  pushers: Ported[];
+}
+
+/** One simulation frame, in the order snapbench.ts and both SessionHosts use. */
+function frame(lv: Ported, bits: number): void {
+  tickClock();
+  applyInput(lv, bits);
+  advanceTree(lv);
+  enterFrameTree(lv);
+  lv.Update(new Event(Event.ENTER_FRAME));
+}
+
+/** OR `bit` into every cell whose centre lies inside the box. */
+function paint(out: DataView, grid: number, bit: number,
+               x0: number, y0: number, x1: number, y1: number): void {
+  // Bounds often sit on half-cells (a tile is c-0.5..c+0.5), and Math.round
+  // takes c+0.5 up into the next cell; nudge both ends inward.
+  const r0 = Math.max(0, Math.round(y0 + EDGE));
+  const r1 = Math.min(ROWS - 1, Math.round(y1 - EDGE));
+  const c0 = Math.max(0, Math.round(x0 + EDGE));
+  const c1 = Math.min(COLS - 1, Math.round(x1 - EDGE));
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      const at = grid + r * COLS + c;
+      out.setUint8(at, out.getUint8(at) | bit);
+    }
+  }
 }
 
 /** Which dyn bit a body sets, or 0 for none. */
@@ -122,8 +168,18 @@ class Env {
       if (lv.LevelArray.length !== ROWS || lv.LevelArray[0].length !== COLS) {
         throw new Error(`${key} is not ${ROWS}x${COLS}`);
       }
-      // Clock 0, not getClock(): the global still holds whichever env ran last.
-      c = { lv, host, snap: new Snapshot().capture([host]), clock: 0 };
+      const levers = [...new Set<Ported>(lv.myLevers)];
+      const pushers = [...new Set<Ported>(lv.myPushers)];
+      if (levers.length > LEVER_SLOTS || pushers.length > PUSHER_SLOTS) {
+        throw new Error(`${key} has ${levers.length} levers and ${pushers.length} buttons`);
+      }
+      // One frame with no input before the snapshot: a just-built level is
+      // not a state play ever shows -- levers sit at +-90 degrees and every
+      // fan reads on until the first Update applies the levers. Clock from 0,
+      // not getClock(): the global still holds whichever env ran last.
+      setClock(0);
+      frame(lv, 0);
+      c = { lv, host, snap: new Snapshot().capture([host]), clock: getClock(), levers, pushers };
       this.cache.set(key, c);
     }
     this.cur = c;
@@ -131,9 +187,13 @@ class Env {
     this.queue = new Array<number>(DELAY).fill(0);
   }
 
-  private get lv(): Ported {
+  private get level(): Cached {
     if (!this.cur) throw new Error("step or read before the first reset");
-    return this.cur.lv;
+    return this.cur;
+  }
+
+  private get lv(): Ported {
+    return this.level.lv;
   }
 
   /**
@@ -146,18 +206,14 @@ class Env {
     setClock(this.clock);
     for (let i = 0; i < repeat; i++) {
       this.queue.push(bits);
-      tickClock();
-      applyInput(lv, this.queue.shift());
-      advanceTree(lv);
-      enterFrameTree(lv);
-      lv.Update(new Event(Event.ENTER_FRAME));
+      frame(lv, this.queue.shift());
     }
     this.clock = getClock();
   }
 
   /** Write one STATE record at `off` in `out`. */
   writeState(out: DataView, off: number): void {
-    const lv = this.lv;
+    const { lv, host, levers, pushers } = this.level;
     const cl = lv.myContactListener;
     const p1 = lv.pers1.GetPosition();
     const v1 = lv.pers1.GetLinearVelocity();
@@ -166,7 +222,26 @@ class Env {
     const floats = [
       p1.x, p1.y, v1.x, v1.y, p2.x, p2.y, v2.x, v2.y,
       cl.deadFire ? 1 : 0, cl.deadWater ? 1 : 0, cl.finish1, cl.finish2, this.clock,
+      host.recuents > 0 ? 1 : 0, host.gameOvers > 0 ? 1 : 0,
     ];
+    for (let i = 0; i < LEVER_SLOTS; i++) {
+      const j = levers[i];
+      if (!j) {
+        floats.push(0);
+        continue;
+      }
+      // The game calls a lever on when its angle is on its `onis` side (game.ts
+      // Update), so flip the sign to make +1 always mean on. Clamped: levers
+      // are built at +-90 degrees and only settle near their +-36 degree
+      // limits after the first frame.
+      const side = j.GetUserData().GetUserData().onis === "l" ? 1 : -1;
+      floats.push(Math.max(-1, Math.min(1, side * j.GetJointAngle() / j.m_upperAngle)));
+    }
+    for (let i = 0; i < PUSHER_SLOTS; i++) {
+      const j = pushers[i];
+      const span = j ? j.m_upperTranslation - j.m_lowerTranslation : 1;
+      floats.push(j ? Math.min(1, Math.max(0, (j.m_upperTranslation - j.GetJointTranslation()) / span)) : 0);
+    }
     for (let i = 0; i < STATE_FLOATS; i++) out.setFloat32(off + 4 * i, floats[i], true);
     out.setUint32(off + STATE_FLOATS * 4, parseInt(hashLevel(lv), 16), true);
 
@@ -177,19 +252,12 @@ class Env {
       if (!bit) continue;
       for (let s = b.GetShapeList(); s; s = s.GetNext()) {
         s.ComputeAABB(this.aabb, b.GetXForm());
-        // Bounds sit on half-cells (a tile is c-0.5..c+0.5), and Math.round
-        // takes c+0.5 up into the next cell; nudge both ends inward.
-        const r0 = Math.max(0, Math.round(this.aabb.lowerBound.y + EDGE));
-        const r1 = Math.min(ROWS - 1, Math.round(this.aabb.upperBound.y - EDGE));
-        const c0 = Math.max(0, Math.round(this.aabb.lowerBound.x + EDGE));
-        const c1 = Math.min(COLS - 1, Math.round(this.aabb.upperBound.x - EDGE));
-        for (let r = r0; r <= r1; r++) {
-          for (let c = c0; c <= c1; c++) {
-            const at = grid + r * COLS + c;
-            out.setUint8(at, out.getUint8(at) | bit);
-          }
-        }
+        const { lowerBound: lo, upperBound: hi } = this.aabb;
+        paint(out, grid, bit, lo.x, lo.y, hi.x, hi.y);
       }
+    }
+    for (const w of lv.myWinds as Ported[]) {
+      if (w.on) paint(out, grid, DYN_WIND[w.vertical], w.lower.x, w.lower.y, w.upper.x, w.upper.y);
     }
   }
 

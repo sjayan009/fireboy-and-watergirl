@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -21,7 +22,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fbwg_env import (  # noqa: E402
-    CHANNELS, COLS, DYN_BLUE, DYN_GREEN, DYN_MOVING, DYN_RED, FIRE_HAZARDS,
+    CHANNELS, COLS, DYN_BLUE, DYN_GREEN, DYN_MOVING, DYN_RED, DYN_WIND_LEFT,
+    DYN_WIND_UP, FIRE_HAZARDS, LEVER_SLOTS, PUSHER_SLOTS,
     ROWS, SCHEMA_VERSION, SERVER, STATE_FIELDS, STATE_FLOATS, WATER_HAZARDS,
     EnvClient, LevelInfo, State, bfs_field, encode,
 )
@@ -105,6 +107,8 @@ def fake_level() -> tuple[LevelInfo, State]:
     dyn[10, 5] = DYN_GREEN
     dyn[12, 6:9] = DYN_MOVING
     dyn[12, 9] = DYN_MOVING | DYN_RED
+    dyn[15, 1:3] = DYN_WIND_UP
+    dyn[16, 1] = DYN_WIND_UP | DYN_WIND_LEFT
     vec = np.arange(STATE_FLOATS, dtype=np.float32)
     return LevelInfo(grid, (20, 3), (20, 30)), State(vec, 0, dyn)
 
@@ -140,7 +144,10 @@ def _():
         "green_diamond": [(10, 5)],
         "fire_door": [(20, 3)], "water_door": [(20, 30)],
         "moving": [(12, 6), (12, 7), (12, 8), (12, 9)],
+        "wind_up": [(15, 1), (15, 2), (16, 1)], "wind_right": [],
+        "wind_down": [], "wind_left": [(16, 1)],
     }
+    assert sorted(want) == sorted(CHANNELS), "the test does not cover every channel"
     for name, cells in want.items():
         got = sorted(zip(*np.nonzero(ch[name])))
         got = [(int(r), int(c)) for r, c in got]
@@ -185,20 +192,67 @@ def _():
         c.close()
 
 
-@server_check("server: the dyn grid puts each diamond on exactly its own cell")
+@server_check("engine: hazards, doors, level complete and fans on every level")
 def _():
+    out = subprocess.run(["node", str(SERVER.parent / "envfacts.js")],
+                         capture_output=True, text=True)
+    assert out.returncode == 0, (out.stdout + out.stderr).strip()[-600:]
+
+
+@server_check("every level: grid, diamonds, doors, spawns, levers, buttons, restore")
+def _():
+    levers = [F[f"lever{i}"] for i in range(LEVER_SLOTS)]
+    pushers = [F[f"pusher{i}"] for i in range(PUSHER_SLOTS)]
+    unreached = []
     c = EnvClient(1)
     try:
-        for mode, num in [("adventure", 1), ("puzzle", 3), ("speed", 2)]:
-            dyn = c.reset(0, mode, num).dyn
-            grid = json.loads((LEVEL_DIR / f"{mode}-{num:02d}.json").read_text())["grid"]
+        for mode, num in LEVELS:
+            name = f"{mode} {num}"
+            st = c.reset(0, mode, num)
+            info = c.info(0)
+            raw = json.loads((LEVEL_DIR / f"{mode}-{num:02d}.json").read_text())["grid"]
+            want = np.array([[v if isinstance(v, int) else 0 for v in row] for row in raw], np.int8)
+            assert np.array_equal(info.grid, want), f"{name}: grid differs from the level file"
+
             for code, bit in [("rd", DYN_RED), ("bd", DYN_BLUE), ("gr", DYN_GREEN)]:
-                want = sorted((r, col) for r, row in enumerate(grid)
-                              for col, v in enumerate(row) if v == code)
-                got = sorted((int(r), int(col)) for r, col in np.argwhere(dyn & bit))
-                assert got == want, f"{mode} {num} {code}: got {got[:6]}, want {want[:6]}"
+                want_cells = sorted((r, col) for r, row in enumerate(raw)
+                                    for col, v in enumerate(row) if v == code)
+                got = sorted((int(r), int(col)) for r, col in np.argwhere(st.dyn & bit))
+                assert got == want_cells, f"{name} {code}: got {got[:6]}, want {want_cells[:6]}"
+
+            blocked = {1} | set(FIRE_HAZARDS) | set(WATER_HAZARDS)
+            for who, door in (("fire", info.fire_door), ("water", info.water_door)):
+                assert info.grid[door] not in blocked, f"{name}: {who} door cell {door} is {info.grid[door]}"
+                spawn = (round(float(st.vec[F[f"{who}_y"]])), round(float(st.vec[F[f"{who}_x"]])))
+                assert info.grid[spawn] != 1, f"{name}: {who} spawns inside a wall at {spawn}"
+                hazards = FIRE_HAZARDS if who == "fire" else WATER_HAZARDS
+                if bfs_field(info.grid, door, hazards)[spawn] >= 1:
+                    unreached.append(f"{name} {who}")
+
+            v = st.vec
+            assert np.all(np.isfinite(v)), f"{name}: {v}"
+            assert np.all(np.abs(v[levers]) <= 1 + 1e-4), f"{name}: lever outside -1..1: {v[levers]}"
+            assert np.all((v[pushers] >= 0) & (v[pushers] <= 1)), f"{name}: button outside 0..1"
+            assert not v[F["complete"]] and not v[F["game_over"]], f"{name}: starts finished"
+
+            # The start must already be settled: an idle frame flips no fan or lever.
+            idle = c.step([0], 1)[0]
+            assert np.array_equal(idle.dyn >= DYN_WIND_UP, st.dyn >= DYN_WIND_UP), \
+                f"{name}: fans change on the first idle frame"
+            assert np.array_equal(np.sign(idle.vec[levers]), np.sign(v[levers])), \
+                f"{name}: a lever flips on the first idle frame"
+            st = c.reset(0, mode, num)
+
+            bits = rand_bits(num * 31 + len(mode), 60)
+            first = [st.hash] + [s[0].hash for s in run(c, [bits])]
+            again = [c.reset(0, mode, num).hash] + [s[0].hash for s in run(c, [bits])]
+            assert first == again, f"{name}: restore + replay diverged"
     finally:
         c.close()
+    if unreached:
+        # Not a failure: the BFS ignores lifts, fans and levers, so on some
+        # levels the spawn is cut off from the door until a mechanism moves.
+        print(f"      BFS cannot reach the door without a mechanism: {', '.join(unreached)}")
 
 
 @server_check("invariant: same actions, same digests")
@@ -348,8 +402,7 @@ def random_episodes(n_episodes: int, n_envs: int = 8, limit: int = 3000, repeat:
                     age[i] += repeat
                     v = s.vec
                     dead = v[F["dead_fire"]] or v[F["dead_water"]]
-                    won = v[F["finish1"]] > 0 and v[F["finish2"]] > 0
-                    if dead or won or age[i] >= limit:
+                    if dead or v[F["complete"]] or age[i] >= limit:
                         done += 1
                         start(i)
         finally:

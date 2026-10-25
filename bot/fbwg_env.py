@@ -19,16 +19,21 @@ import numpy as np
 
 ROWS, COLS = 29, 39
 DELAY = 4
-STATE_FLOATS = 13
+LEVER_SLOTS = PUSHER_SLOTS = 12
+STATE_FLOATS = 15 + LEVER_SLOTS + PUSHER_SLOTS
 STATE_BYTES = STATE_FLOATS * 4 + 4 + ROWS * COLS
 OP_RESET, OP_STEP, OP_INFO = 1, 2, 3
 DYN_MOVING, DYN_RED, DYN_BLUE, DYN_GREEN = 1, 2, 4, 8
+DYN_WIND_UP, DYN_WIND_RIGHT, DYN_WIND_DOWN, DYN_WIND_LEFT = 16, 32, 64, 128
 
 # Order of the floats in a STATE record.
 STATE_FIELDS = (
     "fire_x", "fire_y", "fire_vx", "fire_vy",
     "water_x", "water_y", "water_vx", "water_vy",
     "dead_fire", "dead_water", "finish1", "finish2", "clock",
+    "complete", "game_over",
+    *(f"lever{i}" for i in range(LEVER_SLOTS)),
+    *(f"pusher{i}" for i in range(PUSHER_SLOTS)),
 )
 
 # Tile codes in LevelArray.
@@ -42,7 +47,7 @@ WATER_HAZARDS = LAVA + GOO      # what kills Watergirl
 
 # Bump whenever CHANNELS, the vector, or their meaning changes. Every trained
 # model records the version it was trained on.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Channel order of the tile tensor. encode() must produce exactly these.
 CHANNELS = (
@@ -51,6 +56,7 @@ CHANNELS = (
     "red_diamond", "blue_diamond", "green_diamond",
     "fire_door", "water_door",
     "moving",
+    "wind_up", "wind_right", "wind_down", "wind_left",
 )
 
 SERVER = Path(__file__).resolve().parent.parent / "engine" / "dist" / "bot" / "envserver.js"
@@ -159,8 +165,8 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
     """One observation.
 
     tiles: float32, (len(CHANNELS), ROWS, COLS), one-hot, in CHANNELS order.
-           Static channels come from info.grid, diamonds and moving from
-           state.dyn, doors are a single 1 at each door cell.
+           Static channels come from info.grid; diamonds, moving and wind
+           from state.dyn; doors are a single 1 at each door cell.
     bfs:   float32, (2, ROWS, COLS): fire then water.
     vec:   float32, 1-D. Start with state.vec; scale positions by COLS/ROWS
            so everything is roughly in [-1, 1].
@@ -179,6 +185,8 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
         "green_diamond": (d & DYN_GREEN) > 0,
         "fire_door": fire_door, "water_door": water_door,
         "moving": (d & DYN_MOVING) > 0,
+        "wind_up": (d & DYN_WIND_UP) > 0, "wind_right": (d & DYN_WIND_RIGHT) > 0,
+        "wind_down": (d & DYN_WIND_DOWN) > 0, "wind_left": (d & DYN_WIND_LEFT) > 0,
     }
     vec = state.vec.astype(np.float32)
     for name in ("fire_x", "water_x"):

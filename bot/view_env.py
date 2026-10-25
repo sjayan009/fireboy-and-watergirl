@@ -28,6 +28,8 @@ from fbwg_env import (  # noqa: E402
 
 # Painted in this order, so later channels sit on top.
 COLORS = {
+    "wind_up": (.55, .9, .95), "wind_right": (.55, .9, .95),
+    "wind_down": (.55, .9, .95), "wind_left": (.55, .9, .95),
     "solid": (.35, .33, .30), "slope1": (.6, .58, .55), "slope2": (.6, .58, .55),
     "slope3": (.6, .58, .55), "slope4": (.6, .58, .55),
     "water": (.2, .5, 1), "lava": (1, .3, .1), "goo": (.2, .7, .2),
@@ -97,7 +99,8 @@ def main() -> None:
             fire.set_data([v[F["fire_x"]]], [v[F["fire_y"]]])
             water.set_data([v[F["water_x"]]], [v[F["water_y"]]])
         axes[0].set_title(f"{args.level}  frame {int(v[F['clock']])}  "
-                          f"doors {int(v[F['finish1']] > 0)}/{int(v[F['finish2']] > 0)}")
+                          f"doors {int(v[F['finish1']] > 0)}/{int(v[F['finish2']] > 0)}"
+                          + ("  COMPLETE" if v[F["complete"]] else ""))
         return [tiles, *[d for pair in dots for d in pair]]
 
     anim = FuncAnimation(fig, frame, frames=args.steps, interval=40, blit=False, repeat=False)
