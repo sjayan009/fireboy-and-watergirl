@@ -148,7 +148,9 @@ export class ModeCards {
         el("span", { class: "mc-title" }, card.title),
         el("span", { class: "mc-sub" }, card.sub));
       if (card.act) b.addEventListener("click", card.act);
-      b.addEventListener("pointerenter", () => this.select(b));
+      // Moving, not entering: a card drawn under a pointer that is resting
+      // where the last click left it must not take the ring from the default.
+      b.addEventListener("pointermove", () => { if (!b.hasAttribute("data-selected")) this.select(b); });
       b.addEventListener("focus", () => this.select(b));
       return b;
     });
