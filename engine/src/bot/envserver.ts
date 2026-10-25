@@ -32,7 +32,8 @@
  *     gameOver   1 once the game's own GameOver has fired, after a death
  *     LEVER_SLOTS levers, -1 fully off .. +1 fully on, in creation order,
  *                0 for slots this level does not have
- *     PUSHER_SLOTS button presses, 0 up .. 1 fully pressed, likewise
+ *     PUSHER_SLOTS buttons, 0 up .. 1 at the depth the game counts as
+ *                pressed (sinking more than 0.25 below where it started)
  *   u32 hashLevel(lv), parsed from its hex string
  *   ROWS*COLS x u8 "dyn" grid, row-major, bit flags per cell:
  *     DYN_MOVING  a non-static body other than pers1/pers2 covers the cell
@@ -68,7 +69,7 @@
  *            host.recuents / host.gameOvers count the game's own endings.
  * - Fans:    lv.myWinds[i].{lower, upper, vertical 1 up 2 right 3 down
  *            4 left, on}. Levers and buttons are joints in lv.myLevers and
- *            lv.myPushers, which can list the same joint more than once.
+ *            lv.myPushers; joint.GetUserData() is the lever or button body.
  * - Grid:    lv.LevelArray[row][col]; numbers go out as int8, anything else
  *            (the diamond strings) as 0, because diamonds travel in dyn.
  */
@@ -100,6 +101,8 @@ export const DYN_GREEN = 8;
 const DYN_WIND = [0, 16, 32, 64, 128];
 
 const EDGE = 1e-6;
+/** How far a button sinks before the game counts it as pressed. */
+const PRESSED = 0.25;
 
 /** A built level, its snapshot at frame zero, and the clock that goes with it. */
 interface Cached {
@@ -107,7 +110,7 @@ interface Cached {
   host: Ported;
   snap: Snapshot;
   clock: number;
-  /** Each joint once, in creation order. Restores keep the same objects. */
+  /** In creation order. Restores keep the same objects. */
   levers: Ported[];
   pushers: Ported[];
 }
@@ -168,15 +171,16 @@ class Env {
       if (lv.LevelArray.length !== ROWS || lv.LevelArray[0].length !== COLS) {
         throw new Error(`${key} is not ${ROWS}x${COLS}`);
       }
-      const levers = [...new Set<Ported>(lv.myLevers)];
-      const pushers = [...new Set<Ported>(lv.myPushers)];
+      const levers: Ported[] = lv.myLevers;
+      const pushers: Ported[] = lv.myPushers;
       if (levers.length > LEVER_SLOTS || pushers.length > PUSHER_SLOTS) {
         throw new Error(`${key} has ${levers.length} levers and ${pushers.length} buttons`);
       }
       // One frame with no input before the snapshot: a just-built level is
       // not a state play ever shows -- levers sit at +-90 degrees and every
-      // fan reads on until the first Update applies the levers. Clock from 0,
-      // not getClock(): the global still holds whichever env ran last.
+      // fan reads on until the first Update applies the levers (puzzle 7's
+      // three fans start off). Clock from 0, not getClock(): the global
+      // still holds whichever env ran last.
       setClock(0);
       frame(lv, 0);
       c = { lv, host, snap: new Snapshot().capture([host]), clock: getClock(), levers, pushers };
@@ -231,16 +235,18 @@ class Env {
         continue;
       }
       // The game calls a lever on when its angle is on its `onis` side (game.ts
-      // Update), so flip the sign to make +1 always mean on. Clamped: levers
-      // are built at +-90 degrees and only settle near their +-36 degree
-      // limits after the first frame.
+      // Update), so flip the sign to make +1 always mean on. Clamped: a lever
+      // resting on its limit reads about 6% past it.
       const side = j.GetUserData().GetUserData().onis === "l" ? 1 : -1;
       floats.push(Math.max(-1, Math.min(1, side * j.GetJointAngle() / j.m_upperAngle)));
     }
     for (let i = 0; i < PUSHER_SLOTS; i++) {
-      const j = pushers[i];
-      const span = j ? j.m_upperTranslation - j.m_lowerTranslation : 1;
-      floats.push(j ? Math.min(1, Math.max(0, (j.m_upperTranslation - j.GetJointTranslation()) / span)) : 0);
+      // The game's own rule (game.ts Update): pressed once the button body has
+      // sunk more than PRESSED below its origin. The joint translation is not
+      // used because it overshoots while the depth stays under the threshold.
+      const body: Ported = pushers[i]?.GetUserData();
+      const sunk = body ? body.GetPosition().y - body.GetUserData().originy : 0;
+      floats.push(Math.min(1, Math.max(0, sunk / PRESSED)));
     }
     for (let i = 0; i < STATE_FLOATS; i++) out.setFloat32(off + 4 * i, floats[i], true);
     out.setUint32(off + STATE_FLOATS * 4, parseInt(hashLevel(lv), 16), true);

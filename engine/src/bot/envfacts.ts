@@ -6,8 +6,8 @@
  * complete" means. Those come from reading game.ts; this runs the real engine
  * to prove them, by dropping characters where it matters:
  *
- *   - each character onto one cell of every pool kind in the level: it dies
- *     exactly when the env's hazard sets say it should
+ *   - each character onto one cell of every pool tile code in the level: it
+ *     dies exactly when the env's hazard sets say it should
  *   - each character into the OTHER one's door: neither door counts
  *   - both into their own doors: the game's own Recuent fires
  *   - a character into each fan, on versus off: it is pushed the way
@@ -83,19 +83,21 @@ for (const [mode, num] of LEVELS) {
   const name = `${mode} ${num}`;
   const grid: unknown[][] = fresh(mode, num).lv.LevelArray;
 
-  const pools: Record<string, [number, number]> = {};
+  // One cell per tile code, not per kind, so the pool edges (51/52, ...) and
+  // middles (5, ...) are each placed on directly.
+  const pools = new Map<number, [number, number]>();
   grid.forEach((row, r) => row.forEach((v, c) => {
-    const kind = typeof v === "number" ? POOL[v] : undefined;
-    if (kind && !pools[kind]) pools[kind] = [r, c];
+    if (typeof v === "number" && POOL[v] && !pools.has(v)) pools.set(v, [r, c]);
   }));
-  for (const [kind, [r, c]] of Object.entries(pools)) {
+  for (const [code, [r, c]] of pools) {
+    const kind = POOL[code];
     for (const who of ["fire", "water"]) {
       const { lv } = fresh(mode, num);
       put(who === "fire" ? lv.pers1 : lv.pers2, c, r - 0.6);
       for (let i = 0; i < 25; i++) step(lv);
       const died = who === "fire" ? lv.myContactListener.deadFire : lv.myContactListener.deadWater;
       expect(died === KILLS[who].includes(kind),
-             `${name}: ${who} on ${kind} died=${died}`);
+             `${name}: ${who} on ${kind} (${code}) died=${died}`);
     }
   }
 
@@ -121,7 +123,9 @@ for (const [mode, num] of LEVELS) {
   const fans = (fresh(mode, num).lv.myWinds as Ported[]).length;
   for (let i = 0; i < fans; i++) {
     const { lv } = fresh(mode, num);
-    // Every fan, including ones a lever starts switched off: drift() sets `on`.
+    // Every fan, including lever-driven ones. drift() forces `on`, but the wind
+    // loop runs before the lever loop in Update, so for those it only holds for
+    // the first frame; one frame of push still clears the 0.01 bar.
     const w = lv.myWinds[i];
     const [dx, dy] = BLOWS[w.vertical];
     const x = (w.lower.x + w.upper.x) / 2;

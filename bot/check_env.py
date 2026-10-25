@@ -231,22 +231,25 @@ def _():
 
             v = st.vec
             assert np.all(np.isfinite(v)), f"{name}: {v}"
-            assert np.all(np.abs(v[levers]) <= 1 + 1e-4), f"{name}: lever outside -1..1: {v[levers]}"
-            assert np.all((v[pushers] >= 0) & (v[pushers] <= 1)), f"{name}: button outside 0..1"
+            assert not np.any(v[pushers] >= 1), f"{name}: a button starts pressed"
             assert not v[F["complete"]] and not v[F["game_over"]], f"{name}: starts finished"
 
             # The start must already be settled: an idle frame flips no fan or lever.
             idle = c.step([0], 1)[0]
-            assert np.array_equal(idle.dyn >= DYN_WIND_UP, st.dyn >= DYN_WIND_UP), \
+            assert np.array_equal(idle.dyn & 0xF0, st.dyn & 0xF0), \
                 f"{name}: fans change on the first idle frame"
             assert np.array_equal(np.sign(idle.vec[levers]), np.sign(v[levers])), \
                 f"{name}: a lever flips on the first idle frame"
             st = c.reset(0, mode, num)
 
+            # Whole states, not just the hash: hashLevel leaves out fans, levers,
+            # buttons and the level-complete counter.
             bits = rand_bits(num * 31 + len(mode), 60)
-            first = [st.hash] + [s[0].hash for s in run(c, [bits])]
-            again = [c.reset(0, mode, num).hash] + [s[0].hash for s in run(c, [bits])]
-            assert first == again, f"{name}: restore + replay diverged"
+            first = [st] + [s[0] for s in run(c, [bits])]
+            again = [c.reset(0, mode, num)] + [s[0] for s in run(c, [bits])]
+            for k, (a, b) in enumerate(zip(first, again)):
+                assert a.hash == b.hash and np.array_equal(a.vec, b.vec) \
+                    and np.array_equal(a.dyn, b.dyn), f"{name}: restore + replay diverged at step {k}"
     finally:
         c.close()
     if unreached:
