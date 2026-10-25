@@ -1,5 +1,5 @@
 /**
- * Quick Match: the server pairs two players who are not friends.
+ * Quick Match: the server pairs two players, strangers first and friends last.
  *
  * The rules live in `20261010000000_quick_match.sql`. A match is a friendship
  * row in a `matched` state that opens the pair's topic and save for as long as
@@ -18,6 +18,8 @@ export interface QuickMatch {
   iAmFireboy: boolean;
   /** Whether this side sends the invitation. */
   host: boolean;
+  /** Already friends: the topic and save are the ones they always share. */
+  friend: boolean;
 }
 
 /** How often a search asks the server. The queue forgets a player after ten seconds. */
@@ -33,8 +35,8 @@ export async function findPartner(role: Role, me: string, signal: AbortSignal): 
       const { data, error } = await supabase.rpc("quick_match_find", { p_role: role }).abortSignal(signal);
       signal.throwIfAborted();
       if (error) throw new Error(error.message);
-      const row = (data as { partner: string; username: string; topic: string; fireboy: string; host: string }[] | null)?.[0];
-      if (row) return { partner: row.partner, username: row.username, topic: row.topic, iAmFireboy: row.fireboy === me, host: row.host === me };
+      const row = (data as { partner: string; username: string; topic: string; fireboy: string; host: string; friend: boolean }[] | null)?.[0];
+      if (row) return { partner: row.partner, username: row.username, topic: row.topic, iAmFireboy: row.fireboy === me, host: row.host === me, friend: row.friend };
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, POLL_MS);
         signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("cancelled")); }, { once: true });
