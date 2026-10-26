@@ -52,6 +52,7 @@ import type { FriendState, Lobby, Ready } from "../lobby.js";
 import { PlayShell } from "../ui/playshell.js";
 import { ProgressPanel } from "../ui/progress.js";
 import { guestBoard, guestFriends } from "../ui/guestpanels.js";
+import { ModeCards } from "../ui/modecards.js";
 import { PlayController, loadSelection, selectionKey } from "../playstate.js";
 import type { MatchSharing, SharingState } from "../sharing.js";
 import { QoeRecorder } from "../net/qoe.js";
@@ -100,19 +101,25 @@ type NoticeKind = "stall" | "chooser" | "map" | "session" | "art" | "suspend";
 /** Kinds a level starting makes untrue. */
 const BETWEEN_LEVELS: NoticeKind[] = ["map", "chooser", "suspend"];
 
-/** Kinds that also come down on their own, having been read. */
-const FADES: NoticeKind[] = ["map", "chooser", "suspend"];
-
 /**
  * How long an informational line stays up with nothing else happening.
  *
  * The backstop for the case the rule above does not cover: the pick was handed
  * over and then nobody started anything. Long enough to read twice, short
- * enough that it is gone before it becomes furniture. `session`, `art` and
- * `stall` ignore it -- each of those is either something the reader has to act
- * on or something with an owner that will take it down itself.
+ * enough that it is gone before it becomes furniture. `session` and `stall`
+ * ignore it -- each is either something the reader has to act on or something
+ * with an owner that will take it down itself.
  */
 const NOTICE_MS = 8000;
+
+/**
+ * Kinds that also come down on their own, having been read, and after how long.
+ *
+ * `art` is shorter: the level plays either way and the line is one sentence,
+ * so five seconds reads it and gets it off the stage. A pointer resting on the
+ * banner holds any of them, so it never goes from under a reach for Retry.
+ */
+const FADES: Partial<Record<NoticeKind, number>> = { map: NOTICE_MS, chooser: NOTICE_MS, suspend: NOTICE_MS, art: 5000 };
 
 /**
  * How long the other peer may be silent before it is worth saying so.
@@ -225,6 +232,12 @@ export function playScreen(host: HTMLElement,
     class: "banner", role: "alert", "aria-live": "assertive",
   });
   banner.hidden = true;
+  // A notice that fades waits while somebody is pointing at it or tabbing
+  // through its buttons, and starts its count again when they leave.
+  const holdFade = () => { if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; } };
+  for (const type of ["pointerenter", "focusin"]) banner.addEventListener(type, holdFade);
+  banner.addEventListener("pointerleave", () => { if (!banner.contains(document.activeElement)) armFade(); });
+  banner.addEventListener("focusout", (e) => { if (!banner.contains(e.relatedTarget as Node | null)) armFade(); });
   const panel = el("div", { class: "panel" });
   const times = el("div", { class: "panel" });
   const board = el("div", { class: "panel" });
@@ -405,6 +418,15 @@ export function playScreen(host: HTMLElement,
   let quickTouch: ReturnType<typeof setInterval> | null = null;
   /** Where the partner's invitation goes while this side waits for it. */
   let quickInvite: ((invite: Invite, from: FriendState) => void) | null = null;
+  /**
+   * A friend's invitation that arrived while this side was still searching.
+   *
+   * A friend Quick Match pairs is already present in the lobby, so as host they
+   * invite the moment the server pairs them -- often before this side's next
+   * poll has heard. Shown as an ordinary invitation, it started a new attempt,
+   * which cancelled the very search that was about to say who they were.
+   */
+  let earlyInvite: { invite: Invite; from: FriendState } | null = null;
   /** Set while the link is being rebuilt, so nothing tries twice at once. */
   let rebuilding: AbortController | null = null;
   /**
@@ -512,6 +534,20 @@ export function playScreen(host: HTMLElement,
         else notice("art", "Some game art could not load.", el("button", { class: "ghost", onclick: () => { void view.prepare().catch(() => {}); } }, "Retry loading"));
       }
     },
+    // Play on the title screen asks how before it goes to the map. Not inside
+    // a match: the pair is already playing online.
+    onPlay: () => {
+      if (gone || match || pending) return false;
+      showCards();
+      return true;
+    },
+    // And the map's own "Main Menu" leads to them again, on the screen that
+    // led to the map, rather than to the title's own menu.
+    onBack: () => {
+      if (gone || match || pending) return false;
+      backToCards();
+      return true;
+    },
     onPrepareRun: v => {
       // Said once per prepared scene, so a level that starts with holes in it
       // says so rather than looking like a rendering bug somebody should
@@ -519,7 +555,7 @@ export function playScreen(host: HTMLElement,
       // itself the moment the art actually arrives.
       if (!v.artComplete) {
         notice("art", v.artStatus === "loading" ? "Additional artwork is loading. The level is ready to play." : "Some game art did not load. The level still plays.");
-      }
+      } else clearNotice("art");
       // Nothing left to wait for since the ranking registration went.
       return Promise.resolve();
     },
@@ -555,6 +591,7 @@ export function playScreen(host: HTMLElement,
     },
     onFrame: () => {
       noticeCleared();
+      followTitle();
       const request = view.session?.pendingControl;
       const next = request ? `${request.command}:${request.frame}` : "";
       if (next !== pendingControl) {
@@ -925,6 +962,22 @@ export function playScreen(host: HTMLElement,
       quickCard?.timedOut();
     },
   });
+  const modeCards = new ModeCards({
+    guest,
+    onTwoPlayers: () => { hideCards(); view.openMap(); },
+    // Searching starts at once, with the character picked on the Quick Match
+    // card, and the panel opens on that card so the search can be seen and
+    // cancelled. A guest is taken to the account card instead. The cards stay
+    // where they are: the choice was made here, and here is where to come back
+    // to if the search is cancelled. A match starting takes them down.
+    onQuickMatch: () => {
+      shell.open("friends");
+      if (quickCard) void startQuick(quickCard.chosenRole);
+    },
+    onFriends: () => { shell.open("friends"); },
+    onClose: () => hideCards(),
+  });
+  shell.screen.append(modeCards.root);
   const friendsUI = quickCard && new FriendsPanel(panel, { onInvite: showInviteForm, busy: () => match !== null || pending !== null || quickSearch !== null, quickMatch: quickCard.root });
   const watchList = el("section", { class: "watch-list" });
   panel.append(watchList);
@@ -1053,10 +1106,15 @@ export function playScreen(host: HTMLElement,
     clear(banner);
     banner.append(el("span", {}, text), ...extra,
       el("button", { class: "ghost", onclick: () => clearNotice() }, "Dismiss"));
+    armFade();
+  }
+
+  /** (Re)start the current notice's countdown, if it is a kind that fades. */
+  function armFade(): void {
     if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
-    if (FADES.includes(kind)) {
-      noticeTimer = setTimeout(() => { noticeTimer = null; clearNotice(kind); }, NOTICE_MS);
-    }
+    const kind = noticed?.kind;
+    const ms = kind && FADES[kind];
+    if (kind && ms) noticeTimer = setTimeout(() => { noticeTimer = null; clearNotice(kind); }, ms);
   }
 
   /**
@@ -1445,6 +1503,11 @@ export function playScreen(host: HTMLElement,
       if (quickInvite) quickInvite(invite, from); else lobby?.decline(invite);
       return;
     }
+    if (quickSearch) {
+      if (earlyInvite) lobby?.decline(earlyInvite.invite);
+      earlyInvite = { invite, from };
+      return;
+    }
     if (match) return;                 // already playing
     // One at a time. Two people inviting each other in the same breath used to
     // replace one banner with the other and start two games.
@@ -1539,8 +1602,36 @@ export function playScreen(host: HTMLElement,
   }
 
   /** Hand the clock to the session, and start the level if we are the host. */
+  function showCards(screen?: "local"): void {
+    view.introMenuVisible = false;
+    modeCards.show(screen);
+  }
+
+  /** Set between the map's Back and the title screen it fades to. */
+  let cardsOnTitle = false;
+  function backToCards(): void {
+    cardsOnTitle = true;
+    view.openTitle();
+  }
+
+  /** Every frame: the cards come back once the fade to the title has ended. */
+  function followTitle(): void {
+    if (cardsOnTitle && view.onTitle) {
+      cardsOnTitle = false;
+      showCards("local");
+    }
+  }
+
+  function hideCards(): void {
+    if (!modeCards.open) return;
+    modeCards.hide();
+    view.introMenuVisible = true;
+    canvas.focus({ preventScroll: true });
+  }
+
   function begin(ready: Ready, invite: Invite, quick?: QuickMatch): void {
     if (gone) { ready.transport.close(); return; }
+    hideCards();
     shell.invite(false);
     shell.notify("");
     shell.close(true);
@@ -1560,7 +1651,7 @@ export function playScreen(host: HTMLElement,
     };
     // Watching stays a friends feature; the server refuses it for a match.
     if (!match.quick) consent ??= new MatchSharing(invite.session, ready.friend.id, updateSharing);
-    befriend.hidden = blockButton.hidden = !match.quick;
+    befriend.hidden = blockButton.hidden = !match.quick || match.quick.friend;
     if (quick) {
       befriend.disabled = false;
       befriend.textContent = `Add ${quick.username} as a friend`;
@@ -1638,12 +1729,13 @@ export function playScreen(host: HTMLElement,
       found = await findPartner(role, auth().user!.id, abort.signal);
     } catch (e) {
       if (quickSearch === abort) quickSearch = null;
-      if (gone || abort.signal.aborted) return;
+      if (gone || abort.signal.aborted) { showHeldInvite(); return; }
       flow.finish(abort, "idle");
       quickCard?.idle((e as Error).message);
+      showHeldInvite();
       return;
     }
-    if (gone || quickSearch !== abort) { void endMatch(found.partner); return; }
+    if (gone || quickSearch !== abort) { void endMatch(found.partner); showHeldInvite(); return; }
     quickSearch = null;
     void quickCard?.found(found.username, found.iAmFireboy);
     await connectQuick(found, abort);
@@ -1657,7 +1749,19 @@ export function playScreen(host: HTMLElement,
    * the match topic, and the other side accepts that one invitation and no
    * other. Level one of Adventure; the map takes it from there.
    */
+  /** The search is over without using it: an invitation held back is shown after all. */
+  function showHeldInvite(): void {
+    const held = earlyInvite;
+    earlyInvite = null;
+    if (held && !gone) showInvite(held.invite, held.from);
+  }
+
   async function connectQuick(found: QuickMatch, abort: AbortController): Promise<void> {
+    // Their invitation may already be here (see `earlyInvite`). Anybody else's
+    // waits for this match, which is what being matched means.
+    const held = earlyInvite;
+    earlyInvite = null;
+    if (held && (found.host || held.from.id !== found.partner || held.invite.from !== found.partner)) lobby?.decline(held.invite);
     quickPending = { found, abort };
     pending = { session: null, friendId: found.partner, abort };
     showMatched(found);
@@ -1677,6 +1781,7 @@ export function playScreen(host: HTMLElement,
         if (from.id !== found.partner || i.from !== found.partner) { lobby?.decline(i); return; }
         clearTimeout(timer); quickInvite = null; resolve(i);
       };
+      if (held && held.from.id === found.partner && held.invite.from === found.partner) quickInvite(held.invite, held.from);
     });
     void invited?.catch(() => {});
     try {

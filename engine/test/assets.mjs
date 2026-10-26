@@ -84,6 +84,21 @@ const prepared = await prepareLevelAssets("/assets", "adventure", 1);
 assert.deepEqual(prepared.critical, { total: 2, ready: 2, failed: 0 });
 assert.equal(await prepared.complete, "complete"); assert.equal(prepared.background.total, 1);
 prepared.release();
+// The deadline is for the level to become playable. Background art that is
+// still arriving after it must finish, not be cut off and left "loading".
+jsonResponses.set("/slow/levels.json", { schema: 1, identity, common: { critical: ["auto-slow-critical"] }, levels: {
+  "adventure-01": { symbols: [], critical: [], background: ["late-art"] },
+} });
+jsonResponses.set("/slow/sprites.json", {});
+const stages = [];
+const slow = await prepareLevelAssets("/slow", "adventure", 1, { deadlineMs: 20, onProgress: (stage, c) => stages.push([stage, { ...c }]) });
+assert.equal(slow.status, "ready");
+await new Promise(resolve => setTimeout(resolve, 40));
+load("/slow/late-art");
+assert.equal(await slow.complete, "complete");
+assert.equal(slow.status, "complete");
+assert.deepEqual(stages.at(-1), ["background", { total: 1, ready: 1, failed: 0 }]);
+slow.release();
 jsonResponses.set("/partial/levels.json", { schema: 1, identity, common: { critical: ["auto-missing"] }, levels: {
   "adventure-01": { symbols: [], critical: [], background: [] },
 } });

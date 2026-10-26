@@ -27,7 +27,7 @@ import { prepareLevelAssets, type PreparedLevelAssets, type LevelPreparationOpti
 import { VisualSnapshots } from "./render/interpolation.js";
 import { ShellInput } from "./game/shellinput.js";
 import { AudioPlayer } from "./audio/player.js";
-import { NetSession, Slot } from "./net/session.js";
+import { MODES, NetSession, Slot } from "./net/session.js";
 import { GameHost } from "./net/gamehost.js";
 import { Command } from "./net/protocol.js";
 import { Transport } from "./net/transport.js";
@@ -92,6 +92,13 @@ export interface GameViewOptions {
   onConfirmed?: (view: GameView, frame: number) => void;
   /** Runs after scene preparation and before the first simulation frame. */
   onPrepareRun?: (view: GameView) => Promise<void>;
+  /**
+   * The title screen's Play was pressed. True takes it over -- the page shows
+   * its own choice of how to play, and `openMap` carries on to the map.
+   */
+  onPlay?: () => boolean;
+  /** The map's button back to the title screen; true takes it over, as `onPlay`. */
+  onBack?: () => boolean;
   /** Unique resource counts for the current level preparation, outside simulation state. */
   onPreparationProgress?: LevelPreparationOptions["onProgress"];
   /**
@@ -146,6 +153,8 @@ export class GameView {
   private preparation: Promise<void> | null = null;
   private preparationGeneration = 0;
   private levelAssets: PreparedLevelAssets | null = null;
+  /** Which level `levelAssets` is for, as `mode-num`. */
+  private levelAssetsFor = "";
   private levelPreparation: AbortController | null = null;
   private levelPreparationGeneration = 0;
   private readonly lifetime = new AbortController();
@@ -171,6 +180,8 @@ export class GameView {
   private needsVisualReconcile = false;
   private readonly onRefused?: (reason: RefusedReason) => void;
   private readonly onPrepareRun?: (view: GameView) => Promise<void>;
+  private readonly onPlay?: () => boolean;
+  private readonly onBack?: () => boolean;
   private readonly onPreparationProgress?: LevelPreparationOptions["onProgress"];
 
   sprites: SpriteRenderer | null = null;
@@ -208,6 +219,8 @@ export class GameView {
     this.onConfirmed = o.onConfirmed;
     this.onRefused = o.onRefused;
     this.onPrepareRun = o.onPrepareRun;
+    this.onPlay = o.onPlay;
+    this.onBack = o.onBack;
     this.onPreparationProgress = o.onPreparationProgress;
     this.smoothing = o.smoothing !== false;
     this.visuals = new VisualSnapshots({ rollbackSmoothing: o.rollbackSmoothing,
@@ -265,6 +278,8 @@ export class GameView {
    */
   private handleIntent(intent: Intent): boolean {
     const s = this.session;
+    if (intent.kind === "play") return this.onPlay?.() ?? false;
+    if (intent.kind === "back") return this.onBack?.() ?? false;
 
     // Mute is this player's preference and always has been -- one of them
     // wanting quiet says nothing about the other. The ported button writes
@@ -492,6 +507,30 @@ export class GameView {
            ((h.has("ArrowUp") || h.has("w")) ? 4 : 0);
   }
 
+  /** From the title screen to the map, as its Play would have gone. */
+  openMap(): void {
+    const intro = this.game.m_introMenu;
+    if (intro?.parent === this.game) this.shell.activate(intro.Buttons.Starter);
+  }
+
+  /** From the map back to the title screen, as its own button would have gone. */
+  openTitle(): void {
+    const map = this.game.m_mainMenu;
+    if (map?.parent === this.game) this.shell.activate(map.BackToIntro);
+  }
+
+  /** The title screen is up and settled: no fade still running over it. */
+  get onTitle(): boolean {
+    const g = this.game;
+    return g.m_introMenu?.parent === g && !(g.m_transition?.parent === g);
+  }
+
+  /** Show or hide the title screen's own menu, for a page that draws over it. */
+  set introMenuVisible(visible: boolean) {
+    const buttons = this.game.m_introMenu?.Buttons;
+    if (buttons) buttons.visible = visible;
+  }
+
   setInputEnabled(enabled: boolean): void {
     this.inputEnabled = enabled;
     if (!enabled) this.clearInput();
@@ -534,6 +573,13 @@ export class GameView {
         if (this.destroyed || generation !== this.preparationGeneration) { if (sprites !== this.sprites) sprites.dispose(); return; }
         this.sprites = sprites;
         this.sprites.configureOutputScale(this.outputScale);
+        // A level somebody else picked, or one a resync or a watcher starts,
+        // arrives through the session rather than through `prepareLevel`, so
+        // its own art was never asked for: no temple wall, holes where the
+        // level's atlases go, and the last screen showing through them.
+        const scene = this.sceneLevel();
+        if (scene && `${scene.mode}-${scene.num}` !== this.levelAssetsFor) await this.loadLevelAssets(scene.mode, scene.num).catch(() => {});
+        if (this.destroyed || generation !== this.preparationGeneration) return;
         if (this.levelAssets?.status === "partial") await this.levelAssets.retry();
         await sprites.prepare(this.game, this.levelAssets === null);
         if (this.destroyed || generation !== this.preparationGeneration) return;
@@ -551,7 +597,21 @@ export class GameView {
     return this.preparation;
   }
 
+  /** The level on screen, if a level is what is on screen. */
+  private sceneLevel(): { mode: string; num: number } | null {
+    const g = this.game as Ported;
+    const mode = MODES[g.cur_type - 1];
+    return g.m_level?.parent === g && mode && g.cur_lev > 0 ? { mode, num: g.cur_lev } : null;
+  }
+
   async prepareLevel(mode: string, num: number, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    if (this.destroyed) throw new Error("View disposed");
+    await this.prepare();
+    await this.loadLevelAssets(mode, num, signal);
+  }
+
+  private async loadLevelAssets(mode: string, num: number, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
     if (this.destroyed) throw new Error("View disposed");
     const generation = ++this.levelPreparationGeneration;
@@ -560,16 +620,15 @@ export class GameView {
     this.levelPreparation = controller;
     const abort = () => controller.abort(signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });
-    this.levelAssets?.release(); this.levelAssets = null;
+    this.levelAssets?.release(); this.levelAssets = null; this.levelAssetsFor = "";
     try {
-      await this.prepare();
-      controller.signal.throwIfAborted();
       const prepared = await prepareLevelAssets(this.assetBase, mode, num, { signal: controller.signal,
         onProgress: (stage, counts) => {
           if (!this.destroyed && generation === this.levelPreparationGeneration) this.onPreparationProgress?.(stage, counts);
         } });
       if (this.destroyed || generation !== this.levelPreparationGeneration) { prepared.release(); throw new Error("Preparation superseded"); }
       this.levelAssets = prepared;
+      this.levelAssetsFor = `${mode}-${num}`;
       controller.signal.throwIfAborted();
     } finally { signal?.removeEventListener("abort", abort); }
   }
