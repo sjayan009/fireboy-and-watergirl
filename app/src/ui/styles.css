@@ -652,7 +652,7 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
 .play-toolbar > .tool-leaderboard[aria-expanded='true'] { color:var(--gold); background:#f0ce7b17; border-color:#f0ce7b80; box-shadow:inset 0 -2px 0 var(--gold); }
 
 /* ---- Quick Match ----------------------------------------------------------- */
-.qm { margin-top:18px; padding:16px; background:#24201a; border:1px solid var(--edge); border-radius:14px; box-shadow:inset 0 1px 0 #ffffff09; overflow:hidden; }
+.qm { scroll-margin-top:62px; margin-top:18px; padding:16px; background:#24201a; border:1px solid var(--edge); border-radius:14px; box-shadow:inset 0 1px 0 #ffffff09; overflow:hidden; }
 .qm h4 { margin:0; font:600 1rem/1.3 var(--heading); letter-spacing:-.006em; }
 .qm-sub { margin:4px 0 0; color:var(--dim); font-size:.8125rem; line-height:1.4; }
 .qm-note { margin-top:10px; }
@@ -1001,10 +1001,13 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
 .mc-ring { position:absolute; inset:calc(-7 * var(--u)); border:calc(2 * var(--u)) solid #ffcc00; border-radius:calc(19 * var(--u)); opacity:0; filter:url(#mc-glow); pointer-events:none; transition:opacity 120ms ease-out; }
 .mc-card[data-selected] .mc-ring { opacity:1; }
 /* On a card that cannot be chosen yet, the ring says where you are, dimly. */
-.mc-card[aria-disabled] .mc-ring { border-color:#89681d; filter:none; }
+.mc-card[aria-disabled] .mc-ring, .mc-card[data-dim] .mc-ring { border-color:#89681d; filter:none; }
 .mc-card:not([aria-disabled]):active { transform:scale(.97); }
 .mc-card[aria-disabled] { cursor:default; }
-.mc-card[aria-disabled] .mc-title, .mc-card[aria-disabled] .mc-sub { color:#89681d; }
+.mc-card[aria-disabled] .mc-title, .mc-card[aria-disabled] .mc-sub, .mc-card[data-dim] .mc-title, .mc-card[data-dim] .mc-sub { color:#89681d; }
+/* Greyed out, pictures and all, so a locked card reads as locked before a word is read. */
+.mc-card[aria-disabled] .mc-art, .mc-card[data-dim] .mc-art { filter:grayscale(1) brightness(.6); }
+.mc-card[data-dim] .mc-run { animation:none !important; }
 /*
  * Back, on every card screen: the bottom-left corner, under the title screen's
  * Watergirl (ink to y=458), mirroring the title's own corner text -- "(c) Oslo
@@ -1012,12 +1015,42 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
  * from the left (the B starts 1.14px into its box) and its baseline 9px up.
  * Set by size, baseline and left; the box top is the baseline less 0.8599em.
  */
-.mc-back { --size:18; --baseline:471; --left:7.86; position:absolute; left:calc(var(--left) * var(--u)); top:calc((var(--baseline) - 0.8599 * var(--size)) * var(--u)); padding:0; border:0; background:none; font:inherit; font-size:calc(var(--size) * var(--u)); line-height:1; color:#89681d; cursor:pointer; outline:none; }
+.mc-back { --size:18; --baseline:471; --left:7.86; position:absolute; left:calc(var(--left) * var(--u)); top:calc((var(--baseline) - 0.8599 * var(--size)) * var(--u)); padding:0; border:0; background:none; font:inherit; font-size:calc(var(--size) * var(--u)); line-height:1; color:#ffcc00; cursor:pointer; outline:none; }
 .mc-back { filter:url(#mc-outline); }
-.mc-back:hover, .mc-back:focus-visible { color:#ffcc00; }
+/* Always lit, so nothing changes under the pointer; the keyboard still sees where it is. */
+.mc-back:focus-visible { text-decoration:underline; text-underline-offset:calc(3 * var(--u)); }
+/*
+ * What is under way, bottom centre: the cards' own glass, a little heavier so
+ * it holds over the busy temple wall, and a dot that breathes in the colour
+ * of who you are waiting on -- fire and water for a stranger, water for a friend.
+ * Hidden while the Friends panel is open, which already shows it in full.
+ */
+.mc-status { position:absolute; left:0; right:0; bottom:calc(9 * var(--u)); width:max-content; margin:0 auto; display:flex; align-items:center; gap:calc(7 * var(--u)); height:calc(26 * var(--u)); padding:0 calc(13 * var(--u)) 0 calc(10 * var(--u));
+  border:0; border-radius:999px; font:inherit; font-size:calc(13 * var(--u)); line-height:1; white-space:nowrap; color:rgba(255,238,200,.92); cursor:pointer; pointer-events:auto; outline:none;
+  background:linear-gradient(180deg, rgba(30,24,10,.72), rgba(12,9,4,.9));
+  -webkit-backdrop-filter:blur(calc(8 * var(--u))) saturate(140%); backdrop-filter:blur(calc(8 * var(--u))) saturate(140%);
+  box-shadow:inset 0 calc(1 * var(--u)) 0 rgba(255,236,170,.18), 0 0 0 calc(1 * var(--u)) rgba(255,204,0,.32), 0 calc(6 * var(--u)) calc(16 * var(--u)) rgba(0,0,0,.5);
+  animation:mc-status-in 200ms ease-out; transition:transform 100ms cubic-bezier(.23,1,.32,1); -webkit-tap-highlight-color:transparent; }
+.mc-status[hidden], [data-panel="friends"] .mc-status { display:none; }
+/* Centred by its margins, not a transform, so the press (which outranks button:active's nudge) only scales it. */
+.mc-status:active:not(:disabled) { transform:scale(.97); }
+.mc-status:focus-visible { box-shadow:inset 0 calc(1 * var(--u)) 0 rgba(255,236,170,.18), 0 0 0 calc(2 * var(--u)) #ffcc00, 0 calc(6 * var(--u)) calc(16 * var(--u)) rgba(0,0,0,.5); }
+.mc-what { color:#ffcc00; }
+.mc-what::after { content:"·"; margin-left:calc(7 * var(--u)); color:rgba(255,238,200,.5); }
+.mc-dot { width:calc(8 * var(--u)); height:calc(8 * var(--u)); border-radius:50%; background:linear-gradient(90deg, #ff5a26 50%, #21b6f2 50%); box-shadow:0 0 calc(6 * var(--u)) rgba(255,204,0,.6); animation:mc-breathe 1.6s ease-in-out infinite; }
+.mc-status[data-busy="friends"] .mc-dot { background:#21b6f2; box-shadow:0 0 calc(6 * var(--u)) rgba(33,182,242,.7); }
+/* A fade only: it often arrives as the stage grows into the panel's room, and a slide on top of that reads as a wobble. */
+@keyframes mc-status-in { from { opacity:0; } }
+/* The clock in a box of its own width, so the pill (centred) does not shift each second as the digits change width. */
+.mc-clock { min-width:calc(30 * var(--u)); }
+.mc-clock[hidden] { display:none; }
+.mc-detail + .mc-clock::before { content:"· "; color:rgba(255,238,200,.5); }
+@keyframes mc-breathe { 50% { opacity:.45; transform:scale(.8); } }
 @media (prefers-reduced-transparency: reduce) {
-  .mc-card { -webkit-backdrop-filter:none; backdrop-filter:none; background:rgb(16,12,6); }
+  .mc-card, .mc-status { -webkit-backdrop-filter:none; backdrop-filter:none; background:rgb(16,12,6); }
 }
 @media (prefers-reduced-motion: reduce) {
   .mc-card:not([aria-disabled]):active { transform:none; }
+  .mc-status:active:not(:disabled) { transform:none; }
+  .mc-status, .mc-dot { animation:none; }
 }
