@@ -112,6 +112,8 @@ export class QuickCard {
   private fire: Orbit;
   private water: Orbit;
   private role: Role = "either";
+  /** The character picked on the card, for a search started from elsewhere. */
+  get chosenRole(): Role { return this.role; }
   private barAnim: Animation | null = null;
   private ticker: ReturnType<typeof setInterval> | null = null;
   private state: "idle" | "search" | "found" | "timeout" = "idle";

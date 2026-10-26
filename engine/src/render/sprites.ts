@@ -24,6 +24,7 @@
 import { DisplayObject, TextField } from "../flash/flash.js";
 import { FontSet } from "./fonts.js";
 import { cssFilter, hasVisibleFilter } from "./filters.js";
+import { drawWind } from "./wind.js";
 import { assetUrl } from "../asseturl.js";
 import { assetRevision, assetContentRevision, createAssetOwner, imageAsset } from "./assets.js";
 import { VisualSnapshots, type VisualMode, type VisualTransform } from "./interpolation.js";
@@ -593,6 +594,11 @@ export class SpriteRenderer {
     }
 
     const sprite = this.spriteFor(node);
+    // The fan's airflow is drawn, not the SWF's stretched haze (see wind.ts).
+    if (sprite?.name === "Wind") {
+      drawWind(ctx, node, this.visualNow);
+      return;
+    }
     let geom: FrameGeom | undefined;
     /**
      * Whether this node expected its own art this frame and did not get it.
