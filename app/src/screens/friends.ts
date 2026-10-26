@@ -93,7 +93,8 @@ export class FriendsPanel {
     }).catch(e => this.showError((e as Error).message));
   }
 
-  private setOpen(open: boolean): void {
+  /** Fold or unfold Your Friends; only the heading's own press is remembered. */
+  setOpen(open: boolean): void {
     this.toggle.setAttribute("aria-expanded", String(open));
     if (open) delete this.fold.dataset.closed; else this.fold.dataset.closed = "";
   }

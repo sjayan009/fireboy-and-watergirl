@@ -117,6 +117,8 @@ export class QuickCard {
   private barAnim: Animation | null = null;
   private ticker: ReturnType<typeof setInterval> | null = null;
   private state: "idle" | "search" | "found" | "timeout" = "idle";
+  /** Where the card is: idle, searching, matched, or out of time. */
+  get phase(): "idle" | "search" | "found" | "timeout" { return this.state; }
   private swapTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly o: QuickCardOptions) {

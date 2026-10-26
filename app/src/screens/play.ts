@@ -416,6 +416,9 @@ export function playScreen(host: HTMLElement,
   let quickPending: { found: QuickMatch; abort: AbortController } | null = null;
   /** Renews the live match on the server; it lapses two minutes after the last. */
   let quickTouch: ReturnType<typeof setInterval> | null = null;
+  /** When the current search began, and the second hand on the status pill. */
+  let quickSince = 0;
+  let busyClock: ReturnType<typeof setInterval> | null = null;
   /** Where the partner's invitation goes while this side waits for it. */
   let quickInvite: ((invite: Invite, from: FriendState) => void) | null = null;
   /**
@@ -960,6 +963,7 @@ export function playScreen(host: HTMLElement,
       quickSearch.abort(); quickSearch = null;
       flow.cancel(); flow.set("idle");
       quickCard?.timedOut();
+      drawPanel(lobby?.list ?? []);
     },
   });
   const modeCards = new ModeCards({
@@ -972,9 +976,20 @@ export function playScreen(host: HTMLElement,
     // to if the search is cancelled. A match starting takes them down.
     onQuickMatch: () => {
       shell.open("friends");
-      if (quickCard) void startQuick(quickCard.chosenRole);
+      if (quickSearch || quickPending) showQuickCard();
+      else if (quickCard) void startQuick(quickCard.chosenRole);
     },
-    onFriends: () => { shell.open("friends"); },
+    // The panel, with Your Friends unfolded at the top of it: the card was a
+    // choice of who to play with, so the list of them is what it opens on.
+    onFriends: () => {
+      shell.open("friends");
+      friendsUI?.setOpen(true);
+      panel.closest(".drawer-content")?.scrollTo({ top: 0, behavior: reduceMotion.matches ? "auto" : "smooth" });
+    },
+    onStatus: () => {
+      shell.open("friends");
+      if (quickCard && quickCard.phase !== "idle") showQuickCard();
+    },
     onClose: () => hideCards(),
   });
   shell.screen.append(modeCards.root);
@@ -1374,6 +1389,7 @@ export function playScreen(host: HTMLElement,
     shell.friends(friends.filter(f => f.status === "accepted" && f.activity !== null && !f.stranger).length);
     quickCard?.setBusy(match !== null || pending !== null);
     friendsUI?.update(friends);
+    syncBusy();
     // Whose maps there are to look at. Cheap, and this is the one place the
     // friend list is known to have changed -- including somebody being removed,
     // which has to take their option away with them.
@@ -1398,6 +1414,43 @@ export function playScreen(host: HTMLElement,
           }, "Watch")));
       }
     }
+  }
+
+  /**
+   * What is under way, on the mode cards: the others grey out, and a pill at the
+   * bottom of the stage keeps it in sight once the panel is shut.
+   */
+  function syncBusy(): void {
+    if (gone) return;
+    const phase = quickCard?.phase ?? "idle";
+    const quick = phase !== "idle" || quickPending !== null;
+    modeCards.setBusy(match ? null : quick ? "quick" : pending ? "friends" : null, ((): [string, string, string?] | null => {
+      // Matched: the match card over the game says so already.
+      if (match || quickPending || phase === "found") return null;
+      if (phase === "search") {
+        const s = Math.floor((Date.now() - quickSince) / 1000);
+        return ["Quick Match", "Searching", `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`];
+      }
+      if (phase === "timeout") return ["Quick Match", "No one's around right now"];
+      if (!pending) return null;
+      const name = lobby?.list.find(f => f.id === pending!.friendId)?.username ?? "your friend";
+      return pending.session ? ["Joining", `${name}…`] : ["Invite sent", `Waiting for ${name} to accept`];
+    })());
+    const ticking = phase === "search";
+    if (ticking && busyClock === null) busyClock = setInterval(syncBusy, 1000);
+    else if (!ticking && busyClock !== null) { clearInterval(busyClock); busyClock = null; }
+  }
+
+  /**
+   * Fold Your Friends away and put the Quick Match card at the top of the
+   * panel, whole. Aligned by its top, so the card growing as it changes view
+   * cannot leave its top cut off; once the fold (240ms) has closed above it.
+   */
+  function showQuickCard(): void {
+    friendsUI?.setOpen(false);
+    setTimeout(() => {
+      if (!gone) quickCard?.root.scrollIntoView({ block: "start", behavior: reduceMotion.matches ? "auto" : "smooth" });
+    }, 260);
   }
 
   /** Choose the level and the roles, then send the invitation. */
@@ -1722,7 +1775,9 @@ export function playScreen(host: HTMLElement,
     if (match || pending || quickSearch || quickPending || !lobby) return;
     const abort = flow.start("searching");
     quickSearch = abort;
+    quickSince = Date.now();
     quickCard?.searching();
+    showQuickCard();
     drawPanel(lobby.list);
     let found: QuickMatch;
     try {
@@ -1738,6 +1793,7 @@ export function playScreen(host: HTMLElement,
     if (gone || quickSearch !== abort) { void endMatch(found.partner); showHeldInvite(); return; }
     quickSearch = null;
     void quickCard?.found(found.username, found.iAmFireboy);
+    syncBusy();
     await connectQuick(found, abort);
   }
 
@@ -1849,6 +1905,7 @@ export function playScreen(host: HTMLElement,
       return;
     }
     quickCard?.idle();
+    drawPanel(lobby?.list ?? []);
   }
 
   /** The match card over the game: who, which character, and Leave. */
@@ -2240,6 +2297,7 @@ export function playScreen(host: HTMLElement,
     quickSearch?.abort(); quickSearch = null;
     quickPending?.abort.abort();
     if (quickTouch !== null) { clearInterval(quickTouch); quickTouch = null; }
+    if (busyClock !== null) { clearInterval(busyClock); busyClock = null; }
     const quickPartner = match?.quick?.partner ?? quickPending?.found.partner;
     if (quickPartner) { void endMatch(quickPartner); lobby?.closeMatch(quickPartner); }
     quickPending = null;
