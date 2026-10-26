@@ -183,12 +183,20 @@ console.log("\nthe buttons that change shared state, and the ones that do not");
         game.children.includes(results), true);
   game.removeChild(results);
 
+  // The map's way back names itself too, so a page can send it somewhere else
+  // (the play screen sends it to its Local Play cards). Claimed, it goes
+  // nowhere by itself; unclaimed, it is the title screen as it always was.
   seen.length = 0;
   press(game.m_mainMenu.BackToIntro);
   step(20);
-  check("while the intro button is nobody else's business", seen, []);
-  check("and simply worked", symbols(), ["IntroMenu"]);
+  check("the map's way back names itself", seen, [{ kind: "back" }]);
+  check("and, claimed, goes nowhere by itself", symbols(), ["MainMenu"]);
   claim();
+  const pass = shell.onIntent(() => false);
+  press(game.m_mainMenu.BackToIntro);
+  step(20);
+  check("unclaimed, it simply works", symbols(), ["IntroMenu"]);
+  pass();
 }
 
 

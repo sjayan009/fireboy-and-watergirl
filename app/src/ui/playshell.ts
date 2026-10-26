@@ -87,8 +87,7 @@ export class PlayShell {
         // without reading the rest. A tab of its own keeps the game here.
         el("section", { class: "menu-group menu-support" },
           el("a", { class: "secondary", href: "/support-ticket", target: "_blank", rel: "noopener" },
-            "Contact Support"),
-          el("p", { class: "note" }, "Opens in a new tab. Screenshots welcome.")),
+            "Contact Support")),
         sessionActions,
         el("section", { class: "menu-group" }, el("h3", {}, "Game Display"), glowControl.root),
         el("section", { class: "menu-group" }, el("h3", {}, "At Your Fingertips"),
