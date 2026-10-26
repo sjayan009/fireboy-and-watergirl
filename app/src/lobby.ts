@@ -535,6 +535,8 @@ export class Lobby {
 
   /** Join the pair topic the matcher handed out, and list the partner for the match. */
   async openMatch(m: { partner: string; username: string; topic: string }, signal?: AbortSignal): Promise<void> {
+    // A friend Quick Match found is already in the lobby on this same topic.
+    if (this.channels.has(m.partner) && this.friends.some(f => f.id === m.partner && !f.stranger)) return;
     const friend: FriendState = {
       id: m.partner, username: m.username, status: "accepted", theirMove: false, ourMove: false,
       blockedByMe: false, activity: null, connection: "connecting", stranger: true,

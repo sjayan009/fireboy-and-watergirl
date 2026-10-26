@@ -15,7 +15,7 @@ export function glowSwitch(): { root: HTMLElement; destroy(): void } {
     on(window, PRESENTATION_CHANGED, e => sync((e as CustomEvent<PresentationPreferences>).detail)),
   ];
   const root = el("div", { class: "switch-row" },
-    el("span", { class: "switch-text" }, el("span", { id: "glow-label" }, "Stage glow"),
-      el("small", {}, "A soft fire-and-water light at the sides of the game")), button);
+    el("span", { class: "switch-text" }, el("span", { id: "glow-label" }, "Stage Glow"),
+      el("small", {}, "Try it out!")), button);
   return { root, destroy: () => offs.forEach(off => off()) };
 }

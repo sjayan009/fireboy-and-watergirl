@@ -1077,6 +1077,13 @@ try {
     const started = await until(() => window.__fbwg.view.session.running,
                                 (both) => both[0] && both[1]);
     check("and bob's pick starts it for both", started !== null, true);
+    // The pick was handed over, so for alice this level arrived from bob. It
+    // used to draw over her map, crystals and paths showing through.
+    check("with no map left under it on either side",
+          (await Promise.all([a, b].map(onScreen))).map((s) => s.maps), [0, 0]);
+    check("and the level's own art prepared on both",
+          await Promise.all([a, b].map((p) => p.evaluate(() => window.__fbwg.view.levelAssetsFor))),
+          ["adventure-1", "adventure-1"]);
     check("and they are playing it together", (await agree(40)) !== null, true);
   }
 

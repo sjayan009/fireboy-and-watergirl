@@ -110,7 +110,23 @@ for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
       const v = window.__fbwg.view;
       v.shell.pointerDown(v.game.m_introMenu.Buttons.Starter); v.shell.pointerUp();
     });
+    // Play asks how first, in two cards, before the map.
+    await page.waitForSelector(".mc-screen:not([hidden])");
+    const titles = () => page.locator(".mc-card .mc-title").allTextContents();
+    assert.deepEqual(await titles(), ["Local Play", "Online Play"], "Play offers local and online");
+    assert.equal(await page.evaluate(() => window.__fbwg.view.game.m_introMenu.Buttons.visible), false, "with the title menu out of the way");
+    assert.equal(await page.locator(".mc-card[data-selected]").count(), 1, "and exactly one card ringed");
+    await page.locator(".mc-card", { hasText: "Online Play" }).click();
+    assert.deepEqual(await titles(), ["Quick Match", "Friends"]);
+    assert.equal(await page.locator(".mc-card .mc-sub").first().textContent(), "Needs a free account", "a guest is told online needs an account");
+    await page.locator(".mc-back").click();
+    await page.locator(".mc-card", { hasText: "Local Play" }).click();
+    assert.deepEqual(await titles(), ["Solo + AI", "Two Players"]);
+    assert.equal(await page.locator(".mc-card[aria-disabled]").textContent(), "Solo + AIWith a robot buddy · soon", "the bot is not playable yet");
+    assert.equal(await page.locator(".mc-card[data-selected] .mc-title").textContent(), "Two Players", "the ring starts on what can be chosen");
+    await page.locator(".mc-card", { hasText: "Two Players" }).click();
     await page.waitForFunction(() => window.__fbwg.view.game.m_mainMenu?.b_1_1);
+    assert.equal(await page.locator(".mc-screen").isHidden(), true, "and the map is where Two Players goes");
     await page.evaluate(() => {
       const v = window.__fbwg.view;
       v.shell.pointerDown(v.game.m_mainMenu.b_1_1); v.shell.pointerUp();
