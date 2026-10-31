@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 
+import map_back as MB
 import text_masks as TM
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -438,6 +439,8 @@ def main():
     export_sounds(ffdec)
     export_fonts(ffdec)
     export_button_parts(ffdec)
+    # The map's Main Menu reads Back, art and all. See map_back.py.
+    MB.apply()
 
     withkids = sum(1 for v in manifest.values()
                    if any(g["children"] for g in v["geom"]))

@@ -225,7 +225,9 @@ try {
   console.log("\nhover and press change the art");
   // Not a tint we invented: the SWF's own over state places a button's label
   // twice so it reads brighter, or swaps in a different label character
-  // entirely, and the down state shrinks it.
+  // entirely, and the down state shrinks it. The map's own button now reads
+  // Back and is always lit, so the states are drawn from DefineButton 635's
+  // "Main Menu" art (the pause tray's End Game) at the same spot.
   const artDiff = await page.evaluate(async () => {
     const D = window.__debug, g = window.game;
     const btn = g.m_mainMenu && g.m_mainMenu.BackToIntro;
@@ -238,7 +240,9 @@ try {
     const h = Math.max(8, Math.min(60, Math.round(hit.box.h)));
     const x = Math.max(0, Math.min(640 - w, Math.round(cx - w / 2)));
     const y = Math.max(0, Math.min(480 - h, Math.round(cy - h / 2)));
-    const grab = async (state) => {
+    const back = btn.spriteId;
+    const grab = async (state, art = 635) => {
+      btn.spriteId = art;
       btn.__btnState = state;
       for (let i = 0; i < 40; i++) {
         D.render();
@@ -251,6 +255,8 @@ try {
     const up = await grab("up");
     const over = await grab("over");
     const down = await grab("down");
+    const backUp = await grab("up", back);
+    const backOver = await grab("over", back);
     btn.__btnState = "up";
     D.render();
     const diff = (a, b) => {
@@ -261,10 +267,11 @@ try {
       }
       return n;
     };
-    return { overVsUp: diff(up, over), downVsUp: diff(up, down) };
+    return { overVsUp: diff(up, over), downVsUp: diff(up, down), back: diff(backUp, backOver) };
   });
   check("hovering changes the button art", artDiff.overVsUp > 100, true);
   check("pressing changes it again", artDiff.downVsUp > 100, true);
+  check("but the map's Back is already lit", artDiff.back, 0);
 
   console.log("\nhovering");
   const at = await locate("b_1_1");
