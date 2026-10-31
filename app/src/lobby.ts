@@ -603,6 +603,8 @@ export class Lobby {
    */
   async invite(friendId: string, o: {
     mode: string; num: number; iAmFireboy: boolean;
+    /** Start on the map with no level picked; mode and num are then a placeholder. */
+    between?: boolean;
     onProgress?: (what: string) => void;
     /** Abort and withdraw the invitation, at any point up to the first frame. */
     signal?: AbortSignal;
@@ -614,6 +616,7 @@ export class Lobby {
       mode: o.mode, num: o.num,
       fireboy: o.iAmFireboy ? this.me.userId : friendId,
       from: this.me.userId,
+      ...(o.between ? { between: true } : {}),
     }, false, o);
   }
 

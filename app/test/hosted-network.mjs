@@ -147,6 +147,16 @@ export async function pairPages(a, b, alice, bob) {
   await a.click(".banner button:has-text('Send invite')");
   await b.waitForSelector(".banner:has-text('wants to play')", { timeout: 30000 });
   await b.click(".banner button:has-text('Accept')");
+  // The pair land on the map; the inviter picks Adventure 1.
+  await a.waitForFunction(() => {
+    const v = window.__fbwg?.view;
+    return v?.session && v.sprites?.buttonBoxes(v.game).some((h) => h.node === v.game.m_mainMenu?.b_1_1);
+  }, null, { timeout: 60000 });
+  await a.evaluate(() => {
+    const v = window.__fbwg.view;
+    const box = v.sprites.buttonBoxes(v.game).find((h) => h.node === v.game.m_mainMenu.b_1_1);
+    v.shell.pointerDown(box.node); v.shell.pointerUp();
+  });
   for (const page of [a, b]) {
     await page.waitForFunction(() =>
       window.__fbwg?.view.session?.running && window.__fbwg.view.level ||
