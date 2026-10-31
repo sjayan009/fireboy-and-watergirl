@@ -1601,6 +1601,15 @@ export function playScreen(host: HTMLElement,
     if (pending) {
       // The lower account id keeps its outbound offer; both peers make the same decision.
       if (pending.friendId !== from.id || auth().user!.id < from.id || pending.session !== null) {
+    // A newer invitation from the friend whose offer is still on screen, not
+    // yet answered, replaces it: they gave up on that one, and its cancel may
+    // never have reached this tab. It used to be declined, so a banner left up
+    // turned away every invitation they sent after it.
+    if (pending && pending.session !== null && pending.friendId === from.id && flow.state === "accepting") {
+      flow.cancel();
+      pending = null;
+      void progress.release();
+    }
         lobby?.decline(invite); return;
       }
       flow.cancel();
