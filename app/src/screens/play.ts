@@ -5,9 +5,9 @@
  * 640x480 stage scaled by CSS, exactly as the 2009 SWF was, and the engine
  * neither knows nor cares how big it is drawn.
  *
- * The FIRST level is chosen here rather than on the game's own map, because
- * before a session exists there is nowhere else the pair could agree. Every
- * level after it is chosen on the map, by the person who sent the invitation:
+ * A friend's invitation carries no level: the pair connect first and land on
+ * the game's own map together (Quick Match still starts on Adventure 1). Every
+ * level is chosen on the map, by the person who sent the invitation:
  * between levels both maps are live and local, and without a single decider two
  * people clicking different nodes at the same moment would each start their own
  * and there would be no way back.
@@ -63,12 +63,6 @@ import type * as Online from "../online.js";
 
 const MUTE_KEY = "fbwg.muted";
 
-/** The 32 levels, as the map numbers them. */
-const MODES: [string, string, number][] = [
-  ["adventure", "Adventure", 17],
-  ["puzzle", "Puzzle", 9],
-  ["speed", "Speed", 6],
-];
 
 /**
  * What a banner message is ABOUT, so it can be taken down when that stops
@@ -95,8 +89,10 @@ const MODES: [string, string, number][] = [
  *    it, it has done its job.
  *  * `session` and `art` never expire on their own. Somebody left, or the game
  *    is missing pieces -- the reader has to actually see those.
+ *  * `watch` is the partner asking to open the game to friends. It stays until
+ *    answered, and goes when the ask does (see `updateSharing`).
  */
-type NoticeKind = "stall" | "chooser" | "map" | "session" | "art" | "suspend";
+type NoticeKind = "stall" | "chooser" | "map" | "session" | "art" | "suspend" | "watch";
 
 /** Kinds a level starting makes untrue. */
 const BETWEEN_LEVELS: NoticeKind[] = ["map", "chooser", "suspend"];
@@ -807,19 +803,70 @@ export function playScreen(host: HTMLElement,
    * Open the game to friends, or close it again.
    *
    * Off by default and per match, so nothing is published unless somebody asks
-   * for it. Either player may flip it and both are told, because being watched
-   * is not a thing one of two people should be able to decide.
+   * for it. It needs both players: one asks, the other is shown the ask and
+   * answers it. Either one saying no -- declining, cancelling, or stopping a
+   * game already shared -- puts BOTH back to the start, so a later ask is asked
+   * again rather than riding on a yes the other gave to a previous one.
    */
-  share.addEventListener("click", () => {
+  share.addEventListener("click", () => setConsent(!consent?.consent));
+
+  function setConsent(on: boolean): void {
     if (!match || !lobby || !consent) return;
+    // Their yes outlives ours by a round trip; it is not a new ask.
+    if (!on) { muteAsk = true; muteTopic = null; }
     share.disabled = true;
-    void consent.set(!consent.consent).then(() => {
+    void consent.set(on).then(() => {
       share.disabled = false;
       if (match) lobby?.sharing(match.friend.id, { session: match.invite.session, on: consent?.consent ?? false });
     });
-  });
+  }
+
+  /** The partner's no reached us: take back our own yes, if we had one. */
+  function partnerSaidNo(): boolean {
+    if (!match || !consent?.consent) return false;
+    const who = match.friend.username;
+    const wasShared = sharing;
+    void consent.set(false).then(() => {
+      if (!wasShared && match) notice("session", `${who} would rather keep this game private.`);
+    });
+    return true;
+  }
+
+  /** The ask on screen, so it is shown once per ask and not every five seconds. */
+  let askedTopic: string | null = null;
+  let lastShared = false;
+  let partnerAsks = false;
+  /**
+   * We said no; whatever yes of theirs is still on the server is the old one.
+   * Held to the topic it was seen under: the feed is re-minted whenever either
+   * of them changes their answer, so a new topic is a new ask.
+   */
+  let muteAsk = false;
+  let muteTopic: string | null = null;
 
   function updateSharing(state: SharingState | null): void {
+    // They stopped a game that was being watched, and the message saying so
+    // was lost: the server shows it, so let go of our side as well.
+    const stopped = lastShared && !!state?.mine && !state.theirs;
+    lastShared = !!state?.shared;
+    if (muteAsk && state) {
+      if (!state.theirs || (muteTopic !== null && state.topic !== muteTopic)) muteAsk = false;
+      else muteTopic = state.topic;
+    }
+    partnerAsks = !!state?.theirs && !state.mine && !muteAsk;
+    if (stopped) queueMicrotask(partnerSaidNo);
+    if (partnerAsks && state) {
+      if (askedTopic !== state.topic && match) {
+        askedTopic = state.topic;
+        notice("watch", `${match.friend.username} wants to let friends watch this game.`,
+          el("button", { class: "primary small", onclick: () => { clearNotice("watch"); setConsent(true); } }, "Allow"),
+          el("button", { class: "ghost", onclick: () => {
+            clearNotice("watch");
+            muteAsk = true; muteTopic = askedTopic; partnerAsks = false; showShare();
+            if (match) lobby?.sharing(match.friend.id, { session: match.invite.session, on: false });
+          } }, "Not now"));
+      }
+    } else clearNotice("watch");
     const generation = ++watchGeneration;
     if (watchTopic !== state?.topic || !state?.shared) {
       if (sharing) setSharing(false);
@@ -891,7 +938,8 @@ export function playScreen(host: HTMLElement,
     // Gated on the match and not on the mirror. Only the inviter carries the
     // feed, but being watched is not one of two people's decision to make: the
     // other player flips the same switch and both are told.
-    set(share, consent?.consent ? (sharing ? "Stop letting friends watch" : "Cancel sharing request") : "Let friends watch",
+    set(share, consent?.consent ? (sharing ? "Stop letting friends watch" : "Cancel sharing request")
+        : partnerAsks ? "Allow friends to watch" : "Let friends watch",
         match === null || !!match.quick);
   }
 
@@ -1340,7 +1388,9 @@ export function playScreen(host: HTMLElement,
       if (match && match.invite.session === h.session && match.invite.attempt === h.attempt && h.from === match.friend.id && match.chooser === h.from && h.chooser === auth().user?.id && !view.session?.running) setChooser(h.chooser);
     }));
     unsubscribe.push(l.onSharing((x) => {
-      if (match && match.invite.session === x.session && x.from === match.friend.id) void consent?.refresh();
+      if (match && match.invite.session === x.session && x.from === match.friend.id) {
+        if (x.on || !partnerSaidNo()) void consent?.refresh();
+      }
     }));
     unsubscribe.push(l.onShowing((x) => {
       if (x.on) showing.set(x.topic, { ...x, heard: Date.now() });
@@ -1453,33 +1503,21 @@ export function playScreen(host: HTMLElement,
     }, 260);
   }
 
-  /** Choose the level and the roles, then send the invitation. */
+  /**
+   * Choose the roles, then send the invitation. The level is picked on the map
+   * once the two of you are connected, by the inviter (see `begin`).
+   */
   function showInviteForm(friend: FriendState, slot: HTMLElement): void {
     if (match || pending) return;
     flow.set("configuring");
     lobby?.prioritize(friend.id);
     shell.placeSetup(slot);
     const selection = loadSelection(auth().user!.id, friend.id);
-    const mode = el("select", { class: "pick" },
-      ...MODES.map(([value, label]) => el("option", { value }, label)));
-    const num = el("select", { class: "pick" });
     const roles = el("select", { class: "pick" },
       el("option", { value: "me" }, `${auth().profile?.username} is Fireboy`),
       el("option", { value: "them" }, `${friend.username} is Fireboy`));
-    mode.setAttribute("aria-label", "Game mode");
-    num.setAttribute("aria-label", "Level");
     roles.setAttribute("aria-label", "Characters");
-    mode.value = selection.mode;
     roles.value = selection.iAmFireboy ? "me" : "them";
-
-    const fillNumbers = () => {
-      const count = MODES.find(([v]) => v === mode.value)?.[2] ?? 1;
-      num.replaceChildren(...Array.from({ length: count }, (_, i) =>
-        el("option", { value: String(i + 1) }, `Level ${i + 1}`)));
-    };
-    fillNumbers();
-    num.value = String(selection.num);
-    mode.addEventListener("change", fillNumbers);
 
     const say = el("span", { class: "dim" });
     const go = el("button", { class: "primary small" }, "Send invite");
@@ -1502,11 +1540,9 @@ export function playScreen(host: HTMLElement,
     takeBanner();
     banner.append(
       el("span", {}, `Invite ${friend.username}:`),
-      el("label", { class: "setup-field" }, "Mode", mode),
-      el("label", { class: "setup-field" }, "Level", num),
       el("label", { class: "setup-field" }, "Characters", roles), go, say,
       stop);
-    mode.focus({ preventScroll: true });
+    roles.focus({ preventScroll: true });
     requestAnimationFrame(() => { if (!gone && slot.isConnected) banner.scrollIntoView({ block: "nearest" }); });
 
     on(go, "click", async () => {
@@ -1520,13 +1556,11 @@ export function playScreen(host: HTMLElement,
         if (!await lease?.acquire()) throw new Error("Playing in another tab. Use Take over here to continue.");
         if (!flow.owns(abort) || gone) { lease?.release(); return; }
         say.textContent = "loading your progress…";
-        const preparation = Promise.all([progress.adopt(friend.id, abort.signal),
-          view.prepareLevel(mode.value, Number(num.value), abort.signal)]).then(() => {});
+        const preparation = progress.adopt(friend.id, abort.signal);
         void preparation.catch(() => {});
-        try { localStorage.setItem(selectionKey(auth().user!.id, friend.id), JSON.stringify({ mode: mode.value, num: Number(num.value), iAmFireboy: roles.value === "me" })); } catch { /* optional preference */ }
+        try { localStorage.setItem(selectionKey(auth().user!.id, friend.id), JSON.stringify({ ...selection, iAmFireboy: roles.value === "me" })); } catch { /* optional preference */ }
         const ready = await lobby!.invite(friend.id, {
-          mode: mode.value,
-          num: Number(num.value),
+          mode: "adventure", num: 1, between: true,
           iAmFireboy: roles.value === "me",
           signal: abort.signal,
           beforeReady: () => preparation,
@@ -1607,7 +1641,8 @@ export function playScreen(host: HTMLElement,
     takeBanner();
     banner.append(
       el("span", {},
-        `${from.username} wants to play ${invite.mode} ${invite.num}. ` +
+        `${from.username} wants to play` +
+        (invite.between ? ". " : ` ${invite.mode} ${invite.num}. `) +
         `You would be ${mine ? "Fireboy" : "Watergirl"}.`),
       yes, say, no);
 
@@ -1628,7 +1663,7 @@ export function playScreen(host: HTMLElement,
         // improvement, and it has to be the PAIR's best it compares against.
         say.textContent = "loading your progress…";
         const preparation = Promise.all([progress.adopt(from.id, abort.signal),
-          view.prepareLevel(invite.mode, invite.num, abort.signal)]).then(() => {});
+          invite.between ? null : view.prepareLevel(invite.mode, invite.num, abort.signal)]).then(() => {});
         void preparation.catch(() => {});
         flow.set("connecting");
         const ready = await lobby!.join(invite, {
@@ -1763,6 +1798,9 @@ export function playScreen(host: HTMLElement,
       onLinkDown: (why) => lost(why),
     });
     if (ready.host && !invite.between) session.requestStart(ready.mode, ready.num);
+    // A fresh invitation starts on the map, where the inviter picks; a no-op
+    // when a rebuilt link finds the pair already there.
+    if (invite.between) view.openMap();
     showShare();
     canvas.focus();
     drawPanel(lobby?.list ?? []);
@@ -2161,6 +2199,7 @@ export function playScreen(host: HTMLElement,
    */
   function endSession(why: string): void {
     consent?.close(); consent = null; watchGeneration++;
+    askedTopic = muteTopic = null; lastShared = partnerAsks = muteAsk = false; clearNotice("watch");
     lease?.release();
     if (departure !== null) { clearTimeout(departure); departure = null; }
     if (!match) return;

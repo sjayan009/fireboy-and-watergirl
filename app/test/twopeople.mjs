@@ -482,6 +482,16 @@ try {
     v.shell.pointerUp();
   }, path);
 
+  /** A fresh invitation lands both on the map; wait for it to settle, then pick. */
+  const pickOnMap = async (page, path = "m_mainMenu.b_1_1") => {
+    await page.waitForFunction((where) => {
+      const v = window.__fbwg.view;
+      const want = where.split(".").reduce((o, k) => o && o[k], v.game);
+      return !!want && !!v.sprites?.buttonBoxes(v.game).some((h) => h.node === want);
+    }, path, { timeout: 30000 });
+    await clickInGame(page, path);
+  };
+
   /**
    * Press one of the play screen's actions, wherever the shell keeps them.
    *
@@ -690,7 +700,7 @@ try {
   await a.waitForSelector(".banner select");
   // Alice deliberately makes BOB Fireboy, so the test proves the assignment
   // travels rather than each peer picking for itself.
-  await a.selectOption(".banner select >> nth=2", "them");
+  await a.selectOption(".banner select", "them");
   await a.click(".banner button:has-text('Send invite')");
 
   await b.waitForSelector(".banner:has-text('wants to play')", { timeout: 30000 });
@@ -699,7 +709,7 @@ try {
         /would be Fireboy/.test(offer), true);
   await b.click(".banner button:has-text('Accept')");
 
-  console.log("\nthey connect and start the same level");
+  console.log("\nthey connect on the map, and alice picks the level");
   for (const p of [a, b]) {
     await p.waitForFunction("window.__fbwg && window.__fbwg.view.session",
                             null, { timeout: 60000 });
@@ -707,6 +717,13 @@ try {
   const slots = await Promise.all([a, b].map((p) =>
     p.evaluate(() => window.__fbwg.view.slot)));
   check("bob took Fireboy, alice Watergirl", slots, [1, 0]);
+  check("no level has started yet",
+        await Promise.all([a, b].map((p) =>
+          p.evaluate(() => window.__fbwg.view.session.running))), [false, false]);
+  check("and alice, who invited, holds the pick",
+        await Promise.all([a, b].map((p) =>
+          p.evaluate(() => window.__fbwg.view.canChooseLevel))), [true, false]);
+  await pickOnMap(a);
 
   const kinds = await Promise.all([a, b].map((p) =>
     p.locator(".status").innerText()));
@@ -1214,7 +1231,11 @@ try {
     check("and there is still nothing for carol to join",
           await c.locator(".panel button.watch").count(), 0);
 
-    await menuAction(b, "Let friends watch");
+    // Bob is asked, rather than having to notice a label changed in a menu.
+    await b.waitForSelector(".banner:has-text('wants to let friends watch')", { timeout: 15000 });
+    check("bob is shown alice's ask, and his switch answers it",
+          (await shareLabels(b)).some((t) => t === "Allow friends to watch"), true);
+    await b.click(".banner button:has-text('Allow')");
     let offered = false;
     for (let i = 0; i < 60 && !offered; i++) {
       await c.waitForTimeout(500);
@@ -1342,6 +1363,26 @@ try {
       await c.waitForTimeout(250);
     }
     check("and closing it takes the row away", gone, true);
+    // Either one stopping is a no from both: the next ask is asked again.
+    let reset = null;
+    for (let i = 0; i < 40; i++) {
+      reset = await Promise.all([a, b].map(async (p) =>
+        (await shareLabels(p)).find((t) => /friends watch|sharing request/.test(t))));
+      if (reset.every((t) => t === "Let friends watch")) break;
+      await a.waitForTimeout(250);
+    }
+    check("and both switches are back where they started", reset,
+          ["Let friends watch", "Let friends watch"]);
+
+    // And "not now" is an answer the asker hears.
+    await menuAction(b, "Let friends watch");
+    await a.waitForSelector(".banner:has-text('wants to let friends watch')", { timeout: 15000 });
+    await a.click(".banner button:has-text('Not now')");
+    await b.waitForSelector(".banner:has-text('would rather keep this game private')", { timeout: 15000 });
+    await b.waitForFunction(() => [...document.querySelectorAll('.menu-actions button')]
+      .some(button => button.textContent === 'Let friends watch'), null, { timeout: 15000 });
+    check("a declined ask puts the asker back too", true, true);
+    await b.click(".banner button:has-text('Dismiss')");
 
     // Carol is done. Closed here rather than at the end, because everything
     // below is about two people on the slowest path there is -- a relayed pair
@@ -1560,6 +1601,7 @@ try {
     })));
     check("both fell back to the relay", await relayKinds(), [true, true]);
 
+    await pickOnMap(a);
     await Promise.all([a, b].map((p) => p.waitForFunction(
       "window.__fbwg.view.level !== null", null, { timeout: 40000 })));
     await a.click("#stage");
