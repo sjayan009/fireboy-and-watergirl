@@ -1518,6 +1518,11 @@ export function playScreen(host: HTMLElement,
       el("option", { value: "them" }, `${friend.username} is Fireboy`));
     roles.setAttribute("aria-label", "Characters");
     roles.value = selection.iAmFireboy ? "me" : "them";
+    const remember = () => {
+      try { localStorage.setItem(selectionKey(auth().user!.id, friend.id), JSON.stringify({ ...selection, iAmFireboy: roles.value === "me" })); } catch { /* optional preference */ }
+    };
+    // Kept as soon as it is chosen, so a refresh before Send does not undo it.
+    roles.addEventListener("change", remember);
 
     const say = el("span", { class: "dim" });
     const go = el("button", { class: "primary small" }, "Send invite");
@@ -1558,7 +1563,7 @@ export function playScreen(host: HTMLElement,
         say.textContent = "loading your progress…";
         const preparation = progress.adopt(friend.id, abort.signal);
         void preparation.catch(() => {});
-        try { localStorage.setItem(selectionKey(auth().user!.id, friend.id), JSON.stringify({ ...selection, iAmFireboy: roles.value === "me" })); } catch { /* optional preference */ }
+        remember();
         const ready = await lobby!.invite(friend.id, {
           mode: "adventure", num: 1, between: true,
           iAmFireboy: roles.value === "me",
@@ -1596,11 +1601,6 @@ export function playScreen(host: HTMLElement,
       return;
     }
     if (match) return;                 // already playing
-    // One at a time. Two people inviting each other in the same breath used to
-    // replace one banner with the other and start two games.
-    if (pending) {
-      // The lower account id keeps its outbound offer; both peers make the same decision.
-      if (pending.friendId !== from.id || auth().user!.id < from.id || pending.session !== null) {
     // A newer invitation from the friend whose offer is still on screen, not
     // yet answered, replaces it: they gave up on that one, and its cancel may
     // never have reached this tab. It used to be declined, so a banner left up
@@ -1610,6 +1610,11 @@ export function playScreen(host: HTMLElement,
       pending = null;
       void progress.release();
     }
+    // One at a time. Two people inviting each other in the same breath used to
+    // replace one banner with the other and start two games.
+    if (pending) {
+      // The lower account id keeps its outbound offer; both peers make the same decision.
+      if (pending.friendId !== from.id || auth().user!.id < from.id || pending.session !== null) {
         lobby?.decline(invite); return;
       }
       flow.cancel();
