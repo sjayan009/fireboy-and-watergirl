@@ -127,7 +127,10 @@ export class PlayShell {
     this.root.append(
       el("header", { class: "play-toolbar" },
         identity, this.friendButton, this.boardButton, this.menuButton, options.primaryAction),
-      el("div", { class: "play-workspace" }, this.viewport, this.drawer, this.notices),
+      // The page's one main landmark and its one h1, unseen: the toolbar already
+      // says the game's name, in its own lettering.
+      el("main", { class: "play-workspace" }, el("h1", { class: "sr-only" }, "Fireboy & Watergirl"),
+        this.viewport, this.drawer, this.notices),
       // Sound and fullscreen change the screen, not the session, so they sit
       // under the screen they change, opposite "Saved": the footer is the
       // game's own status bar, the toolbar is for the social panels.

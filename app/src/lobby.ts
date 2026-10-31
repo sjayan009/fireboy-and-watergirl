@@ -742,6 +742,11 @@ export class Lobby {
         slot: (fireboy === this.me.userId ? 0 : 1) as Slot,
         mode: invite.mode, num: invite.num, host: true, friend, invite,
       };
+    } catch (e) {
+      // However it ended -- a no, a timeout, a lost link -- another tab of theirs
+      // may have said yes and be connecting. Withdrawing is what stops it.
+      if (!o.signal?.aborted) channel.cancel({ session, attempt: invite.attempt, from: this.me.userId });
+      throw e;
     } finally {
       attempt.abort();
       o.signal?.removeEventListener("abort", abortLink);
