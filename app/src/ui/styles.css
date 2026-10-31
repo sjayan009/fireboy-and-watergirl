@@ -653,7 +653,8 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
 
 /* ---- Quick Match ----------------------------------------------------------- */
 .qm { scroll-margin-top:62px; margin-top:18px; padding:16px; background:#24201a; border:1px solid var(--edge); border-radius:14px; box-shadow:inset 0 1px 0 #ffffff09; overflow:hidden; }
-.qm h4 { margin:0; font:600 1rem/1.3 var(--heading); letter-spacing:-.006em; }
+/* An h3 under the drawer's h2; block, so the friends panel's flex h3 does not reach it. */
+.qm h3 { display:block; margin:0; font:600 1rem/1.3 var(--heading); letter-spacing:-.006em; }
 .qm-sub { margin:4px 0 0; color:var(--dim); font-size:.8125rem; line-height:1.4; }
 .qm-note { margin-top:10px; }
 .qm-go { width:100%; min-height:44px; margin-top:12px; border:0; border-radius:10px; background:var(--water); color:#0b2026; font-weight:700; font-size:.9375rem; box-shadow:inset 0 1px 0 #ffffff66, 0 2px 0 #2c6572; transition:transform 120ms var(--ease), background-color var(--press); }
@@ -664,7 +665,7 @@ kbd { padding:4px 8px; border:1px solid #5b5346; border-bottom-width:3px; border
 .qm-words { transition:opacity 160ms var(--ease), filter 160ms var(--ease); }
 .qm-words[data-out] { opacity:0; filter:blur(2px); }
 .qm-headline { display:flex; align-items:baseline; gap:10px; }
-.qm-headline h4 { flex:1; min-width:0; }
+.qm-headline h3 { flex:1; min-width:0; }
 .qm-pct { color:var(--dim); font-size:.75rem; font-variant-numeric:tabular-nums; }
 .qm-bar { position:relative; height:6px; margin-top:10px; border-radius:3px; background:#2f2a22; overflow:hidden; }
 .qm-bar > i { position:absolute; inset:0; border-radius:3px; transform-origin:0 50%; transform:scaleX(0); background:linear-gradient(90deg, var(--fire), var(--water)); }

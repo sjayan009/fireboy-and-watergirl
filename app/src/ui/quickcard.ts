@@ -151,7 +151,7 @@ export class QuickCard {
     this.go = el("button", { type: "button", class: "qm-go", onclick: () => o.onStart(this.role) }, "Quick Match");
     this.note = el("p", { class: "note qm-note", role: "status", hidden: true });
     this.idleView = el("div", { class: "qm-view" },
-      el("h4", {}, "Quick Match"),
+      el("h3", {}, "Quick Match"),
       el("p", { class: "qm-sub" }, "Play with someone new who is online now."),
       seg, this.go, this.note);
 
@@ -168,7 +168,7 @@ export class QuickCard {
     this.fire = new Orbit(this.comets[0], 2.3, 1);
     this.water = new Orbit(this.comets[1], 3.1, -1);
 
-    this.title = el("h4", {}, "Finding a partner");
+    this.title = el("h3", {}, "Finding a partner");
     this.pct = el("span", { class: "qm-pct" }, "0%");
     this.fill = el("i");
     this.bar = el("div", { class: "qm-bar", role: "progressbar", "aria-label": "Search time", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": "0" },
