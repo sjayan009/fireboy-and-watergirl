@@ -196,6 +196,58 @@ potential field, a curriculum that starts further back along a known-good
 trajectory, and Go-Explore-style resets to states from successful runs, which
 `Snapshot.restore()` makes trivial.
 
+### Optional experiment: weights written by an LLM
+
+[Sparks of Weight-Space Programming](https://rikiyat.github.io/blog/weight-space-programming/)
+(Takehi, Teoh, Zhang and Khattab, MIT CSAIL, November 2026) reports a frontier
+LLM reading and writing network weights directly, with no gradients. Two of
+its results line up with problems this bot will have:
+
+- **Fixing a policy stuck in a local minimum.** A PPO car policy in Kinetix
+  never learned to back up before a ramp. Given the weights, the scene and
+  one failed episode, the LLM edited 3.5% of the weights in one reply, and the
+  car succeeded in all 1,024 episodes. The edit added a small path that
+  handles the opening move and then switches off. Lever levels have the same
+  shape: the right first move earns nothing until much later.
+- **Writing a policy from scratch.** Its zero-shot MinAtar networks beat PPO
+  trained for 100M steps in all three games. Against PPO at 500M steps they
+  won Breakout, a game with a formula for the answer, and lost Seaquest and
+  Asterix.
+
+Why it stays off the main path:
+
+- The method's advantage is needing no rollouts. Here rollouts are almost
+  free (section 2), so it competes with PPO where PPO is strongest.
+- The post compares against PPO from scratch, not against distilling a
+  hand-written program into the network. That is behaviour cloning from the
+  scripted bot (steps 1 and 2 above), and it needs no LLM.
+- In the post's own results, edits removed something blocking an ability the
+  model already had, but could not add a missing one. It will not teach
+  coordination.
+- One model (GPT-6 Astra), one blog post, no released code. Other models are
+  untested.
+
+Two experiments, both after single-character PPO exists (build order step 3):
+
+1. **Debugging a stalled level.** When PPO settles into a local minimum on a
+   lever level, give an LLM the policy weights, the level's entity JSON and a
+   failed replay. Ask it to explain the failure, then make the smallest edit
+   that fixes it. Score the edited model on the offline suite like any other.
+   When the edit fails, the explanation is still a diagnosis to check against
+   the failure causes in section 12.
+2. **Warm starts.** On two or three levels, start PPO from random weights,
+   from a clone of the scripted bot, and from LLM-written weights of the same
+   architecture. Compare the steps each needs to beat the scripted baseline,
+   over several seeds with confidence intervals (section 7). Expect the clone
+   to win. A physics platformer with two characters is still a new test of
+   the method, and a write-up fits Stage 9.
+
+The post put up to 171,664 weights into the prompt as text. Above that, it
+gave the LLM a Python sandbox over the weight tensors, as it did for its
+1.5M-weight Go network. In both experiments the LLM stays out of the 26 Hz
+loop (section 13), and an edited model passes the same eval and CI gate as a
+trained one.
+
 ---
 
 ## 6. Being a good partner
