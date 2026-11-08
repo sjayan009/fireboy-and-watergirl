@@ -20,14 +20,19 @@ import numpy as np
 
 ROWS, COLS = 29, 39
 LEVER_SLOTS = PUSHER_SLOTS = 12
-STATE_FLOATS = 24 + LEVER_SLOTS + PUSHER_SLOTS
+MOVER_SLOTS = 24
+MOVER_FIELDS = ("x", "y", "angle", "vx", "vy", "spin")
+STATE_FLOATS = 25 + LEVER_SLOTS + PUSHER_SLOTS + MOVER_SLOTS * len(MOVER_FIELDS)
 STATE_BYTES = STATE_FLOATS * 4 + 4 + ROWS * COLS
 OP_RESET, OP_STEP, OP_INFO = 1, 2, 3
 DYN_MOVING, DYN_RED, DYN_BLUE, DYN_GREEN = 1, 2, 4, 8
 DYN_WIND_UP, DYN_WIND_RIGHT, DYN_WIND_DOWN, DYN_WIND_LEFT = 16, 32, 64, 128
 
 # Order of the floats in a STATE record. Must equal STATE_NAMES in
-# engine/src/bot/envstate.ts, which fills them; check_env.py checks.
+# engine/src/bot/envstate.ts, which fills them, and the constants above and
+# the hazard sets below must equal envstate.ts's; check_env.py checks. The
+# meanings are in envserver.ts's header. End an episode on "won", the game's
+# own end of a win; "complete" comes 34 frames later.
 STATE_FIELDS = (
     "fire_x", "fire_y", "fire_vx", "fire_vy",
     "water_x", "water_y", "water_vx", "water_vy",
@@ -35,9 +40,10 @@ STATE_FIELDS = (
     "dead_fire", "dead_water", "finish1", "finish2",
     "fire_door_open", "water_door_open",
     "red_count", "blue_count", "green_count",
-    "timecount", "complete", "game_over",
+    "timecount", "complete", "game_over", "won",
     *(f"lever{i}" for i in range(LEVER_SLOTS)),
     *(f"pusher{i}" for i in range(PUSHER_SLOTS)),
+    *(f"mover{i}_{f}" for i in range(MOVER_SLOTS) for f in MOVER_FIELDS),
 )
 
 # Tile codes in LevelArray.
@@ -51,12 +57,37 @@ WATER_HAZARDS = LAVA + GOO      # what kills Watergirl
 
 # Bump whenever CHANNELS, the vector, or their meaning changes. Every trained
 # model records the version it was trained on.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # timecount is divided by this in encode(). 150 s at the game's 26 frames a
 # second: the longest medal time (TimeTable) is 145 s, so an episode worth
 # finishing stays under 1.
 TIME_SCALE = 26 * 150
+
+# The medal times, copied from the Game constructor (game.ts): TimeTable[i] is
+# the A-grade time in seconds for map node i + 1, and TRANSLATION[i] names that
+# node "<mode>_<level>", mode 1 adventure, 2 puzzle, 3 speed. check_env.py
+# reads both from game.ts. Adventure and speed: one point for
+# graded_seconds(timecount at won) <= MEDAL_SECONDS, one for every red and blue
+# diamond; 2 points A, 1 B, 0 C. Puzzle ignores the time: A with the green
+# diamond, F without.
+TRANSLATION = (
+    "1_1", "1_2", "3_1", "1_3", "1_4", "3_2", "2_1", "1_5", "1_6", "1_7", "2_2", "3_3", "2_3",
+    "3_5", "1_13", "3_6", "2_4", "1_14", "1_16", "2_5", "1_15", "1_17", "2_6", "1_10", "1_11",
+    "3_4", "2_7", "1_12", "2_8", "1_8", "1_9", "2_9",
+)
+TIME_TABLE = (80, 60, 28, 50, 50, 20, 70, 70, 47, 60, 60, 40, 80, 33, 145, 60, 85, 75, 90, 120,
+              50, 100, 90, 80, 70, 21, 55, 48, 85, 55, 60, 90)
+MODES = {"1": "adventure", "2": "puzzle", "3": "speed"}
+MEDAL_SECONDS = {(MODES[n.split("_")[0]], int(n.split("_")[1])): t
+                 for n, t in zip(TRANSLATION, TIME_TABLE) if not n.startswith("2_")}
+
+
+def graded_seconds(timecount: float) -> int:
+    """The seconds the game grades a win at, from timecount once won is 1
+    (it stops there). Measured against the medal timer from any start clock."""
+    return (int(timecount) - 1) // 26
+
 
 # Channel order of the tile tensor. encode() must produce exactly these.
 CHANNELS = (
@@ -105,15 +136,21 @@ class EnvClient:
         self.proc = subprocess.Popen([node, str(SERVER), str(n), str(cache)],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 
-    def _call(self, payload: bytes) -> bytes:
-        """Send one framed request, return the reply payload. Done for you."""
+    def _call(self, payload: bytes, want: int) -> bytes:
+        """Send one framed request, return the reply payload, which must be
+        `want` bytes: a server built from other constants fails here, not as
+        misread floats."""
         self.proc.stdin.write(struct.pack("<I", len(payload)) + payload)
         self.proc.stdin.flush()
         head = self.proc.stdout.read(4)
         if len(head) < 4:
             raise RuntimeError("env server exited; run it by hand to see its error")
         (length,) = struct.unpack("<I", head)
-        return self.proc.stdout.read(length)
+        reply = self.proc.stdout.read(length)
+        if length != want or len(reply) != want:
+            raise RuntimeError(f"reply is {length} bytes ({len(reply)} read), want {want}; "
+                               "rebuild the server or update fbwg_env.py")
+        return reply
 
     @staticmethod
     def parse_state(buf: bytes, off: int = 0) -> State:
@@ -127,7 +164,8 @@ class EnvClient:
         """Start an episode. `delay` frames pass between sending a press and
         it taking effect; 0, the default, is Local Play."""
         m = mode.encode("ascii")
-        reply = self._call(struct.pack("<BHB", OP_RESET, env, len(m)) + m + bytes([num, delay]))
+        reply = self._call(struct.pack("<BHB", OP_RESET, env, len(m)) + m + bytes([num, delay]),
+                           STATE_BYTES)
         return self.parse_state(reply)
 
     def step(self, bits: list[int], repeat: int = 1) -> list[State]:
@@ -135,11 +173,11 @@ class EnvClient:
         8/16/32 Watergirl left/right/up."""
         if len(bits) != self.n:
             raise ValueError(f"{len(bits)} inputs for {self.n} envs")
-        reply = self._call(bytes([OP_STEP, repeat]) + bytes(bits))
+        reply = self._call(bytes([OP_STEP, repeat]) + bytes(bits), STATE_BYTES * self.n)
         return [self.parse_state(reply, i * STATE_BYTES) for i in range(self.n)]
 
     def info(self, env: int) -> LevelInfo:
-        reply = self._call(struct.pack("<BH", OP_INFO, env))
+        reply = self._call(struct.pack("<BH", OP_INFO, env), 2 * ROWS * COLS + 4)
         grid = np.frombuffer(reply, np.int8, ROWS * COLS).reshape(ROWS, COLS).copy()
         fr, fc, wr, wc = reply[ROWS * COLS:ROWS * COLS + 4]
         obstacles = np.frombuffer(reply, np.uint8, ROWS * COLS, ROWS * COLS + 4).reshape(ROWS, COLS) > 0
@@ -188,6 +226,10 @@ def bfs_field(grid: np.ndarray, door: tuple[int, int], hazards: tuple[int, ...],
     return np.where(dist >= 0, dist / far, 1.0).astype(np.float32)
 
 
+_X, _Y, _ANGLE = ([i for i, n in enumerate(STATE_FIELDS) if n.endswith(end)]
+                  for end in ("_x", "_y", "_angle"))
+
+
 def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
            bfs_water: np.ndarray) -> dict[str, np.ndarray]:
     """One observation.
@@ -197,9 +239,10 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
            info.obstacles; diamonds, moving and wind from state.dyn; doors
            are a single 1 at each door cell.
     bfs:   float32, (2, ROWS, COLS): fire then water.
-    vec:   float32, 1-D: state.vec with positions divided by COLS/ROWS and
+    vec:   float32, 1-D: state.vec with positions (characters' and movers')
+           divided by COLS/ROWS, mover angles wrapped and divided by pi, and
            timecount by TIME_SCALE, so everything is roughly in [-1, 1], then
-           sin and cos of timecount / 10.
+           sin and cos of (timecount + 1) / 10.
     """
     g, d = info.grid, state.dyn
     fire_door = np.zeros(g.shape, bool)
@@ -219,16 +262,17 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
         "wind_down": (d & DYN_WIND_DOWN) > 0, "wind_left": (d & DYN_WIND_LEFT) > 0,
     }
     vec = state.vec.astype(np.float32)
-    for name in ("fire_x", "water_x"):
-        vec[STATE_FIELDS.index(name)] /= COLS
-    for name in ("fire_y", "water_y"):
-        vec[STATE_FIELDS.index(name)] /= ROWS
+    vec[_X] /= COLS
+    vec[_Y] /= ROWS
+    vec[_ANGLE] = (vec[_ANGLE] + np.pi) % (2 * np.pi) / np.pi - 1
     t = float(state.vec[STATE_FIELDS.index("timecount")])
     vec[STATE_FIELDS.index("timecount")] /= TIME_SCALE
     # The fan-strength phase: every fan pushes with 20 * (sin(timecount / 10)
     # + 1) on top of its size (game.ts Update), so a jump through one depends
-    # on where in the cycle it is. Cos too, to tell rising from falling.
-    vec = np.append(vec, np.float32([math.sin(t / 10), math.cos(t / 10)]))
+    # on where in the cycle it is. The game adds 1 to timecount before the
+    # fans push, so the push the next action meets is at t + 1. Cos too, to
+    # tell rising from falling.
+    vec = np.append(vec, np.float32([math.sin((t + 1) / 10), math.cos((t + 1) / 10)]))
     return {
         "tiles": np.stack([planes[c] for c in CHANNELS]).astype(np.float32),
         "bfs": np.stack([bfs_fire, bfs_water]).astype(np.float32),

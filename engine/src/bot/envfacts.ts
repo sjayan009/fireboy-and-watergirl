@@ -1,16 +1,18 @@
 /**
  * The engine facts the training env assumes, checked on every level.
  *
- * bot/fbwg_env.py hard-codes which pools kill which character (the BFS walls),
- * and envserver.ts hard-codes which way each fan blows, what "level complete"
- * means, and what the grounded, jump-latch, door and diamond fields read.
- * Those come from reading game.ts; this runs the real engine to prove them,
- * by dropping characters where it matters. The field facts read the STATE
- * floats through envstate.ts's readState, the code that fills the wire, by
- * name, so a field computed wrong or wired to the wrong slot fails here:
+ * envstate.ts hard-codes which pools kill which character (the BFS walls),
+ * which way each fan blows, what winning means, and what the grounded,
+ * jump-latch, door, diamond, lever, button and mover fields read. Those come
+ * from reading game.ts; this runs the real engine to prove them, by dropping
+ * characters where it matters. The facts read the STATE floats and the dyn
+ * grid through envstate.ts's readState and readDyn, the code that fills the
+ * wire, by name, so a field computed wrong or wired to the wrong slot fails
+ * here:
  *
- *   - each character onto one cell of every pool tile code in the level: it
- *     dies exactly when the env's hazard sets say it should
+ *   - each character onto one cell of every pool tile code in the level: its
+ *     dead field reads 1 exactly when envstate's hazard sets say it should,
+ *     the other's stays 0, game_over follows, and won never does
  *   - settled at the spawn, both read grounded; dropped into open air, that
  *     character reads not grounded one frame later and the other still does
  *   - one character's Up held from the floor latches that character only, it
@@ -20,12 +22,19 @@
  *     neither door_open moves off 0
  *   - each character alone into its own door: its door_open climbs in steps
  *     of 1/21 to exactly 1, the other stays 0, and the level does not end
- *   - both into their own doors: both door_open reach 1, then complete
+ *   - both into their own doors: both door_open reach 1, won reads 1 in the
+ *     frame the level ends and not before, complete 34 frames later, and a
+ *     snapshot restore takes both back to 0
  *   - Fireboy onto a red diamond and Watergirl onto a blue one (adventure,
  *     speed), or either onto a green one (puzzle): that count, and only
  *     that one, reads 1
- *   - a character into each fan, on versus off: it is pushed the way
- *     DYN_WIND says the fan blows
+ *   - a character into each fan, on versus off: it is pushed the way the
+ *     wind bit readDyn paints for that fan says
+ *   - random play: a lever reads on exactly when the game lights it, and a
+ *     button reads pressed exactly when the game hides it
+ *   - a mover given a known pose and velocity reads exactly that in its slot,
+ *     and slots past the level's movers read 0
+ *   - settled at the spawn, the characters' cells are not painted moving
  *   - Fireboy dropped onto each column of the obstacle mask from just above
  *     its top cell, movers in the way removed: for 40 frames his shapes never
  *     cover an obstacle cell's centre, and with the obstacle bodies destroyed
@@ -38,9 +47,13 @@ import { level, tickClock } from "../game/game.js";
 import { hostLevel } from "../game/headless.js";
 import { SoundBus, advanceTree, enterFrameTree } from "../flash/flash.js";
 import { applyInput } from "../net/hash.js";
+import { Snapshot } from "../net/snapshot.js";
 import { b2AABB, b2Vec2 } from "../box2d/box2d.js";
 import type { Ported } from "../ported.js";
-import { STATE_NAMES, doorClips, obstacleBodies, obstacleMask, readState } from "./envstate.js";
+import {
+  COLS, DYN_MOVING, FIRE_HAZARDS, MOVER_FIELDS, MOVER_SLOTS, POOLS, STATE_NAMES, WATER_HAZARDS,
+  WIND_PUSH, doorClips, movers, obstacleBodies, obstacleMask, readDyn, readState,
+} from "./envstate.js";
 
 SoundBus.replaying = true;
 
@@ -50,15 +63,10 @@ const LEVELS: [string, number][] = [
   ...Array.from({ length: 6 }, (_, i) => ["speed", i + 1] as [string, number]),
 ];
 
-/** Mirrors FIRE_HAZARDS / WATER_HAZARDS in bot/fbwg_env.py. */
-const POOL: Record<number, string> = {
-  5: "water", 51: "water", 52: "water",
-  6: "lava", 61: "lava", 62: "lava",
-  7: "goo", 71: "goo", 72: "goo",
-};
-const KILLS: Record<string, string[]> = { fire: ["water", "goo"], water: ["lava", "goo"] };
-/** Unit push per fan `vertical`, matching DYN_WIND in envserver.ts. */
-const BLOWS: Record<number, [number, number]> = { 1: [0, -1], 2: [1, 0], 3: [0, 1], 4: [-1, 0] };
+const POOL_CODES = new Set(Object.values(POOLS).flat());
+const HAZARDS: Record<string, readonly number[]> = { fire: FIRE_HAZARDS, water: WATER_HAZARDS };
+/** Frames from the last door frame to Recuent (measured on every level). */
+const WON_TO_COMPLETE = 34;
 /** Each character's Up, in applyInput's bits. */
 const UP: Record<string, number> = { fire: 4, water: 32 };
 const OTHER: Record<string, string> = { fire: "water", water: "fire" };
@@ -159,6 +167,13 @@ function doors(lv: Ported): { fire: Ported; water: Ported } {
 
 let failures = 0;
 let checked = 0;
+let leversOn = 0;
+let buttonsPressed = 0;
+let seed = 3;
+function rnd(): number {
+  seed = (seed * 1103515245 + 12345) % 2147483648;
+  return seed / 2147483648;
+}
 function expect(ok: boolean, what: string): void {
   checked++;
   if (!ok) {
@@ -175,17 +190,25 @@ for (const [mode, num] of LEVELS) {
   // middles (5, ...) are each placed on directly.
   const pools = new Map<number, [number, number]>();
   grid.forEach((row, r) => row.forEach((v, c) => {
-    if (typeof v === "number" && POOL[v] && !pools.has(v)) pools.set(v, [r, c]);
+    if (typeof v === "number" && POOL_CODES.has(v) && !pools.has(v)) pools.set(v, [r, c]);
   }));
   for (const [code, [r, c]] of pools) {
-    const kind = POOL[code];
     for (const who of ["fire", "water"]) {
-      const { lv } = fresh(mode, num);
+      const other = OTHER[who];
+      const { lv, host } = fresh(mode, num);
       put(who === "fire" ? lv.pers1 : lv.pers2, c, r - 0.6);
       for (let i = 0; i < 25; i++) step(lv);
-      const died = who === "fire" ? lv.myContactListener.deadFire : lv.myContactListener.deadWater;
-      expect(died === KILLS[who].includes(kind),
-             `${name}: ${who} on ${kind} (${code}) died=${died}`);
+      let s = state(lv, host);
+      const kills = HAZARDS[who].includes(code);
+      expect(s[`dead_${who}`] === (kills ? 1 : 0) && s[`dead_${other}`] === 0 && s.won === 0,
+             `${name}: ${who} on ${code}: dead_${who} ${s[`dead_${who}`]}, dead_${other} ` +
+             `${s[`dead_${other}`]}, won ${s.won}`);
+      for (let i = 0; i < 60 && kills && !s.game_over; i++) {
+        step(lv);
+        s = state(lv, host);
+      }
+      expect(s.game_over === (kills ? 1 : 0) && s.won === 0,
+             `${name}: ${who} on ${code}: game_over ${s.game_over}, won ${s.won}`);
     }
   }
 
@@ -269,25 +292,40 @@ for (const [mode, num] of LEVELS) {
       last = Math.round(k);
       otherMoved ||= s[`${other}_door_open`] !== 0;
     }
-    expect(s[`${who}_door_open`] === 1 && steps && !otherMoved && s.complete === 0,
+    expect(s[`${who}_door_open`] === 1 && steps && !otherMoved && s.complete === 0 && s.won === 0,
            `${name}: ${who} alone in its door: ${who}_door_open ${s[`${who}_door_open`]}, ` +
-           `steps of 1/${DOOR_STEPS}=${steps}, other moved=${otherMoved}, complete=${s.complete}`);
+           `steps of 1/${DOOR_STEPS}=${steps}, other moved=${otherMoved}, complete=${s.complete}, ` +
+           `won=${s.won}`);
   }
 
   {
     const { lv, host } = fresh(mode, num);
+    const snap = new Snapshot().capture([host]);
     const d = doors(lv);
     put(lv.pers1, d.fire.x, d.fire.y - 0.8);
     put(lv.pers2, d.water.x, d.water.y - 0.8);
     let s = state(lv, host);
     let open = false;
-    for (let i = 0; i < 120 && s.complete === 0; i++) {
+    let early = false;
+    let wonAt = -1;
+    let endedAt = -1;
+    let completeAt = -1;
+    for (let i = 0; i < 160 && s.complete === 0; i++) {
       step(lv);
       s = state(lv, host);
-      open ||= s.complete === 0 && s.fire_door_open === 1 && s.water_door_open === 1;
+      open ||= s.won === 0 && s.fire_door_open === 1 && s.water_door_open === 1;
+      early ||= s.complete === 1 && s.won === 0;
+      if (wonAt < 0 && s.won === 1) wonAt = i;
+      if (endedAt < 0 && lv.ended) endedAt = i;
+      if (completeAt < 0 && s.complete === 1) completeAt = i;
     }
     expect(s.complete === 1 && host.recuents > 0, `${name}: both in their doors, but no level complete`);
-    expect(open, `${name}: the level completed before both door_open reached 1`);
+    expect(open && !early, `${name}: both door_open at 1 before won=${open}, complete before won=${early}`);
+    expect(wonAt >= 0 && wonAt === endedAt && completeAt - wonAt === WON_TO_COMPLETE,
+           `${name}: won at frame ${wonAt}, ended at ${endedAt}, complete at ${completeAt}`);
+    snap.restore();
+    s = state(lv, host);
+    expect(s.won === 0 && s.complete === 0, `${name}: a restore kept won ${s.won}, complete ${s.complete}`);
   }
 
   {
@@ -318,10 +356,14 @@ for (const [mode, num] of LEVELS) {
     // Every fan, including lever-driven ones. drift() forces `on`, but the wind
     // loop runs before the lever loop in Update, so for those it only holds for
     // the first frame; one frame of push still clears the 0.01 bar.
+    // Which way the wire says it blows: the wind bit readDyn paints at its
+    // centre with only this fan on.
     const w = lv.myWinds[i];
-    const [dx, dy] = BLOWS[w.vertical];
     const x = (w.lower.x + w.upper.x) / 2;
     const y = (w.lower.y + w.upper.y) / 2;
+    (lv.myWinds as Ported[]).forEach((f, k) => { f.on = k === i; });
+    const bit = readDyn(lv)[Math.round(y) * COLS + Math.round(x)] & 0xf0;
+    const [dx, dy] = WIND_PUSH[bit] ?? [0, 0];
     // Drop Watergirl mid-fan and see which way she drifts, against the same
     // spot with the fan off, since gravity acts on both. Three frames, because
     // a weak fan over a short drop (puzzle 7) lands her on the floor either way
@@ -337,7 +379,79 @@ for (const [mode, num] of LEVELS) {
     const [onX, onY] = drift(true);
     const [offX, offY] = drift(false);
     const push = (onX - offX) * dx + (onY - offY) * dy;
-    expect(push > 0.01, `${name}: fan ${i} (vertical ${w.vertical}) did not push its way (${push.toFixed(3)})`);
+    expect(push > 0.01, `${name}: fan ${i} (vertical ${w.vertical}, wind bit ${bit}) did not push ` +
+           `its way (${push.toFixed(3)})`);
+  }
+
+  {
+    // The game's own on and pressed signals, which it switches in Update: a
+    // lever's handle "light" clip goes to frame 2 while it is on, and a
+    // button's sprite is hidden while it is pressed.
+    let leverBad = 0;
+    let buttonBad = 0;
+    for (let ep = 0; ep < 2; ep++) {
+      const { lv, host } = fresh(mode, num);
+      let held = 0;
+      let left = 0;
+      for (let f = 0; f < 600 && !lv.pause; f++) {
+        if (!left) {
+          held = Math.floor(rnd() * 64);
+          left = 4 + Math.floor(rnd() * 12);
+        }
+        left--;
+        step(lv, held);
+        const s = state(lv, host);
+        (lv.myLevers as Ported[]).forEach((j, i) => {
+          const on = j.GetUserData().GetUserData().getChildByName("light").currentFrame === 2;
+          leversOn += on ? 1 : 0;
+          if ((s[`lever${i}`] > 0) !== on) leverBad++;
+        });
+        (lv.myPushers as Ported[]).forEach((j, i) => {
+          const pressed = j.GetUserData().GetUserData().visible === false;
+          buttonsPressed += pressed ? 1 : 0;
+          if ((s[`pusher${i}`] >= 1) !== pressed) buttonBad++;
+        });
+      }
+    }
+    expect(leverBad === 0 && buttonBad === 0,
+           `${name}: ${leverBad} lever and ${buttonBad} button readings disagree with the game's lights`);
+  }
+
+  {
+    // The last mover, so a slot offset shows up; values no body would have.
+    const { lv, host } = fresh(mode, num);
+    const ms = movers(lv);
+    expect(!ms.includes(lv.pers1) && !ms.includes(lv.pers2), `${name}: a character is in a mover slot`);
+    const k = ms.length - 1;
+    if (k >= 0) {
+      ms[k].SetXForm(new b2Vec2(10.25, 7.5), 0.375);
+      ms[k].SetLinearVelocity(new b2Vec2(1.5, -2.25));
+      ms[k].SetAngularVelocity(0.625);
+    }
+    const s = state(lv, host);
+    const want = [10.25, 7.5, 0.375, 1.5, -2.25, 0.625];
+    for (let i = 0; i < MOVER_SLOTS; i++) {
+      MOVER_FIELDS.forEach((f, j) => {
+        const got = s[`mover${i}_${f}`];
+        if (i === k) expect(got === want[j], `${name}: mover ${k} ${f} reads ${got}, set ${want[j]}`);
+        if (i > k) expect(got === 0, `${name}: empty mover slot ${i} ${f} reads ${got}`);
+        if (i < k && f === "x") expect(got !== 0, `${name}: mover slot ${i} has no body`);
+      });
+    }
+  }
+
+  {
+    const { lv } = fresh(mode, num);
+    for (let i = 0; i < 30; i++) step(lv);
+    const dyn = readDyn(lv);
+    for (const body of [lv.pers1, lv.pers2]) {
+      const p = body.GetPosition();
+      const r = Math.round(p.y);
+      const c = Math.round(p.x);
+      const covered = moversIn(lv, c - 0.5, r - 0.5, c + 0.5, r + 0.5).length > 0;
+      expect(covered || !(dyn[r * COLS + c] & DYN_MOVING),
+             `${name}: ${body.GetUserData().name}'s cell ${r},${c} is painted moving with no mover there`);
+    }
   }
 
   {
@@ -384,5 +498,8 @@ for (const [mode, num] of LEVELS) {
   }
 }
 
+// Without these the lever and button comparisons above prove nothing.
+expect(leversOn > 1000 && buttonsPressed > 100,
+       `random play lit a lever ${leversOn} times and pressed a button ${buttonsPressed} times`);
 console.log(`${checked} engine facts checked, ${failures} failed`);
 process.exit(failures ? 1 : 0);

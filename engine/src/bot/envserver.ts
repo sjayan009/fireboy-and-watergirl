@@ -44,17 +44,26 @@
  *                1 open; the level ends only once both are fully open
  *     redCount, blueCount, greenCount   diamonds collected, raw
  *     timecount  lv.timecount, frames since the level started; stops when
- *                the level pauses (a death or the exit)
+ *                the level pauses (a death or the exit). The game adds 1
+ *                before the next frame's fans push, so that push follows
+ *                detSin((timecount + 1) / 10). The graded time on a win is
+ *                floor((timecount - 1) / 26) seconds
  *     complete   1 once the game's own level-complete (Recuent) has fired,
- *                57 frames after both characters stand in their doors
+ *                34 frames after won; nothing happens in between
  *     gameOver   1 once the game's own GameOver has fired, after a death
+ *     won        1 from the frame the level ends with both doors open: the
+ *                game's own end of a win (the "ender" clip), the exact signal
  *     LEVER_SLOTS levers, -1 fully off .. +1 fully on, in creation order,
  *                0 for slots this level does not have
  *     PUSHER_SLOTS buttons, 0 up .. 1 at the depth the game counts as
  *                pressed (sinking more than 0.25 below where it started)
+ *     MOVER_SLOTS x (x, y, angle, vx, vy, spin) for the moving bodies
+ *                (envstate.ts movers), all 0 for slots this level does not
+ *                have. Radians, and world units per second
  *   u32 hashLevel(lv), parsed from its hex string
- *   ROWS*COLS x u8 "dyn" grid, row-major, bit flags per cell:
- *     DYN_MOVING  a non-static body other than pers1/pers2 covers the cell
+ *   ROWS*COLS x u8 "dyn" grid, row-major, bit flags per cell (envstate.ts
+ *   readDyn):
+ *     DYN_MOVING  a moving body's shape's bounding box overlaps the cell
  *     DYN_RED / DYN_BLUE / DYN_GREEN  an uncollected "rd" / "bd" / "gr" body
  *     DYN_WIND_UP / _RIGHT / _DOWN / _LEFT  a fan that is on blows here.
  *       Fans are not bodies, so without these the bot could not see them.
@@ -92,7 +101,8 @@
  *            shape.ComputeAABB(aabb, b.GetXForm()) with a `new b2AABB()`.
  * - Flags:   lv.myContactListener.{deadFire, deadWater, finish1, finish2,
  *            RedCount, BlueCount, GreenCount}; host.recuents /
- *            host.gameOvers count the game's own endings.
+ *            host.gameOvers count the game's own endings. lv.ended is also
+ *            set by a death; lv.getChildByName("ender") only by a win.
  * - Jump:    Update sets allowjump1/2 at its top from
  *            lv.myContactListener.contactStack1/2, the contact normals the
  *            previous frame's world Step left, so lv.allowjump1/2 read after a
@@ -116,26 +126,17 @@ import { hostLevel } from "../game/headless.js";
 import { SoundBus, advanceTree, enterFrameTree } from "../flash/flash.js";
 import { applyInput, hashLevel } from "../net/hash.js";
 import { Snapshot } from "../net/snapshot.js";
-import { b2AABB } from "../box2d/box2d.js";
 import type { Ported } from "../ported.js";
-import { LEVER_SLOTS, PUSHER_SLOTS, STATE_FLOATS, doorClips, obstacleMask, readState } from "./envstate.js";
+import {
+  COLS, LEVER_SLOTS, MOVER_SLOTS, PUSHER_SLOTS, ROWS, STATE_FLOATS,
+  doorClips, movers, obstacleMask, readDyn, readState,
+} from "./envstate.js";
 
-export const ROWS = 29;
-export const COLS = 39;
 export const STATE_BYTES = STATE_FLOATS * 4 + 4 + ROWS * COLS;
 
 export const OP_RESET = 1;
 export const OP_STEP = 2;
 export const OP_INFO = 3;
-
-export const DYN_MOVING = 1;
-export const DYN_RED = 2;
-export const DYN_BLUE = 4;
-export const DYN_GREEN = 8;
-/** Indexed by a fan's `vertical`, 1..4. */
-const DYN_WIND = [0, 16, 32, 64, 128];
-
-const EDGE = 1e-6;
 
 /**
  * Levels each env keeps built, least recently reset to evicted first.
@@ -170,33 +171,6 @@ function frame(lv: Ported, bits: number): void {
   enterFrameTree(lv);
 }
 
-/** OR `bit` into every cell whose centre lies inside the box. */
-function paint(out: DataView, grid: number, bit: number,
-               x0: number, y0: number, x1: number, y1: number): void {
-  // Bounds often sit on half-cells (a tile is c-0.5..c+0.5), and Math.round
-  // takes c+0.5 up into the next cell; nudge both ends inward.
-  const r0 = Math.max(0, Math.round(y0 + EDGE));
-  const r1 = Math.min(ROWS - 1, Math.round(y1 - EDGE));
-  const c0 = Math.max(0, Math.round(x0 + EDGE));
-  const c1 = Math.min(COLS - 1, Math.round(x1 - EDGE));
-  for (let r = r0; r <= r1; r++) {
-    for (let c = c0; c <= c1; c++) {
-      const at = grid + r * COLS + c;
-      out.setUint8(at, out.getUint8(at) | bit);
-    }
-  }
-}
-
-/** Which dyn bit a body sets, or 0 for none. */
-function dynBit(body: Ported): number {
-  const name: string | undefined = body.GetUserData()?.name;
-  if (name === "rd") return DYN_RED;
-  if (name === "bd") return DYN_BLUE;
-  if (name === "gr") return DYN_GREEN;
-  if (body.IsStatic() || name === "pers1" || name === "pers2") return 0;
-  return DYN_MOVING;
-}
-
 /**
  * Build a level and capture it one settling frame in. Every build, first or
  * after an eviction, comes through here, so a rebuilt level restores to the
@@ -211,8 +185,9 @@ function build(mode: string, num: number): Cached {
   }
   const levers: Ported[] = lv.myLevers;
   const pushers: Ported[] = lv.myPushers;
-  if (levers.length > LEVER_SLOTS || pushers.length > PUSHER_SLOTS) {
-    throw new Error(`${key} has ${levers.length} levers and ${pushers.length} buttons`);
+  const moving = movers(lv).length;
+  if (levers.length > LEVER_SLOTS || pushers.length > PUSHER_SLOTS || moving > MOVER_SLOTS) {
+    throw new Error(`${key} has ${levers.length} levers, ${pushers.length} buttons and ${moving} movers`);
   }
   // One frame with no input before the snapshot: a just-built level is
   // not a state play ever shows -- levers sit at +-90 degrees and every
@@ -235,7 +210,6 @@ class Env {
   private cur: Cached | null = null;
   private clock = 0;
   private queue: number[] = [];
-  private aabb = new b2AABB();
 
   /** Build or restore the level, and size the input queue for `delay`. */
   reset(mode: string, num: number, delay: number): void {
@@ -288,20 +262,7 @@ class Env {
     for (let i = 0; i < STATE_FLOATS; i++) out.setFloat32(off + 4 * i, floats[i], true);
     out.setUint32(off + STATE_FLOATS * 4, parseInt(hashLevel(lv), 16), true);
 
-    const grid = off + STATE_FLOATS * 4 + 4;
-    for (let i = 0; i < ROWS * COLS; i++) out.setUint8(grid + i, 0);
-    for (let b = lv.m_world.GetBodyList(); b; b = b.GetNext()) {
-      const bit = dynBit(b);
-      if (!bit) continue;
-      for (let s = b.GetShapeList(); s; s = s.GetNext()) {
-        s.ComputeAABB(this.aabb, b.GetXForm());
-        const { lowerBound: lo, upperBound: hi } = this.aabb;
-        paint(out, grid, bit, lo.x, lo.y, hi.x, hi.y);
-      }
-    }
-    for (const w of lv.myWinds as Ported[]) {
-      if (w.on) paint(out, grid, DYN_WIND[w.vertical], w.lower.x, w.lower.y, w.upper.x, w.upper.y);
-    }
+    new Uint8Array(out.buffer, out.byteOffset + off + STATE_FLOATS * 4 + 4, ROWS * COLS).set(readDyn(lv));
   }
 
   /** The OP_INFO reply for the current level. */

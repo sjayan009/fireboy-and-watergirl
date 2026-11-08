@@ -106,7 +106,7 @@ def main() -> None:
             water.set_data([v[F["water_x"]]], [v[F["water_y"]]])
         axes[0].set_title(f"{args.level}  frame {int(v[F['timecount']])}  "
                           f"doors {int(v[F['finish1']] > 0)}/{int(v[F['finish2']] > 0)}"
-                          + ("  COMPLETE" if v[F["complete"]] else ""))
+                          + ("  WON" if v[F["won"]] else ""))
         return [tiles, *[d for pair in dots for d in pair]]
 
     anim = FuncAnimation(fig, frame, frames=args.steps, interval=40, blit=False, repeat=False)

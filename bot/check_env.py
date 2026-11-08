@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 import subprocess
 import sys
 import time
@@ -21,11 +22,12 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fbwg_env  # noqa: E402
 from fbwg_env import (  # noqa: E402
     CHANNELS, COLS, DYN_BLUE, DYN_GREEN, DYN_MOVING, DYN_RED, DYN_WIND_LEFT,
-    DYN_WIND_UP, FIRE_HAZARDS, LEVER_SLOTS, PUSHER_SLOTS,
-    ROWS, SCHEMA_VERSION, SERVER, STATE_FIELDS, STATE_FLOATS, TIME_SCALE, WATER_HAZARDS,
-    EnvClient, LevelInfo, State, bfs_field, cell, encode,
+    DYN_WIND_UP, FIRE_HAZARDS, LEVER_SLOTS, MEDAL_SECONDS, PUSHER_SLOTS,
+    ROWS, SCHEMA_VERSION, SERVER, STATE_FIELDS, STATE_FLOATS, TIME_SCALE, TIME_TABLE,
+    TRANSLATION, WATER_HAZARDS, EnvClient, LevelInfo, State, bfs_field, cell, encode,
 )
 
 LEVEL_DIR = SERVER.parents[3] / "extracted" / "levels"
@@ -142,7 +144,14 @@ def _():
     tc = st.vec[F["timecount"]]
     assert v.shape == (STATE_FLOATS + 2,), v.shape
     assert np.isclose(v[F["timecount"]], tc / TIME_SCALE), "timecount not scaled by TIME_SCALE"
-    assert np.allclose(v[-2:], [np.sin(tc / 10), np.cos(tc / 10)]), "fan phase is not sin, cos of timecount / 10"
+    assert np.allclose(v[-2:], [np.sin((tc + 1) / 10), np.cos((tc + 1) / 10)]), \
+        "fan phase is not sin, cos of (timecount + 1) / 10"
+    for name, scale in (("fire_x", COLS), ("water_y", ROWS), ("mover0_x", COLS), ("mover23_y", ROWS)):
+        assert np.isclose(v[F[name]], st.vec[F[name]] / scale), f"{name} not divided by {scale}"
+    for i in (0, 23):
+        a, want = v[F[f"mover{i}_angle"]], st.vec[F[f"mover{i}_angle"]]
+        assert -1 <= a < 1 and np.isclose(np.cos(a * np.pi), np.cos(want), atol=1e-4), \
+            f"mover{i}_angle {want} encoded as {a}"
 
 
 @check("encode: every channel in the right place")
@@ -188,16 +197,40 @@ def run(client: EnvClient, env_bits: list[list[int]], repeat: int = 1) -> list[l
     return [client.step([bits[k] for bits in env_bits], repeat) for k in range(len(env_bits[0]))]
 
 
-@server_check("STATE_FIELDS is STATE_NAMES from envstate.ts, the order the server writes")
+@server_check("STATE_FIELDS, the hazard sets and the constants are envstate.ts's")
 def _():
     url = (SERVER.parent / "envstate.js").as_uri()
-    js = f"const m = await import({json.dumps(url)}); console.log(JSON.stringify(m.STATE_NAMES));"
+    js = f"const m = await import({json.dumps(url)}); console.log(JSON.stringify(m));"
     out = subprocess.run(["node", "--input-type=module", "-e", js], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr.strip()[-600:]
-    names = tuple(json.loads(out.stdout))
+    ts = json.loads(out.stdout)
+    names = tuple(ts["STATE_NAMES"])
     assert names == STATE_FIELDS, \
         f"first difference at {next((i for i, (a, b) in enumerate(zip(names, STATE_FIELDS)) if a != b), min(len(names), len(STATE_FIELDS)))}"
     assert len(names) == STATE_FLOATS
+    # Every number envstate.ts exports by a name fbwg_env.py also uses.
+    shared = [k for k, v in ts.items() if isinstance(v, int) and hasattr(fbwg_env, k)]
+    assert len(shared) >= 13, shared
+    for k in shared:
+        assert getattr(fbwg_env, k) == ts[k], f"{k}: Python {getattr(fbwg_env, k)}, envstate.ts {ts[k]}"
+    for k in ("FIRE_HAZARDS", "WATER_HAZARDS"):
+        assert sorted(getattr(fbwg_env, k)) == sorted(ts[k]), f"{k}: Python {getattr(fbwg_env, k)}, envstate.ts {ts[k]}"
+    for kind, codes in ts["POOLS"].items():
+        assert tuple(codes) == getattr(fbwg_env, kind.upper()), f"{kind}: envstate.ts {codes}"
+    assert tuple(ts["MOVER_FIELDS"]) == fbwg_env.MOVER_FIELDS
+
+
+@check("grades: MEDAL_SECONDS is game.ts's TimeTable, by the node its level-select button sets")
+def _():
+    src = (SERVER.parents[2] / "src" / "game" / "game.ts").read_text(encoding="utf-8")
+    table = lambda name: re.search(rf"this\.{name} = new Array\(([^)]*)\)", src).group(1)  # noqa: E731
+    assert tuple(json.loads(f"[{table('Translation')}]")) == TRANSLATION, "Translation differs"
+    assert tuple(json.loads(f"[{table('TimeTable')}]")) == TIME_TABLE, "TimeTable differs"
+    # Recuent reads TimeTable[cur_node - 1]; cur_node comes from this switch.
+    nodes = dict(re.findall(r'case "(\d_\d+)":\s*this\.cur_node = (\d+);', src))
+    assert len(nodes) == 32 and all(int(nodes[n]) == i + 1 for i, n in enumerate(TRANSLATION)), nodes
+    assert len(MEDAL_SECONDS) == 23 and MEDAL_SECONDS[("adventure", 13)] == 145, MEDAL_SECONDS
+    assert fbwg_env.graded_seconds(1) == 0 and fbwg_env.graded_seconds(27) == 1
 
 
 @server_check("server: reset and info make sense")
@@ -231,7 +264,7 @@ def _():
             # The one settling frame before the snapshot has already run.
             assert v[F["timecount"]] == 1, f"{name}: timecount {v[F['timecount']]} at reset"
             for k in ("fire_door_open", "water_door_open", "red_count", "blue_count",
-                      "green_count", "fire_jump_latched", "water_jump_latched"):
+                      "green_count", "fire_jump_latched", "water_jump_latched", "won"):
                 assert v[F[k]] == 0, f"{name}: {k} is {v[F[k]]} at reset"
             v = run(c, [[0] * 30])[-1][0].vec
             assert v[F["fire_grounded"]] == 1 and v[F["water_grounded"]] == 1, \
@@ -241,7 +274,7 @@ def _():
         c.close()
 
 
-@server_check("engine: hazards, jumps, doors, diamonds, level complete and fans on every level")
+@server_check("engine: hazards, deaths, jumps, doors, won, diamonds, fans, levers, buttons, movers on every level")
 def _():
     out = subprocess.run(["node", str(SERVER.parent / "envfacts.js")],
                          capture_output=True, text=True)
@@ -281,7 +314,8 @@ def _():
             v = st.vec
             assert np.all(np.isfinite(v)), f"{name}: {v}"
             assert not np.any(v[pushers] >= 1), f"{name}: a button starts pressed"
-            assert not v[F["complete"]] and not v[F["game_over"]], f"{name}: starts finished"
+            assert not v[F["complete"]] and not v[F["game_over"]] and not v[F["won"]], \
+                f"{name}: starts finished"
 
             # The start must already be settled: an idle frame flips no fan or lever.
             idle = c.step([0], 1)[0]
@@ -474,7 +508,7 @@ def _():
                         if not (p.vec[F[f"{who}_grounded"]] == 1 and p.vec[F[f"{who}_jump_latched"]] == 0
                                 and bits[i] & up[who]):
                             bad.append(f"{levels[i][0]} {levels[i][1]} {who}")
-                    if s.vec[F["dead_fire"]] or s.vec[F["dead_water"]] or s.vec[F["complete"]]:
+                    if s.vec[F["dead_fire"]] or s.vec[F["dead_water"]] or s.vec[F["won"]]:
                         s = c.reset(i, *levels[i])
                     prev[i] = s
     finally:
@@ -551,7 +585,7 @@ def random_episodes(n_episodes: int, n_envs: int = 8, limit: int = 3000, repeat:
                     age[i] += repeat
                     v = s.vec
                     dead = v[F["dead_fire"]] or v[F["dead_water"]]
-                    if dead or v[F["complete"]] or age[i] >= limit:
+                    if dead or v[F["won"]] or age[i] >= limit:
                         done += 1
                         start(i)
         finally:

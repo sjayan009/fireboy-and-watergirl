@@ -214,7 +214,8 @@ apply.
 
   Reward-shaping bugs are the most common RL failure. Watch replays of what
   the agent actually does, not just the curves.
-- **Termination.** Death, both doors reached, or a time limit. Mark the time
+- **Termination.** Death, a win (the env's `won` field, not `complete`, which
+  comes 34 frames later), or a time limit. Mark the time
   limit as *truncation*, not termination, or your value estimates are biased.
 - **Invariant tests, pinned in CI next to the determinism digests.**
   - Same seed and actions give the same digest.
