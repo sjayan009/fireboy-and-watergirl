@@ -51,7 +51,7 @@ WATER_HAZARDS = LAVA + GOO      # what kills Watergirl
 
 # Bump whenever CHANNELS, the vector, or their meaning changes. Every trained
 # model records the version it was trained on.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # timecount is divided by this in encode(). 150 s at the game's 26 frames a
 # second: the longest medal time (TimeTable) is 145 s, so an episode worth
@@ -83,6 +83,9 @@ class LevelInfo:
     grid: np.ndarray            # int8, (ROWS, COLS)
     fire_door: tuple[int, int]  # (row, col)
     water_door: tuple[int, int]
+    # bool, (ROWS, COLS): solid static bodies the grid leaves out (the seesaw
+    # bases). Pass it to bfs_field as `walls`; encode() adds it to "solid".
+    obstacles: np.ndarray
 
 
 def cell(x: float, y: float) -> tuple[int, int]:
@@ -95,9 +98,11 @@ def cell(x: float, y: float) -> tuple[int, int]:
 class EnvClient:
     """N envs in one Node process."""
 
-    def __init__(self, n: int, node: str = "node"):
+    def __init__(self, n: int, node: str = "node", cache: int = 4):
+        """`cache` is how many levels each env keeps built; a reset to one
+        it dropped builds it again, which costs time but not exactness."""
         self.n = n
-        self.proc = subprocess.Popen([node, str(SERVER), str(n)],
+        self.proc = subprocess.Popen([node, str(SERVER), str(n), str(cache)],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 
     def _call(self, payload: bytes) -> bytes:
@@ -137,17 +142,20 @@ class EnvClient:
         reply = self._call(struct.pack("<BH", OP_INFO, env))
         grid = np.frombuffer(reply, np.int8, ROWS * COLS).reshape(ROWS, COLS).copy()
         fr, fc, wr, wc = reply[ROWS * COLS:ROWS * COLS + 4]
-        return LevelInfo(grid, (fr, fc), (wr, wc))
+        obstacles = np.frombuffer(reply, np.uint8, ROWS * COLS, ROWS * COLS + 4).reshape(ROWS, COLS) > 0
+        return LevelInfo(grid, (fr, fc), (wr, wc), obstacles)
 
     def close(self) -> None:
         self.proc.stdin.close()
         self.proc.wait()
 
 
-def bfs_field(grid: np.ndarray, door: tuple[int, int], hazards: tuple[int, ...]) -> np.ndarray:
+def bfs_field(grid: np.ndarray, door: tuple[int, int], hazards: tuple[int, ...],
+              walls: np.ndarray | None = None) -> np.ndarray:
     """Distance from every cell to `door`, 4-connected, normalised to [0, 1].
 
-    Passable: any cell that is not SOLID and not in `hazards`. The door cell
+    Passable: any cell that is not SOLID, not in `hazards` and not True in
+    `walls` (bool, (ROWS, COLS); pass LevelInfo.obstacles). The door cell
     is 0. Reachable cells are divided by (largest reachable distance + 1), so
     they stay below 1.0 and unreachable and impassable cells, at exactly 1.0,
     are distinguishable from the farthest reachable one. Returns float32,
@@ -160,6 +168,8 @@ def bfs_field(grid: np.ndarray, door: tuple[int, int], hazards: tuple[int, ...])
     # ponytail: ignores moving platforms and jump height; it is a shaping
     # potential, not a planner. Rasterise movers in if lever levels need it.
     passable = (grid != SOLID) & ~np.isin(grid, hazards)
+    if walls is not None:
+        passable &= ~walls
     dist = np.full(grid.shape, -1, np.int32)
     dist[door] = 0
     frontier = np.zeros(grid.shape, bool)
@@ -183,8 +193,9 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
     """One observation.
 
     tiles: float32, (len(CHANNELS), ROWS, COLS), one-hot, in CHANNELS order.
-           Static channels come from info.grid; diamonds, moving and wind
-           from state.dyn; doors are a single 1 at each door cell.
+           Static channels come from info.grid, and solid adds
+           info.obstacles; diamonds, moving and wind from state.dyn; doors
+           are a single 1 at each door cell.
     bfs:   float32, (2, ROWS, COLS): fire then water.
     vec:   float32, 1-D: state.vec with positions divided by COLS/ROWS and
            timecount by TIME_SCALE, so everything is roughly in [-1, 1], then
@@ -196,7 +207,7 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
     water_door = np.zeros(g.shape, bool)
     water_door[info.water_door] = True
     planes = {
-        "solid": g == SOLID,
+        "solid": (g == SOLID) | info.obstacles,
         "slope1": g == SLOPES[0], "slope2": g == SLOPES[1],
         "slope3": g == SLOPES[2], "slope4": g == SLOPES[3],
         "water": np.isin(g, WATER), "lava": np.isin(g, LAVA), "goo": np.isin(g, GOO),

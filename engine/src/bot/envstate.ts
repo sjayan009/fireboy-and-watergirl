@@ -1,11 +1,12 @@
 /**
- * One env's STATE floats, read from a live level.
+ * One env's STATE floats and its OP_INFO obstacle mask, read from a live level.
  *
  * envserver.ts sends these over the wire and envfacts.ts checks them against
  * the engine, so the facts test the very numbers the bot sees, field by field.
  * A module of its own because envserver.ts starts reading stdin on import.
  * The field meanings are documented in envserver.ts's header.
  */
+import { b2Vec2 } from "../box2d/box2d.js";
 import type { Ported } from "../ported.js";
 
 export const LEVER_SLOTS = 12;
@@ -52,6 +53,53 @@ function grounded(stack: Ported[]): number {
   let y = 0;
   for (const n of stack) if (n.y < y) y = n.y;
   return y < -0.2 ? 1 : 0;
+}
+
+/**
+ * The static bodies the characters collide with that the tile grid leaves out:
+ * today only the seesaw's triangular base (game.ts CreatRoman), twice in
+ * adventure 10 and once in speed 5. Matched by what they are, not by the
+ * RomanBase class, so any other static prop a level builds shows up too. Left
+ * out: the world's ground body (no shapes), "ground", which holds the tiles
+ * LevelArray already has, and the doors, whose plates sit in the floor tile
+ * under the door cell that OP_INFO already sends. Diamonds are static too, but
+ * their only shape is a sensor, whatever the name ("FUCK" once collected), so
+ * obstacleMask's sensor rule drops them.
+ */
+export function obstacleBodies(lv: Ported): Ported[] {
+  const out: Ported[] = [];
+  const world = lv.m_world.GetGroundBody();
+  for (let b = lv.m_world.GetBodyList(); b; b = b.GetNext()) {
+    const name: string | undefined = b.GetUserData()?.name;
+    if (!b.IsStatic() || b === world || name === "ground" || name === "finish1" || name === "finish2") continue;
+    out.push(b);
+  }
+  return out;
+}
+
+/**
+ * Row-major, 1 for every cell whose centre lies inside a non-sensor shape of
+ * an obstacleBodies body. The shape's own point test, not its bounding box:
+ * the seesaw base is a triangle 2 wide and 2 tall, whose box would mark six
+ * cells where the solid covers the centres of two.
+ */
+export function obstacleMask(lv: Ported): Uint8Array {
+  const rows = lv.LevelArray.length;
+  const cols = lv.LevelArray[0].length;
+  const out = new Uint8Array(rows * cols);
+  const p = new b2Vec2(0, 0);
+  for (const b of obstacleBodies(lv)) {
+    for (let s = b.GetShapeList(); s; s = s.GetNext()) {
+      if (s.IsSensor()) continue;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          p.Set(c, r);
+          if (s.TestPoint(b.GetXForm(), p)) out[r * cols + c] = 1;
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /** The STATE_FLOATS numbers for one level, in STATE_NAMES order. */

@@ -1,8 +1,9 @@
 /**
  * The training env server: many copies of the real game, driven over a pipe.
  *
- * Python starts `node engine/dist/bot/envserver.js <N>` and owns its stdin and
- * stdout. The physics stays here, in the Box2D port that is certified for
+ * Python starts `node engine/dist/bot/envserver.js <N> [cache]` and owns its
+ * stdin and stdout; `cache` is how many levels each env keeps built (see
+ * Reset). The physics stays here, in the Box2D port that is certified for
  * determinism, and only numbers cross the pipe. This file lives in `bot/`, not
  * `game/`, `flash/` or `box2d/`, because those three are hashed into
  * ENGINE_VERSION.
@@ -23,7 +24,10 @@
  *             -> N STATE records, in env order
  *   OP_INFO   u16 env after the op byte
  *             -> ROWS*COLS int8 grid (row-major), then u8 fireDoorRow,
- *                u8 fireDoorCol, u8 waterDoorRow, u8 waterDoorCol
+ *                u8 fireDoorCol, u8 waterDoorRow, u8 waterDoorCol, then
+ *                ROWS*COLS u8 obstacles (row-major): 1 where a cell's centre
+ *                is inside a static solid the grid leaves out, the seesaw
+ *                bases (envstate.ts obstacleMask). They never move.
  *
  * ---- STATE record (STATE_BYTES long) ---------------------------------------
  *
@@ -67,7 +71,8 @@
  *            twice: two physics steps and two timecount ticks per frame.
  * - Reset:   build, run one frame with no input so the level settles, then
  *            capture `new Snapshot().capture([host])` once per (env, level),
- *            restore it on later resets. Never rebuild the level.
+ *            restore it on later resets. Each env keeps the `cache` levels it
+ *            reset to most recently; one evicted is built again the same way.
  * - Clock:   ONE module-global (getClock/setClock) shared by every env in this
  *            process, and the snapshot does not save it. Save it beside the
  *            snapshot, and setClock(env.clock) before stepping an env,
@@ -103,6 +108,8 @@
  *            lv.myPushers; joint.GetUserData() is the lever or button body.
  * - Grid:    lv.LevelArray[row][col]; numbers go out as int8, anything else
  *            (the diamond strings) as 0, because diamonds travel in dyn.
+ *            Static bodies other than "ground" are not in it, and dyn skips
+ *            static bodies, so the obstacles mask carries them.
  */
 import { level, tickClock, getClock, setClock } from "../game/game.js";
 import { hostLevel } from "../game/headless.js";
@@ -111,7 +118,7 @@ import { applyInput, hashLevel } from "../net/hash.js";
 import { Snapshot } from "../net/snapshot.js";
 import { b2AABB } from "../box2d/box2d.js";
 import type { Ported } from "../ported.js";
-import { LEVER_SLOTS, PUSHER_SLOTS, STATE_FLOATS, doorClips, readState } from "./envstate.js";
+import { LEVER_SLOTS, PUSHER_SLOTS, STATE_FLOATS, doorClips, obstacleMask, readState } from "./envstate.js";
 
 export const ROWS = 29;
 export const COLS = 39;
@@ -129,6 +136,17 @@ export const DYN_GREEN = 8;
 const DYN_WIND = [0, 16, 32, 64, 128];
 
 const EDGE = 1e-6;
+
+/**
+ * Levels each env keeps built, least recently reset to evicted first.
+ * Measured: one env holding all 32 levels takes about 242 MB of heap, and
+ * Node's heap limit here is about 4.5 GB, so 18 envs rotating through every
+ * level in one process would run out. With the default 4, 32 envs each
+ * rotating through all 32 levels peak at about 1.9 GB RSS, the same on the
+ * second lap as the first.
+ */
+const CACHE = Number(process.argv[3] ?? 4);
+if (!(CACHE >= 1)) throw new Error(`cache must be at least 1, got ${process.argv[3]}`);
 
 /** A built level, its snapshot at frame zero, and the clock that goes with it. */
 interface Cached {
@@ -179,8 +197,40 @@ function dynBit(body: Ported): number {
   return DYN_MOVING;
 }
 
+/**
+ * Build a level and capture it one settling frame in. Every build, first or
+ * after an eviction, comes through here, so a rebuilt level restores to the
+ * same state the first one did.
+ */
+function build(mode: string, num: number): Cached {
+  const key = `${mode}-${num}`;
+  const lv: Ported = new (level as Ported)(mode, num);
+  const host = hostLevel(lv);
+  if (lv.LevelArray.length !== ROWS || lv.LevelArray[0].length !== COLS) {
+    throw new Error(`${key} is not ${ROWS}x${COLS}`);
+  }
+  const levers: Ported[] = lv.myLevers;
+  const pushers: Ported[] = lv.myPushers;
+  if (levers.length > LEVER_SLOTS || pushers.length > PUSHER_SLOTS) {
+    throw new Error(`${key} has ${levers.length} levers and ${pushers.length} buttons`);
+  }
+  // One frame with no input before the snapshot: a just-built level is
+  // not a state play ever shows -- levers sit at +-90 degrees and every
+  // fan reads on until the first Update applies the levers (puzzle 7's
+  // three fans start off). Clock from 0, not getClock(): the global
+  // still holds whichever env ran last.
+  setClock(0);
+  frame(lv, 0);
+  return { lv, host, snap: new Snapshot().capture([host]), clock: getClock(), doors: doorClips(lv) };
+}
+
 class Env {
-  /** One per "mode-num" this env has played; a reset restores, never rebuilds. */
+  /**
+   * "mode-num" -> its built level, in least-recently-reset-first order (a
+   * Map keeps insertion order; a hit is deleted and set again). The entry is
+   * the only reference to a level apart from `cur`, which is always the newest
+   * entry, so deleting the oldest lets the collector have it.
+   */
   private cache = new Map<string, Cached>();
   private cur: Cached | null = null;
   private clock = 0;
@@ -192,28 +242,13 @@ class Env {
     const key = `${mode}-${num}`;
     let c = this.cache.get(key);
     if (c) {
+      this.cache.delete(key);
       c.snap.restore();
     } else {
-      const lv: Ported = new (level as Ported)(mode, num);
-      const host = hostLevel(lv);
-      if (lv.LevelArray.length !== ROWS || lv.LevelArray[0].length !== COLS) {
-        throw new Error(`${key} is not ${ROWS}x${COLS}`);
-      }
-      const levers: Ported[] = lv.myLevers;
-      const pushers: Ported[] = lv.myPushers;
-      if (levers.length > LEVER_SLOTS || pushers.length > PUSHER_SLOTS) {
-        throw new Error(`${key} has ${levers.length} levers and ${pushers.length} buttons`);
-      }
-      // One frame with no input before the snapshot: a just-built level is
-      // not a state play ever shows -- levers sit at +-90 degrees and every
-      // fan reads on until the first Update applies the levers (puzzle 7's
-      // three fans start off). Clock from 0, not getClock(): the global
-      // still holds whichever env ran last.
-      setClock(0);
-      frame(lv, 0);
-      c = { lv, host, snap: new Snapshot().capture([host]), clock: getClock(), doors: doorClips(lv) };
-      this.cache.set(key, c);
+      c = build(mode, num);
     }
+    this.cache.set(key, c);
+    if (this.cache.size > CACHE) this.cache.delete(this.cache.keys().next().value!);
     this.cur = c;
     this.clock = c.clock;
     // Rebuilt, not emptied: presses from the last episode must not come out
@@ -272,7 +307,7 @@ class Env {
   /** The OP_INFO reply for the current level. */
   info(): Uint8Array {
     const lv = this.lv;
-    const out = new Uint8Array(ROWS * COLS + 4);
+    const out = new Uint8Array(ROWS * COLS + 4 + ROWS * COLS);
     const dv = new DataView(out.buffer);
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
@@ -293,6 +328,7 @@ class Env {
       }
       if (!found) throw new Error(`no ${name} body`);
     }
+    out.set(obstacleMask(lv), k);
     return out;
   }
 }

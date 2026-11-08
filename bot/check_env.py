@@ -88,6 +88,17 @@ def _():
         assert abs(got[cell] - want) < 1e-6, f"cell {cell}: got {got[cell]:.4f}, want {want:.4f}"
 
 
+@check("bfs: walls block like solid")
+def _():
+    walls = np.zeros(G.shape, bool)
+    walls[1, 3] = True
+    # The top corridor is cut at (1,3), so (1,4) and (1,5) are only reachable
+    # through the water at (2,5), which Fireboy cannot enter.
+    got = bfs_field(G, (1, 1), FIRE_HAZARDS, walls=walls)
+    assert got[1, 3] == 1 and got[1, 4] == 1 and got[1, 5] == 1, got[1]
+    assert got[3, 3] < 1, "the lower corridor is still open"
+
+
 @check("bfs: no wrap-around at the edges")
 def _():
     got = bfs_field(np.zeros((1, 5), np.int8), (0, 0), FIRE_HAZARDS)
@@ -110,7 +121,9 @@ def fake_level() -> tuple[LevelInfo, State]:
     dyn[15, 1:3] = DYN_WIND_UP
     dyn[16, 1] = DYN_WIND_UP | DYN_WIND_LEFT
     vec = np.arange(STATE_FLOATS, dtype=np.float32)
-    return LevelInfo(grid, (20, 3), (20, 30)), State(vec, 0, dyn)
+    obstacles = np.zeros((ROWS, COLS), bool)
+    obstacles[7, 10] = True
+    return LevelInfo(grid, (20, 3), (20, 30), obstacles), State(vec, 0, dyn)
 
 
 @check("encode: shapes, dtypes, one-hot")
@@ -139,7 +152,7 @@ def _():
                np.zeros((ROWS, COLS), np.float32))["tiles"]
     ch = {name: t[i] for i, name in enumerate(CHANNELS)}
     want = {
-        "solid": [(0, c) for c in range(COLS)],
+        "solid": [(0, c) for c in range(COLS)] + [(7, 10)],
         "slope1": [(5, 2)], "slope2": [(5, 3)], "slope3": [(5, 4)], "slope4": [(5, 5)],
         "water": [(5, 6), (5, 7), (5, 8)],
         "lava": [(5, 9), (5, 10), (5, 11)],
@@ -201,7 +214,7 @@ def _():
         assert (info.grid[0] == 1).all(), "the top row of every level is solid"
         for door in (info.fire_door, info.water_door):
             assert info.grid[door] != 1, f"door cell {door} is solid"
-        f = bfs_field(info.grid, info.fire_door, FIRE_HAZARDS)
+        f = bfs_field(info.grid, info.fire_door, FIRE_HAZARDS, walls=info.obstacles)
         spawn = cell(st.vec[F["fire_x"]], st.vec[F["fire_y"]])
         assert f[info.fire_door] == 0 and f[spawn] < 1, "Fireboy's spawn cannot reach his door"
     finally:
@@ -262,7 +275,7 @@ def _():
                 spawn = cell(st.vec[F[f"{who}_x"]], st.vec[F[f"{who}_y"]])
                 assert info.grid[spawn] != 1, f"{name}: {who} spawns inside a wall at {spawn}"
                 hazards = FIRE_HAZARDS if who == "fire" else WATER_HAZARDS
-                if bfs_field(info.grid, door, hazards)[spawn] >= 1:
+                if bfs_field(info.grid, door, hazards, walls=info.obstacles)[spawn] >= 1:
                     unreached.append(f"{name} {who}")
 
             v = st.vec
@@ -292,6 +305,54 @@ def _():
         # Not a failure: the BFS ignores lifts, fans and levers, so on some
         # levels the spawn is cut off from the door until a mechanism moves.
         print(f"      BFS cannot reach the door without a mechanism: {', '.join(unreached)}")
+
+
+@server_check("obstacles: only adventure 10 and speed 5, never grid-solid, walls to the BFS")
+def _():
+    # The seesaw bases (twice in adventure 10, once in speed 5) are the only
+    # solid statics outside the tile grid; any other level with obstacles
+    # means the body filter caught something it should not.
+    c = EnvClient(1)
+    try:
+        for mode, num in LEVELS:
+            name = f"{mode} {num}"
+            c.reset(0, mode, num)
+            info = c.info(0)
+            ob = info.obstacles
+            assert ob.shape == (ROWS, COLS) and ob.dtype == bool, (ob.shape, ob.dtype)
+            want = (mode, num) in (("adventure", 10), ("speed", 5))
+            assert ob.any() == want, f"{name}: {int(ob.sum())} obstacle cells"
+            if not want:
+                continue
+            assert not (info.grid[ob] == 1).any(), f"{name}: an obstacle cell is already grid-solid"
+            for door, hazards in ((info.fire_door, FIRE_HAZARDS), (info.water_door, WATER_HAZARDS)):
+                f = bfs_field(info.grid, door, hazards, walls=ob)
+                assert np.all(f[ob] == 1.0), f"{name}: the BFS walks through an obstacle"
+    finally:
+        c.close()
+
+
+@server_check("invariant: with cache 2, ten levels cycled twice still restore exactly")
+def _():
+    # Every reset in the second pass is a level the cache dropped, so this is
+    # the rebuild path, checked whole-state against a client that built each
+    # level once.
+    levels = LEVELS[::3][:10]
+    assert len(levels) == 10, levels
+    a, b = EnvClient(1, cache=2), EnvClient(1)
+    try:
+        for lap in range(2):
+            for k, (mode, num) in enumerate(levels):
+                bits = rand_bits(100 * lap + k, 30)
+                got = [a.reset(0, mode, num)] + [s[0] for s in run(a, [bits])]
+                if lap == 0:
+                    continue
+                want = [b.reset(0, mode, num)] + [s[0] for s in run(b, [bits])]
+                for i, (x, y) in enumerate(zip(got, want)):
+                    assert x.hash == y.hash and np.array_equal(x.vec, y.vec)                         and np.array_equal(x.dyn, y.dyn), f"{mode} {num}: diverged at step {i}"
+    finally:
+        a.close()
+        b.close()
 
 
 @server_check("invariant: same actions, same digests")
@@ -347,8 +408,8 @@ def _():
     try:
         st1 = c.reset(0, "adventure", 3)
         info = c.info(0)
-        bf = bfs_field(info.grid, info.fire_door, FIRE_HAZARDS)
-        bw = bfs_field(info.grid, info.water_door, WATER_HAZARDS)
+        bf = bfs_field(info.grid, info.fire_door, FIRE_HAZARDS, walls=info.obstacles)
+        bw = bfs_field(info.grid, info.water_door, WATER_HAZARDS, walls=info.obstacles)
         o1 = encode(info, st1, bf, bw)
         run(c, [rand_bits(4, 150)])
         o2 = encode(info, c.reset(0, "adventure", 3), bf, bw)

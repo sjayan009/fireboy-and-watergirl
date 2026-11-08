@@ -40,10 +40,16 @@ COLORS = {
 F = {name: i for i, name in enumerate(STATE_FIELDS)}
 
 
-def tile_image(tiles: np.ndarray) -> np.ndarray:
+# The obstacle cells (seesaw bases) are in "solid" too; drawn over it in their
+# own shade so they read as not part of the tile grid.
+OBSTACLE = (.5, .38, .25)
+
+
+def tile_image(tiles: np.ndarray, obstacles: np.ndarray) -> np.ndarray:
     img = np.ones((ROWS, COLS, 3))
     for name, rgb in COLORS.items():
         img[tiles[CHANNELS.index(name)] > 0] = rgb
+    img[obstacles] = OBSTACLE
     return img
 
 
@@ -60,12 +66,12 @@ def main() -> None:
     env = EnvClient(1)
     state = env.reset(0, mode, int(num))
     info = env.info(0)
-    bf = bfs_field(info.grid, info.fire_door, FIRE_HAZARDS)
-    bw = bfs_field(info.grid, info.water_door, WATER_HAZARDS)
+    bf = bfs_field(info.grid, info.fire_door, FIRE_HAZARDS, walls=info.obstacles)
+    bw = bfs_field(info.grid, info.water_door, WATER_HAZARDS, walls=info.obstacles)
     rng = random.Random(args.seed)
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.6))
-    tiles = axes[0].imshow(tile_image(encode(info, state, bf, bw)["tiles"]))
+    tiles = axes[0].imshow(tile_image(encode(info, state, bf, bw)["tiles"], info.obstacles))
     # 1.0 is a wall, a deadly pool or a cell that cannot reach the door: grey.
     for ax, field, cmap, door in [(axes[1], bf, "magma", info.fire_door),
                                   (axes[2], bw, "viridis", info.water_door)]:
@@ -94,7 +100,7 @@ def main() -> None:
         if v[F["dead_fire"]] or v[F["dead_water"]]:
             state = env.reset(0, mode, int(num))
             v = state.vec
-        tiles.set_data(tile_image(encode(info, state, bf, bw)["tiles"]))
+        tiles.set_data(tile_image(encode(info, state, bf, bw)["tiles"], info.obstacles))
         for fire, water in dots:
             fire.set_data([v[F["fire_x"]]], [v[F["fire_y"]]])
             water.set_data([v[F["water_x"]]], [v[F["water_y"]]])

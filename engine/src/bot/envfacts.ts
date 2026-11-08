@@ -26,6 +26,11 @@
  *     that one, reads 1
  *   - a character into each fan, on versus off: it is pushed the way
  *     DYN_WIND says the fan blows
+ *   - Fireboy dropped onto each column of the obstacle mask from just above
+ *     its top cell, movers in the way removed: for 40 frames his shapes never
+ *     cover an obstacle cell's centre, and with the obstacle bodies destroyed
+ *     too the same drop covers every one, so the mask's cells are solid and
+ *     the obstacle body is what holds him
  *
  * Run by bot/check_env.py; on its own: node engine/dist/bot/envfacts.js
  */
@@ -33,9 +38,9 @@ import { level, tickClock } from "../game/game.js";
 import { hostLevel } from "../game/headless.js";
 import { SoundBus, advanceTree, enterFrameTree } from "../flash/flash.js";
 import { applyInput } from "../net/hash.js";
-import { b2Vec2 } from "../box2d/box2d.js";
+import { b2AABB, b2Vec2 } from "../box2d/box2d.js";
 import type { Ported } from "../ported.js";
-import { STATE_NAMES, doorClips, readState } from "./envstate.js";
+import { STATE_NAMES, doorClips, obstacleBodies, obstacleMask, readState } from "./envstate.js";
 
 SoundBus.replaying = true;
 
@@ -59,6 +64,8 @@ const UP: Record<string, number> = { fire: 4, water: 32 };
 const OTHER: Record<string, string> = { fire: "water", water: "fire" };
 /** door_open moves by one door-clip frame in 21 per frame. */
 const DOOR_STEPS = 21;
+/** A character's shapes reach this far above and below its position (game.ts). */
+const HALF_HEIGHT = 0.8;
 
 /** One frame, as envserver.ts and the website run it: Update once, via ENTER_FRAME. */
 function step(lv: Ported, bits = 0): void {
@@ -111,6 +118,34 @@ function openAir(grid: unknown[][]): [number, number] | undefined {
     }
   }
   return undefined;
+}
+
+/** The non-static bodies, characters aside, with a shape overlapping the box. */
+function moversIn(lv: Ported, x0: number, y0: number, x1: number, y1: number): Ported[] {
+  const out: Ported[] = [];
+  const box = new b2AABB();
+  for (let b = lv.m_world.GetBodyList(); b; b = b.GetNext()) {
+    const name: string | undefined = b.GetUserData()?.name;
+    if (b.IsStatic() || name === "pers1" || name === "pers2") continue;
+    for (let s = b.GetShapeList(); s; s = s.GetNext()) {
+      s.ComputeAABB(box, b.GetXForm());
+      const { lowerBound: lo, upperBound: hi } = box;
+      if (lo.x < x1 && hi.x > x0 && lo.y < y1 && hi.y > y0) {
+        out.push(b);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** True if any of the body's shapes contains the centre of cell (r, c). */
+function covers(body: Ported, r: number, c: number): boolean {
+  const p = new b2Vec2(c, r);
+  for (let s = body.GetShapeList(); s; s = s.GetNext()) {
+    if (s.TestPoint(body.GetXForm(), p)) return true;
+  }
+  return false;
 }
 
 function doors(lv: Ported): { fire: Ported; water: Ported } {
@@ -303,6 +338,49 @@ for (const [mode, num] of LEVELS) {
     const [offX, offY] = drift(false);
     const push = (onX - offX) * dx + (onY - offY) * dy;
     expect(push > 0.01, `${name}: fan ${i} (vertical ${w.vertical}) did not push its way (${push.toFixed(3)})`);
+  }
+
+  {
+    // Not "stand him on each cell's centre": a centre can sit a fifth of a
+    // tile inside a slope, so placing him there starts him overlapping the
+    // solid. Instead drop him onto the column from just above its top
+    // obstacle cell and watch the centres below. The seesaw's plank pivots
+    // on the base's apex, right where he would land, so movers in the drop's
+    // path are destroyed first, in both runs. Destroying the obstacle bodies
+    // too and dropping again is the control: the same drop then covers every
+    // centre, so 40 frames is long enough and the obstacle body, not some
+    // tile under it, is what stops him.
+    const mask = obstacleMask(fresh(mode, num).lv);
+    const columns = new Map<number, number[]>();
+    mask.forEach((v, i) => {
+      if (!v) return;
+      const c = i % grid[0].length;
+      columns.set(c, [...(columns.get(c) ?? []), Math.floor(i / grid[0].length)]);
+    });
+    for (const [c, rows] of columns) {
+      const top = Math.min(...rows);
+      const hits = (destroy: boolean): number => {
+        const { lv } = fresh(mode, num);
+        const y = top - 0.5 - HALF_HEIGHT - 0.05;
+        for (const b of moversIn(lv, c - 0.5, y - HALF_HEIGHT, c + 0.5, top - 0.5)) lv.m_world.DestroyBody(b);
+        if (destroy) for (const b of obstacleBodies(lv)) lv.m_world.DestroyBody(b);
+        put(lv.pers1, c, y);
+        const hit = new Set<number>();
+        for (let i = 0; i < 40; i++) {
+          step(lv);
+          for (const r of rows) if (covers(lv.pers1, r, c)) hit.add(r);
+        }
+        return hit.size;
+      };
+      const open = top >= 2 && grid[top - 1][c] === 0 && grid[top - 2][c] === 0;
+      expect(open, `${name}: no open air above obstacle column ${c} to drop from`);
+      if (!open) continue;
+      const held = hits(false);
+      const fell = hits(true);
+      expect(held === 0 && fell === rows.length,
+             `${name}: obstacle column ${c} rows ${rows}: covered ${held} centres, ` +
+             `${fell} with the obstacles destroyed`);
+    }
   }
 }
 
