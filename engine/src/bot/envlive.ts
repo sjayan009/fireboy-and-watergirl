@@ -3,14 +3,23 @@
  *
  * envfacts.ts checks the env's fields against the engine; this checks that the
  * env's level is the website's level at all, using the code the server runs
- * (envstate.ts buildLevel and frame) on one side and the whole Game, stepped by
- * GameHost (the website's solo step order), on the other:
+ * (envstate.ts buildLevel, firstFrame and frame) on one side and the whole
+ * Game, stepped by GameHost (the website's solo step order), on the other.
+ * complete and game_over come from each side's own ending calls: the env's
+ * HeadlessHost counters, and the Game's real Recuent and GameOver, counted.
  *
- *   - every level: the Game's level after its first frame, with no input (the
- *     frame the bot skips on the website), then 800 frames of random input
- *     given to both. hashLevel, every STATE float and the dyn grid agree on
- *     every frame. Then the env's snapshot is restored and a new Game replays
- *     the same input: the restored env agrees with it too.
+ *   - every level: the first frame run with random human keys (the bot sends
+ *     nothing in it on the website), then up to 800 frames of random input
+ *     given to both, through any death or win to the frame its ending call
+ *     fires. hashLevel, every STATE float and the dyn grid agree on every
+ *     frame. Between frames a real key event goes to the Game's stage, as the
+ *     browser's would: the level's flags change, and the state must not, since
+ *     the key fields are the bits the frame ran with. Then the env's snapshot
+ *     is restored and a new Game replays the same input: they agree too.
+ *   - endings, every level: both characters put in their doors, and Fireboy
+ *     put in a pool that kills him (Watergirl in lava where there is none),
+ *     stepped through the stairs or death animation: both sides agree every
+ *     frame up to and including the one where Recuent or GameOver fires.
  *   - grading, by the Game's own Recuent: the medal timer equals
  *     floor((timecount at won - 1) / 26) seconds (fbwg_env.graded_seconds),
  *     whatever the clock when the level started, and the grade it stores is
@@ -20,12 +29,14 @@
  * Run by bot/check_env.py; on its own: node engine/dist/bot/envlive.js
  */
 import { Game, setClock } from "../game/game.js";
-import { SoundBus } from "../flash/flash.js";
+import { Keyboard, KeyboardEvent, SoundBus } from "../flash/flash.js";
 import { hashLevel } from "../net/hash.js";
 import { GameHost } from "../net/gamehost.js";
 import { b2Vec2 } from "../box2d/box2d.js";
 import type { Ported } from "../ported.js";
-import { STATE_NAMES, buildLevel, doorClips, frame, readDyn, readState } from "./envstate.js";
+import {
+  FIRE_HAZARDS, POOLS, STATE_NAMES, type Built, buildLevel, doorClips, firstFrame, frame, readDyn, readState,
+} from "./envstate.js";
 
 SoundBus.replaying = true;
 
@@ -36,8 +47,10 @@ const LEVELS: [string, number][] = [
 ];
 const FRAMES = 800;
 const REPLAY = 200;
-/** Neither side's ending counters: the Game keeps its own, not a host's. */
-const NO_HOST = { recuents: 0, gameOvers: 0 };
+/** Frames an ending may take from the setup to its Recuent or GameOver. */
+const ENDING_FRAMES = 200;
+/** The movement keys Game.keyPressed knows, as the browser sends them. */
+const KEY_CODES = [Keyboard.LEFT, Keyboard.RIGHT, Keyboard.UP, 65, 68, 87];
 
 let failures = 0;
 let checked = 0;
@@ -55,21 +68,36 @@ function rnd(): number {
   return seed / 2147483648;
 }
 
-/** A Game on this level, after the frame the bot skips. */
-function liveGame(mode: string, num: number, clock = 0): { game: Ported; gh: GameHost } {
+interface Ends { recuents: number; gameOvers: number }
+
+/** A Game on this level after its first frame, run with `first`, its ending calls counted. */
+function liveGame(mode: string, num: number, clock = 0, first = 0): { game: Ported; gh: GameHost; ends: Ends } {
   const game: Ported = new (Game as Ported)();
   const gh = new GameHost(game);
+  const ends: Ends = { recuents: 0, gameOvers: 0 };
+  const recuent = game.Recuent.bind(game);
+  const gameOver = game.GameOver.bind(game);
+  game.Recuent = (...a: unknown[]) => { ends.recuents++; return recuent(...a); };
+  game.GameOver = (...a: unknown[]) => { ends.gameOvers++; return gameOver(...a); };
   setClock(clock);
   gh.start(mode, num);
-  gh.step(0);
-  return { game, gh };
+  gh.step(first);
+  return { game, gh, ends };
 }
 
-/** The first frame where the two levels differ, and what differs, or "". */
-function differ(a: Ported, b: Ported): string {
+/** The env's level, built or restored, after its first frame, run with `first`. */
+function envLevel(built: Built, first: number): Built {
+  firstFrame(built, first);
+  return built;
+}
+
+const ended = (e: Ends): boolean => e.recuents + e.gameOvers > 0;
+
+/** What differs between the two levels after a frame run with `keys`, or "". */
+function differ(a: Ported, aEnds: Ends, b: Ported, bEnds: Ends, keys: number): string {
   if (hashLevel(a) !== hashLevel(b)) return "hash";
-  const sa = readState(a, NO_HOST, doorClips(a));
-  const sb = readState(b, NO_HOST, doorClips(b));
+  const sa = readState(a, aEnds, doorClips(a), keys);
+  const sb = readState(b, bEnds, doorClips(b), keys);
   const k = sa.findIndex((x, i) => !Object.is(x, sb[i]));
   if (k >= 0) return `${STATE_NAMES[k]} ${sa[k]} vs ${sb[k]}`;
   const da = readDyn(a);
@@ -78,14 +106,34 @@ function differ(a: Ported, b: Ported): string {
   return c >= 0 ? `dyn cell ${c}` : "";
 }
 
-/** Run both on the same input; the frame and field of the first difference. */
-function race(glv: Ported, gh: GameHost, lv: Ported, bits: number[]): string {
-  let what = differ(glv, lv);
+/** A key down or up on the Game's stage, between frames, as the browser sends one. */
+function press(game: Ported): void {
+  const type = rnd() < 0.5 ? KeyboardEvent.KEY_DOWN : KeyboardEvent.KEY_UP;
+  game.stage.dispatchEvent(new KeyboardEvent(type, KEY_CODES[Math.floor(rnd() * KEY_CODES.length)]));
+}
+
+/** The level's input flags, packed like applyInput's bits. */
+const flags = (lv: Ported): number =>
+  (lv.l_pressed ? 1 : 0) | (lv.r_pressed ? 2 : 0) | (lv.u_pressed ? 4 : 0) |
+  (lv.l_pressed2 ? 8 : 0) | (lv.r_pressed2 ? 16 : 0) | (lv.u_pressed2 ? 32 : 0);
+
+/** Frames where a key event left the live flags unlike the bits the frame ran with. */
+let poked = 0;
+
+/**
+ * Run both on `bits` until the input runs out or an ending call fires, which
+ * differ compares through complete and game_over. The first difference, or "".
+ */
+function race(live: { game: Ported; gh: GameHost; ends: Ends }, env: Built, first: number, bits: number[]): string {
+  const glv = live.game.m_level;
+  let what = differ(glv, live.ends, env.lv, env.host, first);
   if (what) return `at reset: ${what}`;
-  for (let f = 0; f < bits.length && !glv.pause; f++) {
-    gh.step(bits[f]);
-    frame(lv, bits[f]);
-    what = differ(glv, lv);
+  for (let f = 0; f < bits.length && !ended(live.ends) && !ended(env.host); f++) {
+    live.gh.step(bits[f]);
+    frame(env.lv, bits[f]);
+    press(live.game);
+    if (flags(glv) !== bits[f]) poked++;
+    what = differ(glv, live.ends, env.lv, env.host, bits[f]);
     if (what) return `frame ${f + 1}: ${what}`;
   }
   return "";
@@ -101,21 +149,63 @@ for (const [mode, num] of LEVELS) {
     }
     bits.push(held);
   }
+  const first = Math.floor(rnd() * 64);
   const built = buildLevel(mode, num);
-  let { game, gh } = liveGame(mode, num);
-  let what = race(game.m_level, gh, built.lv, bits);
-  expect(!what, `${name}: the env and the whole game differ ${what}`);
+  let what = race(liveGame(mode, num, 0, first), envLevel(built, first), first, bits);
+  expect(!what, `${name}: first keys ${first}: the env and the whole game differ ${what}`);
   built.snap.restore();
-  ({ game, gh } = liveGame(mode, num));
-  what = race(game.m_level, gh, built.lv, bits.slice(0, REPLAY));
+  what = race(liveGame(mode, num, 0, first), envLevel(built, first), first, bits.slice(0, REPLAY));
   expect(!what, `${name}: after a restore, the env and the whole game differ ${what}`);
 }
+expect(poked > 0, "no key event between frames ever reached the live level's flags");
 
 /** Every body called `name` (collected diamonds are renamed). */
 function bodies(lv: Ported, name: string): Ported[] {
   const out: Ported[] = [];
   for (let b = lv.m_world.GetBodyList(); b; b = b.GetNext()) if (b.GetUserData()?.name === name) out.push(b);
   return out;
+}
+
+/** The first cell holding one of `codes`, or undefined. */
+function poolCell(lv: Ported, codes: readonly number[]): { x: number; y: number } | undefined {
+  const grid: unknown[][] = lv.LevelArray;
+  for (let r = 0; r < grid.length; r++) {
+    for (let c = 0; c < grid[r].length; c++) {
+      if (codes.includes(grid[r][c] as number)) return { x: c, y: r };
+    }
+  }
+  return undefined;
+}
+
+for (const [mode, num] of LEVELS) {
+  const name = `${mode} ${num}`;
+  // A level with no pool at all has no death to set up.
+  const pools = poolCell(buildLevel(mode, num).lv, [...FIRE_HAZARDS, ...POOLS.lava]);
+  for (const ending of pools ? ["win", "death"] : ["win"]) {
+    const live = liveGame(mode, num);
+    const env = envLevel(buildLevel(mode, num), 0);
+    const glv = live.game.m_level;
+    for (const lv of [glv, env.lv]) {
+      if (ending === "win") {
+        put(lv.pers1, bodies(lv, "finish1")[0].GetPosition(), -0.8);
+        put(lv.pers2, bodies(lv, "finish2")[0].GetPosition(), -0.8);
+      } else {
+        const fire = poolCell(lv, FIRE_HAZARDS);
+        if (fire) put(lv.pers1, fire, -0.6);
+        else put(lv.pers2, poolCell(lv, POOLS.lava)!, -0.6);
+      }
+    }
+    let what = differ(glv, live.ends, env.lv, env.host, 0);
+    let f = 0;
+    for (; !what && f < ENDING_FRAMES && !(ended(live.ends) && ended(env.host)); f++) {
+      live.gh.step(0);
+      frame(env.lv, 0);
+      what = differ(glv, live.ends, env.lv, env.host, 0);
+    }
+    const want = ending === "win" ? "recuents" : "gameOvers";
+    expect(!what && live.ends[want] === 1 && env.host[want] === 1,
+           `${name}: ${ending}: ${what ? `frame ${f}: ${what}` : `no ${want} within ${ENDING_FRAMES} frames`}`);
+  }
 }
 
 function put(body: Ported, at: Ported, dy = 0): void {
@@ -150,7 +240,11 @@ function finish(mode: string, num: number, diamonds: boolean, start: number, clo
       }
     }
   }
-  while (lv.timecount < start) gh.step(0);
+  // Bounded: a level that ends early (a death) stops timecount for good.
+  for (let i = 0; lv.timecount < start; i++) {
+    if (i > start + 100) throw new Error(`${mode} ${num}: timecount stuck at ${lv.timecount}, wanted ${start}`);
+    gh.step(0);
+  }
   const [fire] = bodies(lv, "finish1");
   const [water] = bodies(lv, "finish2");
   put(lv.pers1, fire.GetPosition(), -0.8);

@@ -63,13 +63,19 @@ Facts from the code, not estimates.
   accumulator, up to five steps per animation frame when the browser stutters.
   `step()` (`embed.ts:816`) ticks the clock and the display tree. The bot
   decides once per `step()`, not once per animation frame.
-- **The level's first frame.** The env runs each level's first frame with no
-  input before the bot sees it, because a level fresh from its constructor is
-  not a state play shows (levers at ±90°, every fan on). So on the website the
-  bot sends nothing for the level's first frame and starts deciding from the
-  state after it; the human's keys in that one frame still count, a 1/26 s
-  difference. `engine/src/bot/envlive.ts` checks the env against the whole
-  game on exactly that rule.
+- **The level's first frame.** The bot never sees a level fresh from its
+  constructor, which is not a state play shows (levers at ±90°, every fan
+  on). On the website the bot sends nothing for the level's first frame and
+  starts deciding from the state after it, but the human's keys in that frame
+  count, so `reset` takes them as `first` and runs that frame with them.
+  Training should draw `first` from the partner, not leave it 0.
+  `engine/src/bot/envlive.ts` checks the env against the whole game on
+  exactly that rule.
+- **The key fields' timing.** The observation's six key fields are the bits
+  the last frame ran with. `readState` takes them as an argument and never
+  reads the level's `*_pressed` flags, because the browser's key handlers
+  change those between frames. The runtime must capture the bits right after
+  each `step()` and pass the same value to the encoder.
 - **Actions.** Three bits per character: left = 1, right = 2, up = 4. Eight
   actions each, no down key. The level reads them as `l_pressed`,
   `r_pressed`, `u_pressed` (Fireboy, arrow keys) and the `2` variants

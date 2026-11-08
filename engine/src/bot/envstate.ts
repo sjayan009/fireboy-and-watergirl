@@ -19,7 +19,7 @@ import type { Ported } from "../ported.js";
  * Bump whenever a field, the dyn grid or a meaning changes; fbwg_env.py's must
  * match, and the server's OP_HELLO sends it so a client checks before reset.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const ROWS = 29;
 export const COLS = 39;
@@ -97,7 +97,7 @@ export function frame(lv: Ported, bits: number): void {
   enterFrameTree(lv);
 }
 
-/** A built level, its snapshot one frame in, and the clock that goes with it. */
+/** A built level, its snapshot before the first frame, and the clock that goes with it. */
 export interface Built {
   lv: Ported;
   host: Ported;
@@ -108,14 +108,17 @@ export interface Built {
 }
 
 /**
- * Build a level and capture it one frame in, the state every reset returns.
+ * Build a level and capture it before its first frame; firstFrame runs that
+ * frame, and every reset is a restore plus firstFrame.
  *
- * That frame runs with no input. A just-built level is not a state play ever
- * shows -- levers sit at +-90 degrees and every fan reads on until the first
- * Update applies the levers (puzzle 7's three fans start off) -- so the bot
- * never sees it, and on the website it must skip the level's first frame the
- * same way (envlive.ts checks the env against the whole game on that rule).
- * Clock from 0, not getClock(): the global still holds whichever env ran last.
+ * A just-built level is not a state play ever shows -- levers sit at +-90
+ * degrees and every fan reads on until the first Update applies the levers
+ * (puzzle 7's three fans start off) -- so the bot never sees it. On the
+ * website the bot sends nothing in the level's first frame and starts
+ * deciding from the state after it, but the human's keys in that frame count,
+ * so reset takes them (envlive.ts checks the env against the whole game on
+ * that rule). Clock from 0, not getClock(): the global still holds whichever
+ * env ran last.
  */
 export function buildLevel(mode: string, num: number): Built {
   const key = `${mode}-${num}`;
@@ -128,9 +131,17 @@ export function buildLevel(mode: string, num: number): Built {
   if (counts.some((n, i) => n > [LEVER_SLOTS, PUSHER_SLOTS, MOVER_SLOTS, FAN_SLOTS][i])) {
     throw new Error(`${key} has ${counts.join(" / ")} levers / buttons / movers / fans`);
   }
-  setClock(0);
-  frame(lv, 0);
-  return { lv, host, snap: new Snapshot().capture([host]), clock: getClock(), doors: doorClips(lv) };
+  return { lv, host, snap: new Snapshot().capture([host]), clock: 0, doors: doorClips(lv) };
+}
+
+/**
+ * The level's first frame, run with `keys`: the human's, since the bot sends
+ * nothing in it. On a level just built or just restored from its snapshot.
+ * Leaves the global clock at the clock after that frame.
+ */
+export function firstFrame(b: Built, keys: number): void {
+  setClock(b.clock);
+  frame(b.lv, keys);
 }
 
 /**
@@ -254,8 +265,16 @@ export function readDyn(lv: Ported): Uint8Array {
   return out;
 }
 
-/** The STATE_FLOATS numbers for one level, in STATE_NAMES order. */
-export function readState(lv: Ported, host: Ported, doors: Ported[]): number[] {
+/**
+ * The STATE_FLOATS numbers for one level, in STATE_NAMES order.
+ *
+ * `keys` is the 6-bit input the last frame ran with, captured by the caller
+ * right after that frame -- never re-read from the level's l/r/u_pressed
+ * flags, which the browser's key handlers (Game.keyPressed) change between
+ * frames, so reading them before the next decision would show keys pressed
+ * since, not keys the state came from.
+ */
+export function readState(lv: Ported, host: Ported, doors: Ported[], keys: number): number[] {
   const cl = lv.myContactListener;
   const p1 = lv.pers1.GetPosition();
   const v1 = lv.pers1.GetLinearVelocity();
@@ -275,11 +294,7 @@ export function readState(lv: Ported, host: Ported, doors: Ported[]): number[] {
     // in the same branch that pauses and ends the level, and only on a win
     // (game.ts Update); Recuent fires when that clip finishes, 34 frames on.
     lv.getChildByName("ender") ? 1 : 0,
-    // The keys the last frame ran with: applyInput writes these flags and the
-    // level only reads them, so the live game's flags after a step hold the
-    // same thing, the human's keys and the bot's both.
-    lv.l_pressed ? 1 : 0, lv.r_pressed ? 1 : 0, lv.u_pressed ? 1 : 0,
-    lv.l_pressed2 ? 1 : 0, lv.r_pressed2 ? 1 : 0, lv.u_pressed2 ? 1 : 0,
+    ...[1, 2, 4, 8, 16, 32].map((bit) => (keys & bit ? 1 : 0)),
   ];
   const levers: Ported[] = lv.myLevers;
   for (let i = 0; i < LEVER_SLOTS; i++) {

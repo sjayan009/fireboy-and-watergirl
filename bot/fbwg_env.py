@@ -64,7 +64,7 @@ WATER_HAZARDS = LAVA + GOO      # what kills Watergirl
 # Bump whenever CHANNELS, the vector, or their meaning changes, here and in
 # envstate.ts; the client refuses a server whose version or STATE names
 # differ. Every trained model records the version it was trained on.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # timecount is divided by this in encode() and clipped at 1. 150 s at the
 # game's 26 frames a second: the longest medal time (TimeTable) is 145 s, so 1
@@ -187,15 +187,22 @@ class EnvClient:
         dyn = np.frombuffer(buf, np.uint8, ROWS * COLS, off + STATE_FLOATS * 4 + 4)
         return State(vec, h, dyn.reshape(ROWS, COLS).copy())
 
-    def reset(self, env: int, mode: str, num: int, delay: int = 0, side: int = FIREBOY) -> State:
-        """Start an episode with the bot playing `side` (FIREBOY or WATERGIRL).
-        `delay` frames pass between sending the bot's press and it taking
-        effect; 0, the default, is the bot on the main thread. The partner's
-        bits always apply at once, as a human's keys do in Local Play."""
+    def reset(self, env: int, mode: str, num: int, delay: int = 0, side: int = FIREBOY,
+              first: int = 0) -> State:
+        """Start an episode with the bot playing `side` (FIREBOY or WATERGIRL),
+        returning the state after the level's first frame. `first` is the
+        partner's keys in that frame, 6-bit like step's; the bot's bits in it
+        are dropped, since on the website the bot sends nothing then and the
+        human's keys count. `delay` frames pass between sending the bot's
+        press and it taking effect; 0, the default, is the bot on the main
+        thread. The partner's bits always apply at once, as a human's keys do
+        in Local Play."""
         if side not in (FIREBOY, WATERGIRL):
             raise ValueError(f"side must be FIREBOY or WATERGIRL, got {side}")
+        if not 0 <= first < 64:
+            raise ValueError(f"first must be 6-bit, got {first}")
         m = mode.encode("ascii")
-        reply = self._call(struct.pack("<BHB", OP_RESET, env, len(m)) + m + bytes([num, delay, side]),
+        reply = self._call(struct.pack("<BHB", OP_RESET, env, len(m)) + m + bytes([num, delay, side, first]),
                            STATE_BYTES)
         return self.parse_state(reply)
 
@@ -263,15 +270,51 @@ _X, _Y, _VEL, _SPIN, _COUNT, _ANGLE = (
                  ("_angle",)))
 
 
-def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
-           bfs_water: np.ndarray, side: int) -> dict[str, np.ndarray]:
+# The tile channels state.dyn fills, and the DYN_* bit each one reads.
+_DYN_CHANNELS = np.array([CHANNELS.index(n) for n in (
+    "red_diamond", "blue_diamond", "green_diamond", "moving",
+    "wind_up", "wind_right", "wind_down", "wind_left")])
+_DYN_BITS = np.array([DYN_RED, DYN_BLUE, DYN_GREEN, DYN_MOVING,
+                      DYN_WIND_UP, DYN_WIND_RIGHT, DYN_WIND_DOWN, DYN_WIND_LEFT], np.uint8)[:, None, None]
+
+
+@dataclass
+class LevelObs:
+    """The part of every observation that never changes within a level, built
+    once per level by prepare() so encode() only fills in what moves."""
+    static: np.ndarray  # float32, (len(CHANNELS), ROWS, COLS): grid channels, dyn channels 0
+    bfs: np.ndarray     # float32, (2, ROWS, COLS), read-only: fire then water
+
+
+def prepare(info: LevelInfo, bfs_fire: np.ndarray, bfs_water: np.ndarray) -> LevelObs:
+    """The static tile channels and the BFS stack for one level. Static
+    channels come from info.grid, and solid adds info.obstacles; doors are a
+    single 1 at each door cell."""
+    g = info.grid
+    static = np.zeros((len(CHANNELS), ROWS, COLS), np.float32)
+    planes = {
+        "solid": (g == SOLID) | info.obstacles,
+        "slope1": g == SLOPES[0], "slope2": g == SLOPES[1],
+        "slope3": g == SLOPES[2], "slope4": g == SLOPES[3],
+        "water": np.isin(g, WATER), "lava": np.isin(g, LAVA), "goo": np.isin(g, GOO),
+    }
+    for name, plane in planes.items():
+        static[CHANNELS.index(name)] = plane
+    static[(CHANNELS.index("fire_door"), *info.fire_door)] = 1
+    static[(CHANNELS.index("water_door"), *info.water_door)] = 1
+    bfs = np.stack([bfs_fire, bfs_water]).astype(np.float32)
+    bfs.setflags(write=False)
+    return LevelObs(static, bfs)
+
+
+def encode(level: LevelObs, state: State, side: int) -> dict[str, np.ndarray]:
     """One observation.
 
-    tiles: float32, (len(CHANNELS), ROWS, COLS), one-hot, in CHANNELS order.
-           Static channels come from info.grid, and solid adds
-           info.obstacles; diamonds, moving and wind from state.dyn; doors
-           are a single 1 at each door cell.
-    bfs:   float32, (2, ROWS, COLS): fire then water.
+    tiles: float32, (len(CHANNELS), ROWS, COLS), one-hot, in CHANNELS order:
+           level.static, with diamonds, moving and wind from state.dyn.
+    bfs:   float32, (2, ROWS, COLS): level.bfs itself, the same read-only
+           array for every observation of the level, so a rollout buffer can
+           keep one per level instead of one per step.
     vec:   float32, 1-D: state.vec with positions and fan bounds divided by
            COLS/ROWS, velocities by VEL_SCALE, spin by SPIN_SCALE, diamond
            counts by COUNT_SCALE, mover angles wrapped and divided by pi, and
@@ -280,23 +323,8 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
            so the bot sees what its partner pressed last frame. Then sin and
            cos of (timecount + 1) / 10, then `side` (FIREBOY 0, WATERGIRL 1).
     """
-    g, d = info.grid, state.dyn
-    fire_door = np.zeros(g.shape, bool)
-    fire_door[info.fire_door] = True
-    water_door = np.zeros(g.shape, bool)
-    water_door[info.water_door] = True
-    planes = {
-        "solid": (g == SOLID) | info.obstacles,
-        "slope1": g == SLOPES[0], "slope2": g == SLOPES[1],
-        "slope3": g == SLOPES[2], "slope4": g == SLOPES[3],
-        "water": np.isin(g, WATER), "lava": np.isin(g, LAVA), "goo": np.isin(g, GOO),
-        "red_diamond": (d & DYN_RED) > 0, "blue_diamond": (d & DYN_BLUE) > 0,
-        "green_diamond": (d & DYN_GREEN) > 0,
-        "fire_door": fire_door, "water_door": water_door,
-        "moving": (d & DYN_MOVING) > 0,
-        "wind_up": (d & DYN_WIND_UP) > 0, "wind_right": (d & DYN_WIND_RIGHT) > 0,
-        "wind_down": (d & DYN_WIND_DOWN) > 0, "wind_left": (d & DYN_WIND_LEFT) > 0,
-    }
+    tiles = level.static.copy()
+    tiles[_DYN_CHANNELS] = (state.dyn & _DYN_BITS) > 0
     vec = state.vec.astype(np.float32)
     vec[_X] /= COLS
     vec[_Y] /= ROWS
@@ -314,8 +342,4 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
     if side not in (FIREBOY, WATERGIRL):
         raise ValueError(f"side must be FIREBOY or WATERGIRL, got {side}")
     vec = np.append(vec, np.float32([math.sin((t + 1) / 10), math.cos((t + 1) / 10), side]))
-    return {
-        "tiles": np.stack([planes[c] for c in CHANNELS]).astype(np.float32),
-        "bfs": np.stack([bfs_fire, bfs_water]).astype(np.float32),
-        "vec": vec,
-    }
+    return {"tiles": tiles, "bfs": level.bfs, "vec": vec}

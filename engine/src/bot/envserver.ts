@@ -16,13 +16,16 @@
  * ---- Requests (the first payload byte is the op) ---------------------------
  *
  *   OP_RESET  u8 op, u16 env, u8 modeLen, modeLen ASCII bytes, u8 num,
- *             u8 delay, u8 side
- *             -> one STATE record for that env. `side` is the character
- *                the bot plays, 0 Fireboy, 1 Watergirl. `delay` is the bot's
- *                input delay in frames for this episode, and only its side's
- *                three bits wait; the partner's apply in the frame they are
- *                sent, as a human's keys do in Local Play. Delay 0 is the
- *                bot on the main thread.
+ *             u8 delay, u8 side, u8 first
+ *             -> one STATE record for that env, after the level's first
+ *                frame. `side` is the character the bot plays, 0 Fireboy,
+ *                1 Watergirl. `delay` is the bot's input delay in frames for
+ *                this episode, and only its side's three bits wait; the
+ *                partner's apply in the frame they are sent, as a human's
+ *                keys do in Local Play. Delay 0 is the bot on the main
+ *                thread. `first` is the partner's keys in the first frame,
+ *                6-bit like a step's; the bot's bits in it are dropped,
+ *                since on the website the bot sends nothing in that frame.
  *   OP_STEP   u8 op, u8 repeat, N x u8 input bits (one byte per env)
  *             -> N STATE records, in env order
  *   OP_HELLO  nothing after the op byte
@@ -62,8 +65,9 @@
  *     won        1 from the frame the level ends with both doors open: the
  *                game's own end of a win (the "ender" clip), the exact signal
  *     fireLeft, fireRight, fireUp, waterLeft, waterRight, waterUp   1 for
- *                each key the last frame ran with (lv.l/r/u_pressed and the
- *                2 variants), after the delay: what both characters did
+ *                each key the last frame ran with, after the delay: what
+ *                both characters did. The bits the server applied, kept
+ *                beside the level, not re-read from its l/r/u_pressed flags
  *     LEVER_SLOTS levers, -1 fully off .. +1 fully on, in creation order,
  *                0 for slots this level does not have
  *     PUSHER_SLOTS buttons, 0 up .. 1 at the depth the game counts as
@@ -93,11 +97,13 @@
  *            listener, so enterFrameTree already runs it once. snapbench.ts
  *            and LevelHost also call lv.Update() by hand, which runs it
  *            twice: two physics steps and two timecount ticks per frame.
- * - Reset:   build, run one frame with no input so the level settles, then
- *            capture `new Snapshot().capture([host])` once per (env, level),
- *            restore it on later resets (envstate.ts buildLevel). On the
- *            website the bot skips the level's first frame the same way. Each env keeps the `cache` levels it
- *            reset to most recently; one evicted is built again the same way.
+ * - Reset:   build and capture `new Snapshot().capture([host])` before the
+ *            first frame once per (env, level), restore it on later resets,
+ *            then run the first frame with the partner's `first` keys
+ *            (envstate.ts buildLevel, firstFrame). On the website the bot
+ *            sends nothing in that frame. Each env keeps the `cache` levels
+ *            it reset to most recently; one evicted is built again the same
+ *            way.
  * - Clock:   ONE module-global (getClock/setClock) shared by every env in this
  *            process, and the snapshot does not save it. Save it beside the
  *            snapshot, and setClock(env.clock) before stepping an env,
@@ -145,7 +151,7 @@ import { ENGINE_VERSION } from "../version.js";
 import type { Ported } from "../ported.js";
 import {
   COLS, ROWS, SCHEMA_VERSION, STATE_FLOATS, STATE_NAMES, type Built,
-  buildLevel, frame, obstacleMask, readDyn, readState,
+  buildLevel, firstFrame, frame, obstacleMask, readDyn, readState,
 } from "./envstate.js";
 
 export const STATE_BYTES = STATE_FLOATS * 4 + 4 + ROWS * COLS;
@@ -179,9 +185,14 @@ class Env {
   private queue: number[] = [];
   /** The bot's three bits: 7 Fireboy, 56 Watergirl. */
   private mine = 7;
+  /** The bits the last frame ran with, for the key fields. */
+  private keys = 0;
 
-  /** Build or restore the level, and size the input queue for `delay`. */
-  reset(mode: string, num: number, delay: number, side: number): void {
+  /**
+   * Build or restore the level, run its first frame with the partner's
+   * `first` keys, and size the input queue for `delay`.
+   */
+  reset(mode: string, num: number, delay: number, side: number, first: number): void {
     if (side !== 0 && side !== 1) throw new Error(`side must be 0 or 1, got ${side}`);
     const key = `${mode}-${num}`;
     let c = this.cache.get(key);
@@ -194,11 +205,13 @@ class Env {
     this.cache.set(key, c);
     if (this.cache.size > CACHE) this.cache.delete(this.cache.keys().next().value!);
     this.cur = c;
-    this.clock = c.clock;
+    this.mine = side ? 56 : 7;
+    this.keys = first & 63 & ~this.mine;
+    firstFrame(c, this.keys);
+    this.clock = getClock();
     // Rebuilt, not emptied: presses from the last episode must not come out
     // in this one, whatever either episode's delay.
     this.queue = new Array<number>(delay).fill(0);
-    this.mine = side ? 56 : 7;
   }
 
   private get level(): Built {
@@ -222,7 +235,8 @@ class Env {
     setClock(this.clock);
     for (let i = 0; i < repeat; i++) {
       this.queue.push(bits & this.mine);
-      frame(lv, this.queue.shift()! | (bits & ~this.mine));
+      this.keys = this.queue.shift()! | (bits & ~this.mine);
+      frame(lv, this.keys);
     }
     this.clock = getClock();
   }
@@ -230,7 +244,7 @@ class Env {
   /** Write one STATE record at `off` in `out`. */
   writeState(out: DataView, off: number): void {
     const { lv, host, doors } = this.level;
-    const floats = readState(lv, host, doors);
+    const floats = readState(lv, host, doors, this.keys);
     for (let i = 0; i < STATE_FLOATS; i++) out.setFloat32(off + 4 * i, floats[i], true);
     out.setUint32(off + STATE_FLOATS * 4, parseInt(hashLevel(lv), 16), true);
 
@@ -286,7 +300,7 @@ function handle(req: DataView): Uint8Array {
       const env = envAt(req.getUint16(1, true));
       const len = req.getUint8(3);
       const mode = Buffer.from(req.buffer, req.byteOffset + 4, len).toString("ascii");
-      env.reset(mode, req.getUint8(4 + len), req.getUint8(5 + len), req.getUint8(6 + len));
+      env.reset(mode, req.getUint8(4 + len), req.getUint8(5 + len), req.getUint8(6 + len), req.getUint8(7 + len));
       const out = new Uint8Array(STATE_BYTES);
       env.writeState(new DataView(out.buffer), 0);
       return out;

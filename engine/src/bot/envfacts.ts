@@ -35,8 +35,9 @@
  *   - a mover given a known pose and velocity reads exactly that in its slot,
  *     and slots past the level's movers read 0
  *   - settled at the spawn, the characters' cells are not painted moving
- *   - each key alone (Fireboy left, right, up, then Watergirl's): after the
- *     frame, that key's field reads 1 and the other five 0; no key moves the
+ *   - each key alone (Fireboy left, right, up, then Watergirl's): the level
+ *     ran the frame with exactly that flag set, that key's field reads 1 and
+ *     the other five 0; no key moves the
  *     character it does not name, Up moves the one it names, and so does
  *     left or right (a spawn can be against a wall: Fireboy's on adventure 15)
  *   - Fireboy dropped onto each column of the obstacle mask from just above
@@ -103,9 +104,9 @@ function bodyAt(lv: Ported, name: string): Ported {
   return undefined;
 }
 
-/** The STATE floats the env would send for this level, by field name. */
-function state(lv: Ported, host: Ported): Record<string, number> {
-  const f = readState(lv, host, doorClips(lv));
+/** The STATE floats the env would send for this level after a frame run with `keys`, by field name. */
+function state(lv: Ported, host: Ported, keys = 0): Record<string, number> {
+  const f = readState(lv, host, doorClips(lv), keys);
   return Object.fromEntries(STATE_NAMES.map((n, i) => [n, f[i]]));
 }
 
@@ -192,7 +193,9 @@ for (const [mode, num] of LEVELS) {
     for (let f = 0; f < 20; f++) step(lv);
     const before = state(lv, host);
     step(lv, 1 << i);
-    const s = state(lv, host);
+    const ran = [lv.l_pressed, lv.r_pressed, lv.u_pressed, lv.l_pressed2, lv.r_pressed2, lv.u_pressed2];
+    expect(ran.every((on, k) => on === (k === i)), `${name}: bit ${1 << i} set flags ${ran.map(Number).join("")}`);
+    const s = state(lv, host, 1 << i);
     const on = KEYS.filter((k) => s[k] === 1);
     expect(on.length === 1 && on[0] === key && KEYS.every((k) => s[k] === 0 || s[k] === 1),
            `${name}: key bit ${1 << i} reads as ${on.join(",") || "nothing"}`);

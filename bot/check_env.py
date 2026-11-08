@@ -27,7 +27,7 @@ from fbwg_env import (  # noqa: E402
     CHANNELS, COLS, DYN_BLUE, FIREBOY, WATERGIRL, DYN_GREEN, DYN_MOVING, DYN_RED, DYN_WIND_LEFT,
     DYN_WIND_UP, FIRE_HAZARDS, LEVER_SLOTS, MEDAL_SECONDS, PUSHER_SLOTS,
     ROWS, SCHEMA_VERSION, SERVER, STATE_FIELDS, STATE_FLOATS, TIME_SCALE, TIME_TABLE, VEL_SCALE,
-    TRANSLATION, WATER_HAZARDS, EnvClient, LevelInfo, State, bfs_field, cell, encode,
+    TRANSLATION, WATER_HAZARDS, EnvClient, LevelInfo, State, bfs_field, cell, encode, prepare,
 )
 
 LEVEL_DIR = SERVER.parents[3] / "extracted" / "levels"
@@ -133,7 +133,8 @@ def _():
     info, st = fake_level()
     bf = np.full((ROWS, COLS), .5, np.float32)
     bw = np.full((ROWS, COLS), .25, np.float32)
-    obs = encode(info, st, bf, bw, WATERGIRL)
+    lvl = prepare(info, bf, bw)
+    obs = encode(lvl, st, WATERGIRL)
     assert isinstance(SCHEMA_VERSION, int)
     t, b, v = obs["tiles"], obs["bfs"], obs["vec"]
     assert t.shape == (len(CHANNELS), ROWS, COLS) and t.dtype == np.float32, (t.shape, t.dtype)
@@ -146,11 +147,11 @@ def _():
     assert np.isclose(v[F["timecount"]], tc / TIME_SCALE), "timecount not scaled by TIME_SCALE"
     assert np.allclose(v[-3:-1], [np.sin((tc + 1) / 10), np.cos((tc + 1) / 10)]), \
         "fan phase is not sin, cos of (timecount + 1) / 10"
-    assert v[-1] == WATERGIRL and encode(info, st, bf, bw, FIREBOY)["vec"][-1] == FIREBOY, \
+    assert v[-1] == WATERGIRL and encode(lvl, st, FIREBOY)["vec"][-1] == FIREBOY, \
         "side is not the last float"
     for bad in (2, -1):
         try:
-            encode(info, st, bf, bw, bad)
+            encode(lvl, st, bad)
         except ValueError:
             pass
         else:
@@ -160,7 +161,13 @@ def _():
     # Local Play has no time limit: ten minutes reads the same as 150 s.
     late = State(st.vec.copy(), 0, st.dyn)
     late.vec[F["timecount"]] = 26 * 600
-    assert encode(info, late, bf, bw, FIREBOY)["vec"][F["timecount"]] == 1, "timecount is not clipped at 1"
+    assert encode(lvl, late, FIREBOY)["vec"][F["timecount"]] == 1, "timecount is not clipped at 1"
+    # The per-level parts are shared, never written: bfs is the one read-only
+    # array, and tiles is a copy, so a state's diamonds do not stay behind.
+    assert obs["bfs"] is lvl.bfs and not lvl.bfs.flags.writeable, "bfs is not the level's read-only stack"
+    empty = State(st.vec, 0, np.zeros_like(st.dyn))
+    assert encode(lvl, empty, FIREBOY)["tiles"][CHANNELS.index("red_diamond")].sum() == 0, \
+        "an earlier state's diamonds leaked into the level's static planes"
     for name, scale in (("fire_x", COLS), ("water_y", ROWS), ("mover0_x", COLS), ("mover23_y", ROWS),
                         ("fan0_x0", COLS), ("fan5_y1", ROWS), ("fire_vy", VEL_SCALE),
                         ("mover7_vx", VEL_SCALE), ("mover7_spin", fbwg_env.SPIN_SCALE),
@@ -175,8 +182,8 @@ def _():
 @check("encode: every channel in the right place")
 def _():
     info, st = fake_level()
-    t = encode(info, st, np.zeros((ROWS, COLS), np.float32),
-               np.zeros((ROWS, COLS), np.float32), FIREBOY)["tiles"]
+    t = encode(prepare(info, np.zeros((ROWS, COLS), np.float32), np.zeros((ROWS, COLS), np.float32)),
+               st, FIREBOY)["tiles"]
     ch = {name: t[i] for i, name in enumerate(CHANNELS)}
     want = {
         "solid": [(0, c) for c in range(COLS)] + [(7, 10)],
@@ -501,9 +508,10 @@ def _():
         info = c.info(0)
         bf = bfs_field(info.grid, info.fire_door, FIRE_HAZARDS, walls=info.obstacles)
         bw = bfs_field(info.grid, info.water_door, WATER_HAZARDS, walls=info.obstacles)
-        o1 = encode(info, st1, bf, bw, FIREBOY)
+        lvl = prepare(info, bf, bw)
+        o1 = encode(lvl, st1, FIREBOY)
         run(c, [rand_bits(4, 150)])
-        o2 = encode(info, c.reset(0, "adventure", 3), bf, bw, FIREBOY)
+        o2 = encode(lvl, c.reset(0, "adventure", 3), FIREBOY)
         for k in o1:
             assert np.array_equal(o1[k], o2[k]), f"{k} differs after restore"
     finally:
@@ -531,6 +539,33 @@ def _():
             steps = run(c, [[0] * 6, [0] * 6])    # ...must not leak past the reset
             assert all(s[0].vec[F["fire_x"]] == s[1].vec[F["fire_x"]] for s in steps), \
                 f"delay {delay} then {after}: presses from before the reset still came out"
+    finally:
+        c.close()
+
+
+@server_check("reset: the partner's first-frame keys count, the bot's are dropped")
+def _():
+    c = EnvClient(1)
+    try:
+        idle = c.reset(0, "adventure", 1)
+        with_bad = False
+        try:
+            c.reset(0, "adventure", 1, first=64)
+        except ValueError:
+            with_bad = True
+        assert with_bad, "first=64 was accepted"
+        # Fireboy right (2) and Watergirl left (8) in the first frame.
+        as_water = c.reset(0, "adventure", 1, side=WATERGIRL, first=2 | 8).vec
+        assert as_water[F["fire_right"]] == 1 and as_water[F["water_left"]] == 0, "the keys fields after reset"
+        assert as_water[F["fire_x"]] > idle.vec[F["fire_x"]], "the partner's first-frame Right did not move Fireboy"
+        assert as_water[F["water_x"]] == idle.vec[F["water_x"]], "the bot's first-frame key was not dropped"
+        as_fire = c.reset(0, "adventure", 1, side=FIREBOY, first=2 | 8).vec
+        assert as_fire[F["water_left"]] == 1 and as_fire[F["fire_right"]] == 0, "the keys fields after reset"
+        assert as_fire[F["fire_x"]] == idle.vec[F["fire_x"]], "the bot's first-frame key was not dropped"
+        assert as_fire[F["water_x"]] < idle.vec[F["water_x"]], "the partner's first-frame Left did not move Watergirl"
+        again = c.reset(0, "adventure", 1)
+        assert again.hash == idle.hash and np.array_equal(again.vec, idle.vec), \
+            "a reset after first keys is not the plain reset"
     finally:
         c.close()
 

@@ -23,7 +23,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fbwg_env import (  # noqa: E402
     CHANNELS, COLS, FIRE_HAZARDS, ROWS, STATE_FIELDS, WATER_HAZARDS,
-    FIREBOY, EnvClient, bfs_field, encode,
+    FIREBOY, EnvClient, bfs_field, encode, prepare,
 )
 
 # Painted in this order, so later channels sit on top.
@@ -68,10 +68,11 @@ def main() -> None:
     info = env.info(0)
     bf = bfs_field(info.grid, info.fire_door, FIRE_HAZARDS, walls=info.obstacles)
     bw = bfs_field(info.grid, info.water_door, WATER_HAZARDS, walls=info.obstacles)
+    level = prepare(info, bf, bw)
     rng = random.Random(args.seed)
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.6))
-    tiles = axes[0].imshow(tile_image(encode(info, state, bf, bw, FIREBOY)["tiles"], info.obstacles))
+    tiles = axes[0].imshow(tile_image(encode(level, state, FIREBOY)["tiles"], info.obstacles))
     # 1.0 is a wall, a deadly pool or a cell that cannot reach the door: grey.
     for ax, field, cmap, door in [(axes[1], bf, "magma", info.fire_door),
                                   (axes[2], bw, "viridis", info.water_door)]:
@@ -100,7 +101,7 @@ def main() -> None:
         if v[F["dead_fire"]] or v[F["dead_water"]]:
             state = env.reset(0, mode, int(num))
             v = state.vec
-        tiles.set_data(tile_image(encode(info, state, bf, bw, FIREBOY)["tiles"], info.obstacles))
+        tiles.set_data(tile_image(encode(level, state, FIREBOY)["tiles"], info.obstacles))
         for fire, water in dots:
             fire.set_data([v[F["fire_x"]]], [v[F["fire_y"]]])
             water.set_data([v[F["water_x"]]], [v[F["water_y"]]])
