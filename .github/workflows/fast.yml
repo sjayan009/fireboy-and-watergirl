@@ -70,6 +70,28 @@ jobs:
       - name: a replay verifies to the same score twice, and only that score
         run: npm run test:verifier
 
+      # The bot trains against engine/dist/bot/envserver.js through a Python
+      # client, and every invariant the training rests on -- a restore equals a
+      # rebuild, the same inputs give the same digests, every jump was one the
+      # state said could happen -- is checked by bot/check_env.py. A step here
+      # rather than a job of its own, because it needs exactly what this job
+      # already has: Node, the checked-in levels, and the engine/dist that
+      # `engine test` built. A second job would check out, install and build
+      # all over again to run well under a minute of checks.
+      #
+      # Only numpy, pinned to bot/requirements.txt by hand: matplotlib is for
+      # the viewer, which nothing here opens, and installing it would be most
+      # of this step's time. Same pinning as the other actions, for the same
+      # reason.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7
+        with:
+          python-version: '3.15'
+
+      - name: the bot's env server restores, replays and steps exactly
+        run: |
+          pip install numpy==2.5.4
+          python bot/check_env.py
+
       # Written to the environment rather than exported, so the build and the
       # check that follows it agree about which kind of run this is.
       - name: decide whether this run has a project to talk to

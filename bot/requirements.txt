@@ -1,0 +1,3 @@
+# numpy: fbwg_env.py and check_env.py (CI installs only this); matplotlib: view_env.py, the viewer.
+numpy==2.5.4
+matplotlib==3.11.2
