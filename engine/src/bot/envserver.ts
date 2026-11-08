@@ -16,10 +16,13 @@
  * ---- Requests (the first payload byte is the op) ---------------------------
  *
  *   OP_RESET  u8 op, u16 env, u8 modeLen, modeLen ASCII bytes, u8 num,
- *             u8 delay
- *             -> one STATE record for that env. `delay` is the input delay
- *                in frames for this episode; 0 applies a press in the frame
- *                it is sent, which is what Local Play does.
+ *             u8 delay, u8 side
+ *             -> one STATE record for that env. `side` is the character
+ *                the bot plays, 0 Fireboy, 1 Watergirl. `delay` is the bot's
+ *                input delay in frames for this episode, and only its side's
+ *                three bits wait; the partner's apply in the frame they are
+ *                sent, as a human's keys do in Local Play. Delay 0 is the
+ *                bot on the main thread.
  *   OP_STEP   u8 op, u8 repeat, N x u8 input bits (one byte per env)
  *             -> N STATE records, in env order
  *   OP_HELLO  nothing after the op byte
@@ -58,6 +61,9 @@
  *     gameOver   1 once the game's own GameOver has fired, after a death
  *     won        1 from the frame the level ends with both doors open: the
  *                game's own end of a win (the "ender" clip), the exact signal
+ *     fireLeft, fireRight, fireUp, waterLeft, waterRight, waterUp   1 for
+ *                each key the last frame ran with (lv.l/r/u_pressed and the
+ *                2 variants), after the delay: what both characters did
  *     LEVER_SLOTS levers, -1 fully off .. +1 fully on, in creation order,
  *                0 for slots this level does not have
  *     PUSHER_SLOTS buttons, 0 up .. 1 at the depth the game counts as
@@ -99,10 +105,11 @@
  *            is not observed, because on the live site it counts frames since
  *            page load. lv.timecount is the level's own frame count, and the
  *            fans' strength follows detSin(timecount / 10).
- * - Delay:   a press must take effect exactly `delay` frames after it was
- *            sent. A queue of `delay` inputs per env, starting all zero,
- *            rebuilt on every reset. A press applied in frame f already moves
- *            the character in frame f.
+ * - Delay:   the bot's press must take effect exactly `delay` frames after
+ *            it was sent, the partner's at once. A queue of `delay` inputs
+ *            of the bot's bits per env, starting all zero, rebuilt on every
+ *            reset. A press applied in frame f already moves the character
+ *            in frame f.
  * - Units:   one world unit is one tile, tiles centred on integers, so a
  *            body's cell is (Math.round(y), Math.round(x)).
  * - Bodies:  lv.m_world.GetBodyList() / .GetNext(); GetUserData().name is
@@ -170,9 +177,12 @@ class Env {
   private cur: Built | null = null;
   private clock = 0;
   private queue: number[] = [];
+  /** The bot's three bits: 7 Fireboy, 56 Watergirl. */
+  private mine = 7;
 
   /** Build or restore the level, and size the input queue for `delay`. */
-  reset(mode: string, num: number, delay: number): void {
+  reset(mode: string, num: number, delay: number, side: number): void {
+    if (side !== 0 && side !== 1) throw new Error(`side must be 0 or 1, got ${side}`);
     const key = `${mode}-${num}`;
     let c = this.cache.get(key);
     if (c) {
@@ -188,6 +198,7 @@ class Env {
     // Rebuilt, not emptied: presses from the last episode must not come out
     // in this one, whatever either episode's delay.
     this.queue = new Array<number>(delay).fill(0);
+    this.mine = side ? 56 : 7;
   }
 
   private get level(): Built {
@@ -200,17 +211,18 @@ class Env {
   }
 
   /**
-   * Run `repeat` frames. Each frame pushes `bits` into the delay queue and
-   * runs with the oldest entry, so repeat=3 is the same as three repeat=1s.
-   * With delay 0 the oldest entry is the one just pushed.
+   * Run `repeat` frames. Each frame pushes the bot's bits into the delay
+   * queue and runs with the oldest entry plus the partner's bits as sent, so
+   * repeat=3 is the same as three repeat=1s. With delay 0 the oldest entry is
+   * the one just pushed.
    */
   step(bits: number, repeat: number): void {
     const lv = this.lv;
     // The clock is one global shared by every env in this process.
     setClock(this.clock);
     for (let i = 0; i < repeat; i++) {
-      this.queue.push(bits);
-      frame(lv, this.queue.shift());
+      this.queue.push(bits & this.mine);
+      frame(lv, this.queue.shift()! | (bits & ~this.mine));
     }
     this.clock = getClock();
   }
@@ -274,7 +286,7 @@ function handle(req: DataView): Uint8Array {
       const env = envAt(req.getUint16(1, true));
       const len = req.getUint8(3);
       const mode = Buffer.from(req.buffer, req.byteOffset + 4, len).toString("ascii");
-      env.reset(mode, req.getUint8(4 + len), req.getUint8(5 + len));
+      env.reset(mode, req.getUint8(4 + len), req.getUint8(5 + len), req.getUint8(6 + len));
       const out = new Uint8Array(STATE_BYTES);
       env.writeState(new DataView(out.buffer), 0);
       return out;

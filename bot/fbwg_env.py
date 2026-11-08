@@ -25,7 +25,7 @@ MOVER_SLOTS = 24
 MOVER_FIELDS = ("x", "y", "angle", "vx", "vy", "spin")
 FAN_SLOTS = 6
 FAN_FIELDS = ("x0", "y0", "x1", "y1", "dx", "dy", "on")
-STATE_FLOATS = (25 + LEVER_SLOTS + PUSHER_SLOTS + MOVER_SLOTS * len(MOVER_FIELDS)
+STATE_FLOATS = (31 + LEVER_SLOTS + PUSHER_SLOTS + MOVER_SLOTS * len(MOVER_FIELDS)
                 + FAN_SLOTS * len(FAN_FIELDS))
 STATE_BYTES = STATE_FLOATS * 4 + 4 + ROWS * COLS
 OP_RESET, OP_STEP, OP_INFO, OP_HELLO = 1, 2, 3, 4
@@ -45,6 +45,7 @@ STATE_FIELDS = (
     "fire_door_open", "water_door_open",
     "red_count", "blue_count", "green_count",
     "timecount", "complete", "game_over", "won",
+    "fire_left", "fire_right", "fire_up", "water_left", "water_right", "water_up",
     *(f"lever{i}" for i in range(LEVER_SLOTS)),
     *(f"pusher{i}" for i in range(PUSHER_SLOTS)),
     *(f"mover{i}_{f}" for i in range(MOVER_SLOTS) for f in MOVER_FIELDS),
@@ -63,12 +64,16 @@ WATER_HAZARDS = LAVA + GOO      # what kills Watergirl
 # Bump whenever CHANNELS, the vector, or their meaning changes, here and in
 # envstate.ts; the client refuses a server whose version or STATE names
 # differ. Every trained model records the version it was trained on.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
-# timecount is divided by this in encode(). 150 s at the game's 26 frames a
-# second: the longest medal time (TimeTable) is 145 s, so an episode worth
-# finishing stays under 1.
+# timecount is divided by this in encode() and clipped at 1. 150 s at the
+# game's 26 frames a second: the longest medal time (TimeTable) is 145 s, so 1
+# means "past every medal". Clipped because Local Play has no time limit: a
+# player who takes ten minutes must not show the policy a value it never saw.
 TIME_SCALE = 26 * 150
+
+# Which character the bot plays: reset's `side`, encode()'s last float.
+FIREBOY, WATERGIRL = 0, 1
 
 # encode() divides by these, measured over random play on every level:
 # character speeds are under 16 in 99.9% of frames (a jump starts at 13.5),
@@ -182,11 +187,15 @@ class EnvClient:
         dyn = np.frombuffer(buf, np.uint8, ROWS * COLS, off + STATE_FLOATS * 4 + 4)
         return State(vec, h, dyn.reshape(ROWS, COLS).copy())
 
-    def reset(self, env: int, mode: str, num: int, delay: int = 0) -> State:
-        """Start an episode. `delay` frames pass between sending a press and
-        it taking effect; 0, the default, is Local Play."""
+    def reset(self, env: int, mode: str, num: int, delay: int = 0, side: int = FIREBOY) -> State:
+        """Start an episode with the bot playing `side` (FIREBOY or WATERGIRL).
+        `delay` frames pass between sending the bot's press and it taking
+        effect; 0, the default, is the bot on the main thread. The partner's
+        bits always apply at once, as a human's keys do in Local Play."""
+        if side not in (FIREBOY, WATERGIRL):
+            raise ValueError(f"side must be FIREBOY or WATERGIRL, got {side}")
         m = mode.encode("ascii")
-        reply = self._call(struct.pack("<BHB", OP_RESET, env, len(m)) + m + bytes([num, delay]),
+        reply = self._call(struct.pack("<BHB", OP_RESET, env, len(m)) + m + bytes([num, delay, side]),
                            STATE_BYTES)
         return self.parse_state(reply)
 
@@ -255,7 +264,7 @@ _X, _Y, _VEL, _SPIN, _COUNT, _ANGLE = (
 
 
 def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
-           bfs_water: np.ndarray) -> dict[str, np.ndarray]:
+           bfs_water: np.ndarray, side: int) -> dict[str, np.ndarray]:
     """One observation.
 
     tiles: float32, (len(CHANNELS), ROWS, COLS), one-hot, in CHANNELS order.
@@ -266,8 +275,10 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
     vec:   float32, 1-D: state.vec with positions and fan bounds divided by
            COLS/ROWS, velocities by VEL_SCALE, spin by SPIN_SCALE, diamond
            counts by COUNT_SCALE, mover angles wrapped and divided by pi, and
-           timecount by TIME_SCALE, so nearly every value stays in [-1, 1],
-           then sin and cos of (timecount + 1) / 10.
+           timecount by TIME_SCALE and clipped at 1, so nearly every value
+           stays in [-1, 1]; the six key fields stay 0/1, both characters',
+           so the bot sees what its partner pressed last frame. Then sin and
+           cos of (timecount + 1) / 10, then `side` (FIREBOY 0, WATERGIRL 1).
     """
     g, d = info.grid, state.dyn
     fire_door = np.zeros(g.shape, bool)
@@ -294,13 +305,15 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
     vec[_COUNT] /= COUNT_SCALE
     vec[_ANGLE] = (vec[_ANGLE] + np.pi) % (2 * np.pi) / np.pi - 1
     t = float(state.vec[STATE_FIELDS.index("timecount")])
-    vec[STATE_FIELDS.index("timecount")] /= TIME_SCALE
+    vec[STATE_FIELDS.index("timecount")] = min(t / TIME_SCALE, 1.0)
     # The fan-strength phase: every fan pushes with 20 * (sin(timecount / 10)
     # + 1) on top of its size (game.ts Update), so a jump through one depends
     # on where in the cycle it is. The game adds 1 to timecount before the
     # fans push, so the push the next action meets is at t + 1. Cos too, to
     # tell rising from falling.
-    vec = np.append(vec, np.float32([math.sin((t + 1) / 10), math.cos((t + 1) / 10)]))
+    if side not in (FIREBOY, WATERGIRL):
+        raise ValueError(f"side must be FIREBOY or WATERGIRL, got {side}")
+    vec = np.append(vec, np.float32([math.sin((t + 1) / 10), math.cos((t + 1) / 10), side]))
     return {
         "tiles": np.stack([planes[c] for c in CHANNELS]).astype(np.float32),
         "bfs": np.stack([bfs_fire, bfs_water]).astype(np.float32),

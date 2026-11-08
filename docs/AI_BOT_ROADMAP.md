@@ -81,8 +81,9 @@ Facts from the code, not estimates.
   1 in a Web Worker, plus stutter, when several steps run in one animation
   frame on the same bits. So the env takes the input delay per reset, and
   training draws it from 0–2 frames per episode, replacing the fixed
-  four-frame delay the env started with (the online input lead). This is
-  being implemented now.
+  four-frame delay the env started with (the online input lead). Only the
+  bot's three bits wait out the delay; the partner's apply in the frame they
+  are sent, as a human's keys do (`reset`'s `side` says which is the bot's).
 - **Time in the observation.** The global clock (`getClock()`,
   `game.ts:166`) counts frames since the `GameView` was built
   (`resetClock()` at `embed.ts:230`), so on the live site it includes time on
@@ -175,9 +176,9 @@ Not decided or not built yet:
   only in Python (`bot/fbwg_env.py`). The browser needs a TypeScript copy and
   a parity test that both produce identical observations for the same state,
   gated by `SCHEMA_VERSION`.
-- **Which character the bot plays.** The player may pick Fireboy or
-  Watergirl, so the bot's side must be part of the observation once the
-  Gymnasium wrapper exists.
+- **Which character the bot plays.** Done in the env: `reset` takes `side`
+  and `encode` ends the vector with it. The runtime must pass the side the
+  player picked.
 
 ### Online play (not planned)
 
@@ -201,8 +202,9 @@ apply.
     a sparse-reward problem into a shaped one.
   - A vector: both characters' position and velocity, grounded and alive
     flags, lever and pusher states, door states, elapsed time from the
-    level's `timecount` (section 2), and which character the bot plays
-    (section 3, open items).
+    level's `timecount` (section 2) clipped at 150 s because Local Play has
+    no time limit, the keys both characters ran with last frame (so the bot
+    sees what its partner is pressing), and which character the bot plays.
   - Give the observation a **schema version** number and ship it with every
     model.
 - **Actions.** Repeat each action for 2–4 frames and sweep that as a
@@ -245,9 +247,10 @@ Each step is the baseline the next must beat.
 3. **PPO for one character** with a scripted or cloned partner.
 4. **MAPPO self-play.** Both characters learn, with a shared critic.
 5. **Training against many partners.** A population of past checkpoints,
-   varied seeds and reward weights, and cloned human partners. This is
-   Fictitious Co-Play, the main defence against a bot that only works with
-   itself.
+   varied seeds and reward weights, cloned human partners, and the bad
+   partners real players are: one who stands still and one who mashes keys
+   at random. This is Fictitious Co-Play, the main defence against a bot that
+   only works with itself.
 6. **A recurrent policy (GRU or LSTM)** so the bot infers what *this* partner
    intends from their recent moves.
 7. **Search at runtime (optional).** MCTS from snapshot restores in the worker,
@@ -347,9 +350,11 @@ The part that makes every other claim credible.
 - **Offline suite.** All 32 levels, at least 100 seeded episodes each.
   Report completion, grade, diamonds, deaths by cause, time, and how often
   the bot blocked its partner.
-- **Partner set.** Scripted, cloned humans, and held-out real human traces,
-  **split by player, not by episode**, so no player leaks between training
-  and test.
+- **Partner set.** Scripted, cloned humans, held-out real human traces, an
+  idle partner and a key-masher. Real traces are **split by player, not by
+  episode**, so no player leaks between training and test. No level can be
+  won with an idle partner or a masher, so with them measure the bot's own
+  deaths and blocking, not completion: it should reach its door and wait.
 - **Statistics.** IQM with bootstrap confidence intervals
   ([rliable](https://github.com/google-research/rliable)), several training
   seeds, no cherry-picking.

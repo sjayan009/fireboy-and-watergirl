@@ -19,7 +19,7 @@ import type { Ported } from "../ported.js";
  * Bump whenever a field, the dyn grid or a meaning changes; fbwg_env.py's must
  * match, and the server's OP_HELLO sends it so a client checks before reset.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const ROWS = 29;
 export const COLS = 39;
@@ -67,6 +67,7 @@ export const STATE_NAMES: readonly string[] = [
   "fire_door_open", "water_door_open",
   "red_count", "blue_count", "green_count",
   "timecount", "complete", "game_over", "won",
+  "fire_left", "fire_right", "fire_up", "water_left", "water_right", "water_up",
   ...Array.from({ length: LEVER_SLOTS }, (_, i) => `lever${i}`),
   ...Array.from({ length: PUSHER_SLOTS }, (_, i) => `pusher${i}`),
   ...Array.from({ length: MOVER_SLOTS }, (_, i) => MOVER_FIELDS.map((f) => `mover${i}_${f}`)).flat(),
@@ -274,6 +275,11 @@ export function readState(lv: Ported, host: Ported, doors: Ported[]): number[] {
     // in the same branch that pauses and ends the level, and only on a win
     // (game.ts Update); Recuent fires when that clip finishes, 34 frames on.
     lv.getChildByName("ender") ? 1 : 0,
+    // The keys the last frame ran with: applyInput writes these flags and the
+    // level only reads them, so the live game's flags after a step hold the
+    // same thing, the human's keys and the bot's both.
+    lv.l_pressed ? 1 : 0, lv.r_pressed ? 1 : 0, lv.u_pressed ? 1 : 0,
+    lv.l_pressed2 ? 1 : 0, lv.r_pressed2 ? 1 : 0, lv.u_pressed2 ? 1 : 0,
   ];
   const levers: Ported[] = lv.myLevers;
   for (let i = 0; i < LEVER_SLOTS; i++) {

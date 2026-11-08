@@ -24,7 +24,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fbwg_env  # noqa: E402
 from fbwg_env import (  # noqa: E402
-    CHANNELS, COLS, DYN_BLUE, DYN_GREEN, DYN_MOVING, DYN_RED, DYN_WIND_LEFT,
+    CHANNELS, COLS, DYN_BLUE, FIREBOY, WATERGIRL, DYN_GREEN, DYN_MOVING, DYN_RED, DYN_WIND_LEFT,
     DYN_WIND_UP, FIRE_HAZARDS, LEVER_SLOTS, MEDAL_SECONDS, PUSHER_SLOTS,
     ROWS, SCHEMA_VERSION, SERVER, STATE_FIELDS, STATE_FLOATS, TIME_SCALE, TIME_TABLE, VEL_SCALE,
     TRANSLATION, WATER_HAZARDS, EnvClient, LevelInfo, State, bfs_field, cell, encode,
@@ -133,7 +133,7 @@ def _():
     info, st = fake_level()
     bf = np.full((ROWS, COLS), .5, np.float32)
     bw = np.full((ROWS, COLS), .25, np.float32)
-    obs = encode(info, st, bf, bw)
+    obs = encode(info, st, bf, bw, WATERGIRL)
     assert isinstance(SCHEMA_VERSION, int)
     t, b, v = obs["tiles"], obs["bfs"], obs["vec"]
     assert t.shape == (len(CHANNELS), ROWS, COLS) and t.dtype == np.float32, (t.shape, t.dtype)
@@ -142,10 +142,25 @@ def _():
     assert v.dtype == np.float32 and v.ndim == 1 and np.all(np.isfinite(v)), (v.dtype, v.shape)
     assert set(np.unique(t)) <= {0.0, 1.0}, "tiles must be 0 or 1"
     tc = st.vec[F["timecount"]]
-    assert v.shape == (STATE_FLOATS + 2,), v.shape
+    assert v.shape == (STATE_FLOATS + 3,), v.shape
     assert np.isclose(v[F["timecount"]], tc / TIME_SCALE), "timecount not scaled by TIME_SCALE"
-    assert np.allclose(v[-2:], [np.sin((tc + 1) / 10), np.cos((tc + 1) / 10)]), \
+    assert np.allclose(v[-3:-1], [np.sin((tc + 1) / 10), np.cos((tc + 1) / 10)]), \
         "fan phase is not sin, cos of (timecount + 1) / 10"
+    assert v[-1] == WATERGIRL and encode(info, st, bf, bw, FIREBOY)["vec"][-1] == FIREBOY, \
+        "side is not the last float"
+    for bad in (2, -1):
+        try:
+            encode(info, st, bf, bw, bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"side {bad} was accepted")
+    for k in ("fire_left", "water_up"):
+        assert v[F[k]] == st.vec[F[k]], f"{k} is changed by encode"
+    # Local Play has no time limit: ten minutes reads the same as 150 s.
+    late = State(st.vec.copy(), 0, st.dyn)
+    late.vec[F["timecount"]] = 26 * 600
+    assert encode(info, late, bf, bw, FIREBOY)["vec"][F["timecount"]] == 1, "timecount is not clipped at 1"
     for name, scale in (("fire_x", COLS), ("water_y", ROWS), ("mover0_x", COLS), ("mover23_y", ROWS),
                         ("fan0_x0", COLS), ("fan5_y1", ROWS), ("fire_vy", VEL_SCALE),
                         ("mover7_vx", VEL_SCALE), ("mover7_spin", fbwg_env.SPIN_SCALE),
@@ -161,7 +176,7 @@ def _():
 def _():
     info, st = fake_level()
     t = encode(info, st, np.zeros((ROWS, COLS), np.float32),
-               np.zeros((ROWS, COLS), np.float32))["tiles"]
+               np.zeros((ROWS, COLS), np.float32), FIREBOY)["tiles"]
     ch = {name: t[i] for i, name in enumerate(CHANNELS)}
     want = {
         "solid": [(0, c) for c in range(COLS)] + [(7, 10)],
@@ -295,7 +310,8 @@ def _():
             # The one settling frame before the snapshot has already run.
             assert v[F["timecount"]] == 1, f"{name}: timecount {v[F['timecount']]} at reset"
             for k in ("fire_door_open", "water_door_open", "red_count", "blue_count",
-                      "green_count", "fire_jump_latched", "water_jump_latched", "won"):
+                      "green_count", "fire_jump_latched", "water_jump_latched", "won",
+                      "fire_left", "fire_right", "fire_up", "water_left", "water_right", "water_up"):
                 assert v[F[k]] == 0, f"{name}: {k} is {v[F[k]]} at reset"
             v = run(c, [[0] * 30])[-1][0].vec
             assert v[F["fire_grounded"]] == 1 and v[F["water_grounded"]] == 1, \
@@ -485,9 +501,9 @@ def _():
         info = c.info(0)
         bf = bfs_field(info.grid, info.fire_door, FIRE_HAZARDS, walls=info.obstacles)
         bw = bfs_field(info.grid, info.water_door, WATER_HAZARDS, walls=info.obstacles)
-        o1 = encode(info, st1, bf, bw)
+        o1 = encode(info, st1, bf, bw, FIREBOY)
         run(c, [rand_bits(4, 150)])
-        o2 = encode(info, c.reset(0, "adventure", 3), bf, bw)
+        o2 = encode(info, c.reset(0, "adventure", 3), bf, bw, FIREBOY)
         for k in o1:
             assert np.array_equal(o1[k], o2[k]), f"{k} differs after restore"
     finally:
@@ -515,6 +531,34 @@ def _():
             steps = run(c, [[0] * 6, [0] * 6])    # ...must not leak past the reset
             assert all(s[0].vec[F["fire_x"]] == s[1].vec[F["fire_x"]] for s in steps), \
                 f"delay {delay} then {after}: presses from before the reset still came out"
+    finally:
+        c.close()
+
+
+@server_check("invariant: only the bot's side waits out the delay, and the key fields show what ran")
+def _():
+    c = EnvClient(1)
+    fire = ("fire_left", "fire_right", "fire_up")
+    water = ("water_left", "water_right", "water_up")
+    held = {"fire_right": 1, "water_left": 1}   # bits 2 | 8, held every step
+    try:
+        try:
+            c.reset(0, "adventure", 1, 0, 2)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("side 2 was accepted")
+        for side, delay in ((FIREBOY, 0), (FIREBOY, 2), (WATERGIRL, 2), (WATERGIRL, 3)):
+            c.reset(0, "adventure", 1, delay, side)
+            mine, theirs = (fire, water) if side == FIREBOY else (water, fire)
+            for k, st in enumerate(run(c, [[2 | 8] * 6])):
+                v = st[0].vec
+                for n in mine:
+                    want = held.get(n, 0) if k >= delay else 0
+                    assert v[F[n]] == want, f"side {side} delay {delay} step {k}: bot key {n} reads {v[F[n]]}"
+                for n in theirs:
+                    assert v[F[n]] == held.get(n, 0), \
+                        f"side {side} delay {delay} step {k}: partner key {n} reads {v[F[n]]}"
     finally:
         c.close()
 
@@ -614,7 +658,7 @@ def random_episodes(n_episodes: int, n_envs: int = 8, limit: int = 3000, repeat:
             def start(i):
                 nonlocal started
                 level[i] = LEVELS[started % len(LEVELS)]
-                c.reset(i, *level[i])
+                c.reset(i, *level[i], side=started % 2)
                 age[i] = 0
                 started += 1
             for i in range(n_envs):

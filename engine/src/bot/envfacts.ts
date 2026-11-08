@@ -35,6 +35,10 @@
  *   - a mover given a known pose and velocity reads exactly that in its slot,
  *     and slots past the level's movers read 0
  *   - settled at the spawn, the characters' cells are not painted moving
+ *   - each key alone (Fireboy left, right, up, then Watergirl's): after the
+ *     frame, that key's field reads 1 and the other five 0; no key moves the
+ *     character it does not name, Up moves the one it names, and so does
+ *     left or right (a spawn can be against a wall: Fireboy's on adventure 15)
  *   - Fireboy dropped onto each column of the obstacle mask from just above
  *     its top cell, movers in the way removed: for 40 frames his shapes never
  *     cover an obstacle cell's centre, and with the obstacle bodies destroyed
@@ -69,6 +73,8 @@ const WON_TO_COMPLETE = 34;
 /** Each character's Up, in applyInput's bits. */
 const UP: Record<string, number> = { fire: 4, water: 32 };
 const OTHER: Record<string, string> = { fire: "water", water: "fire" };
+/** The key fields, in applyInput's bit order. */
+const KEYS = ["fire_left", "fire_right", "fire_up", "water_left", "water_right", "water_up"];
 /** door_open moves by one door-clip frame in 21 per frame. */
 const DOOR_STEPS = 21;
 /** A character's shapes reach this far above and below its position (game.ts). */
@@ -179,6 +185,26 @@ function expect(ok: boolean, what: string): void {
 for (const [mode, num] of LEVELS) {
   const name = `${mode} ${num}`;
   const grid: unknown[][] = fresh(mode, num).lv.LevelArray;
+
+  const moves = new Set<string>();
+  KEYS.forEach((key, i) => {
+    const { lv, host } = fresh(mode, num);
+    for (let f = 0; f < 20; f++) step(lv);
+    const before = state(lv, host);
+    step(lv, 1 << i);
+    const s = state(lv, host);
+    const on = KEYS.filter((k) => s[k] === 1);
+    expect(on.length === 1 && on[0] === key && KEYS.every((k) => s[k] === 0 || s[k] === 1),
+           `${name}: key bit ${1 << i} reads as ${on.join(",") || "nothing"}`);
+    const who = key.split("_")[0];
+    const moved = (w: string) => s[`${w}_vx`] !== before[`${w}_vx`] || s[`${w}_vy`] !== before[`${w}_vy`];
+    expect(!moved(OTHER[who]), `${name}: ${key} moved ${OTHER[who]}`);
+    if (moved(who)) moves.add(key);
+  });
+  for (const who of ["fire", "water"]) {
+    expect((moves.has(`${who}_left`) || moves.has(`${who}_right`)) && moves.has(`${who}_up`),
+           `${name}: ${who}'s keys moved it on ${[...moves].filter((k) => k.startsWith(who)).join(",") || "none"}`);
+  }
 
   // One cell per tile code, not per kind, so the pool edges (51/52, ...) and
   // middles (5, ...) are each placed on directly.
