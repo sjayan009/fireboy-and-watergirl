@@ -88,7 +88,7 @@ function put(body: Ported, x: number, y: number): void {
 }
 
 /** The position of the first body called `name`, or undefined. */
-function bodyAt(lv: Ported, name: string): Ported | undefined {
+function bodyAt(lv: Ported, name: string): Ported {
   for (let b = lv.m_world.GetBodyList(); b; b = b.GetNext()) {
     if (b.GetUserData()?.name === name) return b.GetPosition();
   }
@@ -204,7 +204,7 @@ for (const [mode, num] of LEVELS) {
     step(lv);
     s = state(lv, host);
     expect(s[`${who}_grounded`] === 0 && s[`${other}_grounded`] === 1,
-           `${name}: ${who} dropped into open air at ${air}: ` +
+           `${name}: ${who} dropped into open air at ${air.join(",")}: ` +
            `${who}_grounded ${s[`${who}_grounded`]}, ${other}_grounded ${s[`${other}_grounded`]}`);
   }
 
@@ -378,7 +378,7 @@ for (const [mode, num] of LEVELS) {
       const held = hits(false);
       const fell = hits(true);
       expect(held === 0 && fell === rows.length,
-             `${name}: obstacle column ${c} rows ${rows}: covered ${held} centres, ` +
+             `${name}: obstacle column ${c} rows ${rows.join(",")}: covered ${held} centres, ` +
              `${fell} with the obstacles destroyed`);
     }
   }
