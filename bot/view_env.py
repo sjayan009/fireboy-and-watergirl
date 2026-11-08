@@ -98,7 +98,7 @@ def main() -> None:
         for fire, water in dots:
             fire.set_data([v[F["fire_x"]]], [v[F["fire_y"]]])
             water.set_data([v[F["water_x"]]], [v[F["water_y"]]])
-        axes[0].set_title(f"{args.level}  frame {int(v[F['clock']])}  "
+        axes[0].set_title(f"{args.level}  frame {int(v[F['timecount']])}  "
                           f"doors {int(v[F['finish1']] > 0)}/{int(v[F['finish2']] > 0)}"
                           + ("  COMPLETE" if v[F["complete"]] else ""))
         return [tiles, *[d for pair in dots for d in pair]]

@@ -24,8 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fbwg_env import (  # noqa: E402
     CHANNELS, COLS, DYN_BLUE, DYN_GREEN, DYN_MOVING, DYN_RED, DYN_WIND_LEFT,
     DYN_WIND_UP, FIRE_HAZARDS, LEVER_SLOTS, PUSHER_SLOTS,
-    ROWS, SCHEMA_VERSION, SERVER, STATE_FIELDS, STATE_FLOATS, WATER_HAZARDS,
-    EnvClient, LevelInfo, State, bfs_field, encode,
+    ROWS, SCHEMA_VERSION, SERVER, STATE_FIELDS, STATE_FLOATS, TIME_SCALE, WATER_HAZARDS,
+    EnvClient, LevelInfo, State, bfs_field, cell, encode,
 )
 
 LEVEL_DIR = SERVER.parents[3] / "extracted" / "levels"
@@ -126,6 +126,10 @@ def _():
     assert np.all(b[0] == .5) and np.all(b[1] == .25), "bfs must be fire then water"
     assert v.dtype == np.float32 and v.ndim == 1 and np.all(np.isfinite(v)), (v.dtype, v.shape)
     assert set(np.unique(t)) <= {0.0, 1.0}, "tiles must be 0 or 1"
+    tc = st.vec[F["timecount"]]
+    assert v.shape == (STATE_FLOATS + 2,), v.shape
+    assert np.isclose(v[F["timecount"]], tc / TIME_SCALE), "timecount not scaled by TIME_SCALE"
+    assert np.allclose(v[-2:], [np.sin(tc / 10), np.cos(tc / 10)]), "fan phase is not sin, cos of timecount / 10"
 
 
 @check("encode: every channel in the right place")
@@ -171,6 +175,18 @@ def run(client: EnvClient, env_bits: list[list[int]], repeat: int = 1) -> list[l
     return [client.step([bits[k] for bits in env_bits], repeat) for k in range(len(env_bits[0]))]
 
 
+@server_check("STATE_FIELDS is STATE_NAMES from envstate.ts, the order the server writes")
+def _():
+    url = (SERVER.parent / "envstate.js").as_uri()
+    js = f"const m = await import({json.dumps(url)}); console.log(JSON.stringify(m.STATE_NAMES));"
+    out = subprocess.run(["node", "--input-type=module", "-e", js], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr.strip()[-600:]
+    names = tuple(json.loads(out.stdout))
+    assert names == STATE_FIELDS, \
+        f"first difference at {next((i for i, (a, b) in enumerate(zip(names, STATE_FIELDS)) if a != b), min(len(names), len(STATE_FIELDS)))}"
+    assert len(names) == STATE_FLOATS
+
+
 @server_check("server: reset and info make sense")
 def _():
     c = EnvClient(1)
@@ -186,13 +202,33 @@ def _():
         for door in (info.fire_door, info.water_door):
             assert info.grid[door] != 1, f"door cell {door} is solid"
         f = bfs_field(info.grid, info.fire_door, FIRE_HAZARDS)
-        cell = (round(float(st.vec[F["fire_y"]])), round(float(st.vec[F["fire_x"]])))
-        assert f[info.fire_door] == 0 and f[cell] < 1, "Fireboy's spawn cannot reach his door"
+        spawn = cell(st.vec[F["fire_x"]], st.vec[F["fire_y"]])
+        assert f[info.fire_door] == 0 and f[spawn] < 1, "Fireboy's spawn cannot reach his door"
     finally:
         c.close()
 
 
-@server_check("engine: hazards, doors, level complete and fans on every level")
+@server_check("every level: grounded, latch, doors, counts and timecount come through at reset")
+def _():
+    c = EnvClient(1)
+    try:
+        for mode, num in LEVELS:
+            name = f"{mode} {num}"
+            v = c.reset(0, mode, num).vec
+            # The one settling frame before the snapshot has already run.
+            assert v[F["timecount"]] == 1, f"{name}: timecount {v[F['timecount']]} at reset"
+            for k in ("fire_door_open", "water_door_open", "red_count", "blue_count",
+                      "green_count", "fire_jump_latched", "water_jump_latched"):
+                assert v[F[k]] == 0, f"{name}: {k} is {v[F[k]]} at reset"
+            v = run(c, [[0] * 30])[-1][0].vec
+            assert v[F["fire_grounded"]] == 1 and v[F["water_grounded"]] == 1, \
+                f"{name}: not grounded after settling ({v[F['fire_grounded']]}, {v[F['water_grounded']]})"
+            assert v[F["timecount"]] == 31, f"{name}: timecount {v[F['timecount']]} after 30 frames"
+    finally:
+        c.close()
+
+
+@server_check("engine: hazards, jumps, doors, diamonds, level complete and fans on every level")
 def _():
     out = subprocess.run(["node", str(SERVER.parent / "envfacts.js")],
                          capture_output=True, text=True)
@@ -223,7 +259,7 @@ def _():
             blocked = {1} | set(FIRE_HAZARDS) | set(WATER_HAZARDS)
             for who, door in (("fire", info.fire_door), ("water", info.water_door)):
                 assert info.grid[door] not in blocked, f"{name}: {who} door cell {door} is {info.grid[door]}"
-                spawn = (round(float(st.vec[F[f"{who}_y"]])), round(float(st.vec[F[f"{who}_x"]])))
+                spawn = cell(st.vec[F[f"{who}_x"]], st.vec[F[f"{who}_y"]])
                 assert info.grid[spawn] != 1, f"{name}: {who} spawns inside a wall at {spawn}"
                 hazards = FIRE_HAZARDS if who == "fire" else WATER_HAZARDS
                 if bfs_field(info.grid, door, hazards)[spawn] >= 1:
@@ -322,24 +358,69 @@ def _():
         c.close()
 
 
-@server_check("invariant: the input delay is exactly 4 frames, and reset clears it")
+@server_check("invariant: the input delay is exactly what reset asked for, and reset clears it")
 def _():
     c = EnvClient(2)
     try:
-        c.reset(0, "adventure", 1)
-        c.reset(1, "adventure", 1)
-        run(c, [[0] * 20, [0] * 20])
-        steps = run(c, [[RIGHT_FIRE] * 8, [0] * 8])
-        moved = [s[0].vec[F["fire_x"]] != s[1].vec[F["fire_x"]] for s in steps]
-        assert moved == [False] * 4 + [True] * 4, f"first moved at step {moved.index(True) if True in moved else None}, want 4"
-        run(c, [[RIGHT_FIRE] * 3, [0] * 3])   # presses still in the queue...
-        c.reset(0, "adventure", 1)
-        c.reset(1, "adventure", 1)
-        steps = run(c, [[0] * 6, [0] * 6])    # ...must not leak past the reset
-        assert all(s[0].vec[F["fire_x"]] == s[1].vec[F["fire_x"]] for s in steps), \
-            "presses from before the reset still came out"
+        # (delay, delay after the reset): the same, longer, and shorter, so a
+        # queue that is emptied but not resized, or resized but not emptied,
+        # both show up.
+        for delay, after in ((0, 0), (1, 2), (2, 2), (2, 0)):
+            c.reset(0, "adventure", 1, delay)
+            c.reset(1, "adventure", 1, delay)
+            run(c, [[0] * 20, [0] * 20])
+            steps = run(c, [[RIGHT_FIRE] * 8, [0] * 8])
+            moved = [s[0].vec[F["fire_x"]] != s[1].vec[F["fire_x"]] for s in steps]
+            assert moved == [False] * delay + [True] * (8 - delay), \
+                f"delay {delay}: first moved at step {moved.index(True) if True in moved else None}"
+            run(c, [[RIGHT_FIRE] * 3, [0] * 3])   # presses still in the queue...
+            c.reset(0, "adventure", 1, after)
+            c.reset(1, "adventure", 1, after)
+            steps = run(c, [[0] * 6, [0] * 6])    # ...must not leak past the reset
+            assert all(s[0].vec[F["fire_x"]] == s[1].vec[F["fire_x"]] for s in steps), \
+                f"delay {delay} then {after}: presses from before the reset still came out"
     finally:
         c.close()
+
+
+@server_check("invariant: every jump follows a state that said Up would jump")
+def _():
+    # The game jumps by setting vy to -13.5 (game.ts Update), so vy dropping
+    # past -12, by more than 3 within one frame, is a jump; a fan lifts about
+    # 1 a frame and crosses -12 gradually. A jump must only ever happen when
+    # the state before it read grounded, not latched, and that frame pressed Up.
+    up = {"fire": 4, "water": 32}
+    n_envs, frames = 8, 400
+    rng = random.Random(12)
+    jumps, bad = 0, []
+    c = EnvClient(n_envs)
+    try:
+        for first in range(0, len(LEVELS), n_envs):
+            levels = [LEVELS[(first + i) % len(LEVELS)] for i in range(n_envs)]
+            prev = [c.reset(i, *lv) for i, lv in enumerate(levels)]
+            held = [(0, 0)] * n_envs   # (bits, frames left)
+            for _ in range(frames):
+                held = [h if h[1] else (rng.randrange(64), rng.randint(4, 15)) for h in held]
+                bits = [h[0] for h in held]
+                held = [(b, n - 1) for b, n in held]
+                states = c.step(bits)
+                for i, (p, s) in enumerate(zip(prev, states)):
+                    for who in ("fire", "water"):
+                        vy = F[f"{who}_vy"]
+                        if not (p.vec[vy] >= -12 > s.vec[vy] and p.vec[vy] - s.vec[vy] > 3):
+                            continue
+                        jumps += 1
+                        if not (p.vec[F[f"{who}_grounded"]] == 1 and p.vec[F[f"{who}_jump_latched"]] == 0
+                                and bits[i] & up[who]):
+                            bad.append(f"{levels[i][0]} {levels[i][1]} {who}")
+                    if s.vec[F["dead_fire"]] or s.vec[F["dead_water"]] or s.vec[F["complete"]]:
+                        s = c.reset(i, *levels[i])
+                    prev[i] = s
+    finally:
+        c.close()
+    print(f"      {jumps} jumps, {len(bad)} not predicted by the state before")
+    assert jumps > 100, f"only {jumps} jumps; the check proves nothing"
+    assert not bad, f"{len(bad)} of {jumps} jumps came from a state that could not jump, e.g. {bad[:3]}"
 
 
 @server_check("invariant: repeat=3 is three repeat=1 steps")
@@ -357,22 +438,26 @@ def _():
         b.close()
 
 
-@server_check("invariant: envs in one process do not share a clock")
+@server_check("invariant: envs in one process stay isolated, and timecount counts their frames")
 def _():
     levels = [("adventure", 1), ("puzzle", 3)]
     bits = [rand_bits(6, 120), rand_bits(7, 120)]
     together = EnvClient(2)
     solo = [EnvClient(1), EnvClient(1)]
     try:
-        start = [together.reset(i, *lv).vec[F["clock"]] for i, lv in enumerate(levels)]
+        start = [together.reset(i, *lv).vec[F["timecount"]] for i, lv in enumerate(levels)]
         both = run(together, bits)
         for i, lv in enumerate(levels):
             solo[i].reset(0, *lv)
             alone = run(solo[i], [bits[i]])
             assert [s[i].hash for s in both] == [s[0].hash for s in alone], \
                 f"env {i} diverged when run beside another env"
-            assert both[-1][i].vec[F["clock"]] == start[i] + 120, \
-                f"env {i} clock is {both[-1][i].vec[F['clock']]}, want {start[i] + 120}"
+            # timecount stops when the level pauses, so the count is only
+            # exact if nobody died.
+            last = both[-1][i].vec
+            assert not (last[F["dead_fire"]] or last[F["dead_water"]]), f"env {i} died; pick other bits"
+            assert last[F["timecount"]] == start[i] + 120, \
+                f"env {i} timecount is {last[F['timecount']]}, want {start[i] + 120}"
     finally:
         together.close()
         for c in solo:

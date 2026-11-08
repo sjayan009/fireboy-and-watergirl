@@ -14,8 +14,11 @@
  *
  * ---- Requests (the first payload byte is the op) ---------------------------
  *
- *   OP_RESET  u8 op, u16 env, u8 modeLen, modeLen ASCII bytes, u8 num
- *             -> one STATE record for that env
+ *   OP_RESET  u8 op, u16 env, u8 modeLen, modeLen ASCII bytes, u8 num,
+ *             u8 delay
+ *             -> one STATE record for that env. `delay` is the input delay
+ *                in frames for this episode; 0 applies a press in the frame
+ *                it is sent, which is what Local Play does.
  *   OP_STEP   u8 op, u8 repeat, N x u8 input bits (one byte per env)
  *             -> N STATE records, in env order
  *   OP_INFO   u16 env after the op byte
@@ -24,11 +27,22 @@
  *
  * ---- STATE record (STATE_BYTES long) ---------------------------------------
  *
- *   STATE_FLOATS x f32, in this order:
+ *   STATE_FLOATS x f32, in the order of STATE_NAMES in envstate.ts, which
+ *   reads them (bot/fbwg_env.py's STATE_FIELDS must match it):
  *     fireX, fireY, fireVX, fireVY, waterX, waterY, waterVX, waterVY,
- *     deadFire, deadWater, finish1, finish2, clock,
+ *     fireGrounded, waterGrounded   1 if the next frame's jump check finds
+ *                ground: Up pressed in that frame jumps unless latched
+ *     fireJumpLatched, waterJumpLatched   lv.prohibjump1/2: set by a jump,
+ *                cleared when Up is released. Up jumps only when grounded
+ *                and not latched, so holding Up never jumps twice
+ *     deadFire, deadWater, finish1, finish2,
+ *     fireDoorOpen, waterDoorOpen   the door clips' playheads, 0 shut ..
+ *                1 open; the level ends only once both are fully open
+ *     redCount, blueCount, greenCount   diamonds collected, raw
+ *     timecount  lv.timecount, frames since the level started; stops when
+ *                the level pauses (a death or the exit)
  *     complete   1 once the game's own level-complete (Recuent) has fired,
- *                about 46 frames after both characters stand in their doors
+ *                57 frames after both characters stand in their doors
  *     gameOver   1 once the game's own GameOver has fired, after a death
  *     LEVER_SLOTS levers, -1 fully off .. +1 fully on, in creation order,
  *                0 for slots this level does not have
@@ -46,27 +60,44 @@
  * - Build:   `new (level as Ported)(mode, num)`, then `hostLevel(lv)` from
  *            game/headless.ts, which a death needs.
  * - Frame:   tickClock(); applyInput(lv, bits); advanceTree(lv);
- *            enterFrameTree(lv); lv.Update(new Event(Event.ENTER_FRAME))
- *            -- the order in snapbench.ts.
+ *            enterFrameTree(lv) -- the website's own loop (embed.ts step,
+ *            GameHost.step). The level registers Update as its ENTER_FRAME
+ *            listener, so enterFrameTree already runs it once. snapbench.ts
+ *            and LevelHost also call lv.Update() by hand, which runs it
+ *            twice: two physics steps and two timecount ticks per frame.
  * - Reset:   build, run one frame with no input so the level settles, then
  *            capture `new Snapshot().capture([host])` once per (env, level),
  *            restore it on later resets. Never rebuild the level.
  * - Clock:   ONE module-global (getClock/setClock) shared by every env in this
  *            process, and the snapshot does not save it. Save it beside the
  *            snapshot, and setClock(env.clock) before stepping an env,
- *            env.clock = getClock() after.
- * - Delay:   a press must take effect exactly DELAY frames after it was sent.
- *            A queue of DELAY inputs per env, starting all zero, emptied on
- *            reset. A press applied in frame f already moves the character
- *            in frame f.
+ *            env.clock = getClock() after. Only the medal timer reads it; it
+ *            is not observed, because on the live site it counts frames since
+ *            page load. lv.timecount is the level's own frame count, and the
+ *            fans' strength follows detSin(timecount / 10).
+ * - Delay:   a press must take effect exactly `delay` frames after it was
+ *            sent. A queue of `delay` inputs per env, starting all zero,
+ *            rebuilt on every reset. A press applied in frame f already moves
+ *            the character in frame f.
  * - Units:   one world unit is one tile, tiles centred on integers, so a
  *            body's cell is (Math.round(y), Math.round(x)).
  * - Bodies:  lv.m_world.GetBodyList() / .GetNext(); GetUserData().name is
  *            pers1, pers2, finish1, finish2, rd, bd, gr, slide, box, ...
  *            Per shape (b.GetShapeList() / .GetNext()):
  *            shape.ComputeAABB(aabb, b.GetXForm()) with a `new b2AABB()`.
- * - Flags:   lv.myContactListener.{deadFire, deadWater, finish1, finish2};
- *            host.recuents / host.gameOvers count the game's own endings.
+ * - Flags:   lv.myContactListener.{deadFire, deadWater, finish1, finish2,
+ *            RedCount, BlueCount, GreenCount}; host.recuents /
+ *            host.gameOvers count the game's own endings.
+ * - Jump:    Update sets allowjump1/2 at its top from
+ *            lv.myContactListener.contactStack1/2, the contact normals the
+ *            previous frame's world Step left, so lv.allowjump1/2 read after a
+ *            frame describe its start. Grounded applies the game's rule to the
+ *            stacks instead: only a Step (or a teleport) changes them, and
+ *            applyInput and advanceTree, which run before the next check, do
+ *            not.
+ * - Doors:   lv.SlidersAndRots.getChildByName("finish1" / "finish2"), the
+ *            same objects as the door bodies' user data. Frames 1..22: one up
+ *            per frame while the character stands in it, one down after.
  * - Fans:    lv.myWinds[i].{lower, upper, vertical 1 up 2 right 3 down
  *            4 left, on}. Levers and buttons are joints in lv.myLevers and
  *            lv.myPushers; joint.GetUserData() is the lever or button body.
@@ -75,18 +106,15 @@
  */
 import { level, tickClock, getClock, setClock } from "../game/game.js";
 import { hostLevel } from "../game/headless.js";
-import { Event, SoundBus, advanceTree, enterFrameTree } from "../flash/flash.js";
+import { SoundBus, advanceTree, enterFrameTree } from "../flash/flash.js";
 import { applyInput, hashLevel } from "../net/hash.js";
 import { Snapshot } from "../net/snapshot.js";
 import { b2AABB } from "../box2d/box2d.js";
 import type { Ported } from "../ported.js";
+import { LEVER_SLOTS, PUSHER_SLOTS, STATE_FLOATS, doorClips, readState } from "./envstate.js";
 
 export const ROWS = 29;
 export const COLS = 39;
-export const DELAY = 4;
-export const LEVER_SLOTS = 12;
-export const PUSHER_SLOTS = 12;
-export const STATE_FLOATS = 15 + LEVER_SLOTS + PUSHER_SLOTS;
 export const STATE_BYTES = STATE_FLOATS * 4 + 4 + ROWS * COLS;
 
 export const OP_RESET = 1;
@@ -101,8 +129,6 @@ export const DYN_GREEN = 8;
 const DYN_WIND = [0, 16, 32, 64, 128];
 
 const EDGE = 1e-6;
-/** How far a button sinks before the game counts it as pressed. */
-const PRESSED = 0.25;
 
 /** A built level, its snapshot at frame zero, and the clock that goes with it. */
 interface Cached {
@@ -110,18 +136,20 @@ interface Cached {
   host: Ported;
   snap: Snapshot;
   clock: number;
-  /** In creation order. Restores keep the same objects. */
-  levers: Ported[];
-  pushers: Ported[];
+  /** The fire and water door clips. */
+  doors: Ported[];
 }
 
-/** One simulation frame, in the order snapbench.ts and both SessionHosts use. */
+/**
+ * One simulation frame, as the website runs it (embed.ts step). No explicit
+ * lv.Update(): enterFrameTree dispatches ENTER_FRAME to the level's own Update
+ * listener, and a second call would step the physics twice per frame.
+ */
 function frame(lv: Ported, bits: number): void {
   tickClock();
   applyInput(lv, bits);
   advanceTree(lv);
   enterFrameTree(lv);
-  lv.Update(new Event(Event.ENTER_FRAME));
 }
 
 /** OR `bit` into every cell whose centre lies inside the box. */
@@ -159,8 +187,8 @@ class Env {
   private queue: number[] = [];
   private aabb = new b2AABB();
 
-  /** Build or restore the level, empty the input queue. */
-  reset(mode: string, num: number): void {
+  /** Build or restore the level, and size the input queue for `delay`. */
+  reset(mode: string, num: number, delay: number): void {
     const key = `${mode}-${num}`;
     let c = this.cache.get(key);
     if (c) {
@@ -183,12 +211,14 @@ class Env {
       // still holds whichever env ran last.
       setClock(0);
       frame(lv, 0);
-      c = { lv, host, snap: new Snapshot().capture([host]), clock: getClock(), levers, pushers };
+      c = { lv, host, snap: new Snapshot().capture([host]), clock: getClock(), doors: doorClips(lv) };
       this.cache.set(key, c);
     }
     this.cur = c;
     this.clock = c.clock;
-    this.queue = new Array<number>(DELAY).fill(0);
+    // Rebuilt, not emptied: presses from the last episode must not come out
+    // in this one, whatever either episode's delay.
+    this.queue = new Array<number>(delay).fill(0);
   }
 
   private get level(): Cached {
@@ -203,6 +233,7 @@ class Env {
   /**
    * Run `repeat` frames. Each frame pushes `bits` into the delay queue and
    * runs with the oldest entry, so repeat=3 is the same as three repeat=1s.
+   * With delay 0 the oldest entry is the one just pushed.
    */
   step(bits: number, repeat: number): void {
     const lv = this.lv;
@@ -217,37 +248,8 @@ class Env {
 
   /** Write one STATE record at `off` in `out`. */
   writeState(out: DataView, off: number): void {
-    const { lv, host, levers, pushers } = this.level;
-    const cl = lv.myContactListener;
-    const p1 = lv.pers1.GetPosition();
-    const v1 = lv.pers1.GetLinearVelocity();
-    const p2 = lv.pers2.GetPosition();
-    const v2 = lv.pers2.GetLinearVelocity();
-    const floats = [
-      p1.x, p1.y, v1.x, v1.y, p2.x, p2.y, v2.x, v2.y,
-      cl.deadFire ? 1 : 0, cl.deadWater ? 1 : 0, cl.finish1, cl.finish2, this.clock,
-      host.recuents > 0 ? 1 : 0, host.gameOvers > 0 ? 1 : 0,
-    ];
-    for (let i = 0; i < LEVER_SLOTS; i++) {
-      const j = levers[i];
-      if (!j) {
-        floats.push(0);
-        continue;
-      }
-      // The game calls a lever on when its angle is on its `onis` side (game.ts
-      // Update), so flip the sign to make +1 always mean on. Clamped: a lever
-      // resting on its limit reads about 6% past it.
-      const side = j.GetUserData().GetUserData().onis === "l" ? 1 : -1;
-      floats.push(Math.max(-1, Math.min(1, side * j.GetJointAngle() / j.m_upperAngle)));
-    }
-    for (let i = 0; i < PUSHER_SLOTS; i++) {
-      // The game's own rule (game.ts Update): pressed once the button body has
-      // sunk more than PRESSED below its origin. The joint translation is not
-      // used because it overshoots while the depth stays under the threshold.
-      const body: Ported = pushers[i]?.GetUserData();
-      const sunk = body ? body.GetPosition().y - body.GetUserData().originy : 0;
-      floats.push(Math.min(1, Math.max(0, sunk / PRESSED)));
-    }
+    const { lv, host, doors } = this.level;
+    const floats = readState(lv, host, doors);
     for (let i = 0; i < STATE_FLOATS; i++) out.setFloat32(off + 4 * i, floats[i], true);
     out.setUint32(off + STATE_FLOATS * 4, parseInt(hashLevel(lv), 16), true);
 
@@ -315,7 +317,7 @@ function handle(req: DataView): Uint8Array {
       const env = envAt(req.getUint16(1, true));
       const len = req.getUint8(3);
       const mode = Buffer.from(req.buffer, req.byteOffset + 4, len).toString("ascii");
-      env.reset(mode, req.getUint8(4 + len));
+      env.reset(mode, req.getUint8(4 + len), req.getUint8(5 + len));
       const out = new Uint8Array(STATE_BYTES);
       env.writeState(new DataView(out.buffer), 0);
       return out;

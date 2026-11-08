@@ -10,6 +10,7 @@ Then `python bot/check_env.py` runs the invariant tests.
 """
 from __future__ import annotations
 
+import math
 import struct
 import subprocess
 from dataclasses import dataclass
@@ -18,20 +19,23 @@ from pathlib import Path
 import numpy as np
 
 ROWS, COLS = 29, 39
-DELAY = 4
 LEVER_SLOTS = PUSHER_SLOTS = 12
-STATE_FLOATS = 15 + LEVER_SLOTS + PUSHER_SLOTS
+STATE_FLOATS = 24 + LEVER_SLOTS + PUSHER_SLOTS
 STATE_BYTES = STATE_FLOATS * 4 + 4 + ROWS * COLS
 OP_RESET, OP_STEP, OP_INFO = 1, 2, 3
 DYN_MOVING, DYN_RED, DYN_BLUE, DYN_GREEN = 1, 2, 4, 8
 DYN_WIND_UP, DYN_WIND_RIGHT, DYN_WIND_DOWN, DYN_WIND_LEFT = 16, 32, 64, 128
 
-# Order of the floats in a STATE record.
+# Order of the floats in a STATE record. Must equal STATE_NAMES in
+# engine/src/bot/envstate.ts, which fills them; check_env.py checks.
 STATE_FIELDS = (
     "fire_x", "fire_y", "fire_vx", "fire_vy",
     "water_x", "water_y", "water_vx", "water_vy",
-    "dead_fire", "dead_water", "finish1", "finish2", "clock",
-    "complete", "game_over",
+    "fire_grounded", "water_grounded", "fire_jump_latched", "water_jump_latched",
+    "dead_fire", "dead_water", "finish1", "finish2",
+    "fire_door_open", "water_door_open",
+    "red_count", "blue_count", "green_count",
+    "timecount", "complete", "game_over",
     *(f"lever{i}" for i in range(LEVER_SLOTS)),
     *(f"pusher{i}" for i in range(PUSHER_SLOTS)),
 )
@@ -47,7 +51,12 @@ WATER_HAZARDS = LAVA + GOO      # what kills Watergirl
 
 # Bump whenever CHANNELS, the vector, or their meaning changes. Every trained
 # model records the version it was trained on.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+# timecount is divided by this in encode(). 150 s at the game's 26 frames a
+# second: the longest medal time (TimeTable) is 145 s, so an episode worth
+# finishing stays under 1.
+TIME_SCALE = 26 * 150
 
 # Channel order of the tile tensor. encode() must produce exactly these.
 CHANNELS = (
@@ -76,6 +85,13 @@ class LevelInfo:
     water_door: tuple[int, int]
 
 
+def cell(x: float, y: float) -> tuple[int, int]:
+    """The (row, col) of a world position, rounded the way JS Math.round does
+    (half up), which is how the server puts bodies in cells. Python's round()
+    rounds half to even, so 2.5 would land in a different cell."""
+    return math.floor(y + 0.5), math.floor(x + 0.5)
+
+
 class EnvClient:
     """N envs in one Node process."""
 
@@ -102,9 +118,11 @@ class EnvClient:
         dyn = np.frombuffer(buf, np.uint8, ROWS * COLS, off + STATE_FLOATS * 4 + 4)
         return State(vec, h, dyn.reshape(ROWS, COLS).copy())
 
-    def reset(self, env: int, mode: str, num: int) -> State:
+    def reset(self, env: int, mode: str, num: int, delay: int = 0) -> State:
+        """Start an episode. `delay` frames pass between sending a press and
+        it taking effect; 0, the default, is Local Play."""
         m = mode.encode("ascii")
-        reply = self._call(struct.pack("<BHB", OP_RESET, env, len(m)) + m + bytes([num]))
+        reply = self._call(struct.pack("<BHB", OP_RESET, env, len(m)) + m + bytes([num, delay]))
         return self.parse_state(reply)
 
     def step(self, bits: list[int], repeat: int = 1) -> list[State]:
@@ -168,8 +186,9 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
            Static channels come from info.grid; diamonds, moving and wind
            from state.dyn; doors are a single 1 at each door cell.
     bfs:   float32, (2, ROWS, COLS): fire then water.
-    vec:   float32, 1-D. Start with state.vec; scale positions by COLS/ROWS
-           so everything is roughly in [-1, 1].
+    vec:   float32, 1-D: state.vec with positions divided by COLS/ROWS and
+           timecount by TIME_SCALE, so everything is roughly in [-1, 1], then
+           sin and cos of timecount / 10.
     """
     g, d = info.grid, state.dyn
     fire_door = np.zeros(g.shape, bool)
@@ -193,7 +212,12 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
         vec[STATE_FIELDS.index(name)] /= COLS
     for name in ("fire_y", "water_y"):
         vec[STATE_FIELDS.index(name)] /= ROWS
-    # ponytail: the clock is raw frames; divide by the episode limit once one is fixed.
+    t = float(state.vec[STATE_FIELDS.index("timecount")])
+    vec[STATE_FIELDS.index("timecount")] /= TIME_SCALE
+    # The fan-strength phase: every fan pushes with 20 * (sin(timecount / 10)
+    # + 1) on top of its size (game.ts Update), so a jump through one depends
+    # on where in the cycle it is. Cos too, to tell rising from falling.
+    vec = np.append(vec, np.float32([math.sin(t / 10), math.cos(t / 10)]))
     return {
         "tiles": np.stack([planes[c] for c in CHANNELS]).astype(np.float32),
         "bfs": np.stack([bfs_fire, bfs_water]).astype(np.float32),
