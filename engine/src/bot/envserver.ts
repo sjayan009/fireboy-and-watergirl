@@ -22,6 +22,11 @@
  *                it is sent, which is what Local Play does.
  *   OP_STEP   u8 op, u8 repeat, N x u8 input bits (one byte per env)
  *             -> N STATE records, in env order
+ *   OP_HELLO  nothing after the op byte
+ *             -> UTF-8 JSON {schema, engine, state}: SCHEMA_VERSION,
+ *                ENGINE_VERSION and STATE_NAMES. The client checks them
+ *                before anything else, so a server built from other fields
+ *                is refused even when its records are the same size.
  *   OP_INFO   u16 env after the op byte
  *             -> ROWS*COLS int8 grid (row-major), then u8 fireDoorRow,
  *                u8 fireDoorCol, u8 waterDoorRow, u8 waterDoorCol, then
@@ -60,6 +65,10 @@
  *     MOVER_SLOTS x (x, y, angle, vx, vy, spin) for the moving bodies
  *                (envstate.ts movers), all 0 for slots this level does not
  *                have. Radians, and world units per second
+ *     FAN_SLOTS x (x0, y0, x1, y1, dx, dy, on) for every fan, on or off,
+ *                in creation order: its area, the unit push it gives, and
+ *                whether it blows now; all 0 for slots this level does not
+ *                have
  *   u32 hashLevel(lv), parsed from its hex string
  *   ROWS*COLS x u8 "dyn" grid, row-major, bit flags per cell (envstate.ts
  *   readDyn):
@@ -80,7 +89,8 @@
  *            twice: two physics steps and two timecount ticks per frame.
  * - Reset:   build, run one frame with no input so the level settles, then
  *            capture `new Snapshot().capture([host])` once per (env, level),
- *            restore it on later resets. Each env keeps the `cache` levels it
+ *            restore it on later resets (envstate.ts buildLevel). On the
+ *            website the bot skips the level's first frame the same way. Each env keeps the `cache` levels it
  *            reset to most recently; one evicted is built again the same way.
  * - Clock:   ONE module-global (getClock/setClock) shared by every env in this
  *            process, and the snapshot does not save it. Save it beside the
@@ -121,15 +131,14 @@
  *            Static bodies other than "ground" are not in it, and dyn skips
  *            static bodies, so the obstacles mask carries them.
  */
-import { level, tickClock, getClock, setClock } from "../game/game.js";
-import { hostLevel } from "../game/headless.js";
-import { SoundBus, advanceTree, enterFrameTree } from "../flash/flash.js";
-import { applyInput, hashLevel } from "../net/hash.js";
-import { Snapshot } from "../net/snapshot.js";
+import { getClock, setClock } from "../game/game.js";
+import { SoundBus } from "../flash/flash.js";
+import { hashLevel } from "../net/hash.js";
+import { ENGINE_VERSION } from "../version.js";
 import type { Ported } from "../ported.js";
 import {
-  COLS, LEVER_SLOTS, MOVER_SLOTS, PUSHER_SLOTS, ROWS, STATE_FLOATS,
-  doorClips, movers, obstacleMask, readDyn, readState,
+  COLS, ROWS, SCHEMA_VERSION, STATE_FLOATS, STATE_NAMES, type Built,
+  buildLevel, frame, obstacleMask, readDyn, readState,
 } from "./envstate.js";
 
 export const STATE_BYTES = STATE_FLOATS * 4 + 4 + ROWS * COLS;
@@ -137,6 +146,7 @@ export const STATE_BYTES = STATE_FLOATS * 4 + 4 + ROWS * COLS;
 export const OP_RESET = 1;
 export const OP_STEP = 2;
 export const OP_INFO = 3;
+export const OP_HELLO = 4;
 
 /**
  * Levels each env keeps built, least recently reset to evicted first.
@@ -149,56 +159,6 @@ export const OP_INFO = 3;
 const CACHE = Number(process.argv[3] ?? 4);
 if (!(CACHE >= 1)) throw new Error(`cache must be at least 1, got ${process.argv[3]}`);
 
-/** A built level, its snapshot at frame zero, and the clock that goes with it. */
-interface Cached {
-  lv: Ported;
-  host: Ported;
-  snap: Snapshot;
-  clock: number;
-  /** The fire and water door clips. */
-  doors: Ported[];
-}
-
-/**
- * One simulation frame, as the website runs it (embed.ts step). No explicit
- * lv.Update(): enterFrameTree dispatches ENTER_FRAME to the level's own Update
- * listener, and a second call would step the physics twice per frame.
- */
-function frame(lv: Ported, bits: number): void {
-  tickClock();
-  applyInput(lv, bits);
-  advanceTree(lv);
-  enterFrameTree(lv);
-}
-
-/**
- * Build a level and capture it one settling frame in. Every build, first or
- * after an eviction, comes through here, so a rebuilt level restores to the
- * same state the first one did.
- */
-function build(mode: string, num: number): Cached {
-  const key = `${mode}-${num}`;
-  const lv: Ported = new (level as Ported)(mode, num);
-  const host = hostLevel(lv);
-  if (lv.LevelArray.length !== ROWS || lv.LevelArray[0].length !== COLS) {
-    throw new Error(`${key} is not ${ROWS}x${COLS}`);
-  }
-  const levers: Ported[] = lv.myLevers;
-  const pushers: Ported[] = lv.myPushers;
-  const moving = movers(lv).length;
-  if (levers.length > LEVER_SLOTS || pushers.length > PUSHER_SLOTS || moving > MOVER_SLOTS) {
-    throw new Error(`${key} has ${levers.length} levers, ${pushers.length} buttons and ${moving} movers`);
-  }
-  // One frame with no input before the snapshot: a just-built level is
-  // not a state play ever shows -- levers sit at +-90 degrees and every
-  // fan reads on until the first Update applies the levers (puzzle 7's
-  // three fans start off). Clock from 0, not getClock(): the global
-  // still holds whichever env ran last.
-  setClock(0);
-  frame(lv, 0);
-  return { lv, host, snap: new Snapshot().capture([host]), clock: getClock(), doors: doorClips(lv) };
-}
-
 class Env {
   /**
    * "mode-num" -> its built level, in least-recently-reset-first order (a
@@ -206,8 +166,8 @@ class Env {
    * the only reference to a level apart from `cur`, which is always the newest
    * entry, so deleting the oldest lets the collector have it.
    */
-  private cache = new Map<string, Cached>();
-  private cur: Cached | null = null;
+  private cache = new Map<string, Built>();
+  private cur: Built | null = null;
   private clock = 0;
   private queue: number[] = [];
 
@@ -219,7 +179,7 @@ class Env {
       this.cache.delete(key);
       c.snap.restore();
     } else {
-      c = build(mode, num);
+      c = buildLevel(mode, num);
     }
     this.cache.set(key, c);
     if (this.cache.size > CACHE) this.cache.delete(this.cache.keys().next().value!);
@@ -230,7 +190,7 @@ class Env {
     this.queue = new Array<number>(delay).fill(0);
   }
 
-  private get level(): Cached {
+  private get level(): Built {
     if (!this.cur) throw new Error("step or read before the first reset");
     return this.cur;
   }
@@ -334,6 +294,8 @@ function handle(req: DataView): Uint8Array {
     }
     case OP_INFO:
       return envAt(req.getUint16(1, true)).info();
+    case OP_HELLO:
+      return Buffer.from(JSON.stringify({ schema: SCHEMA_VERSION, engine: ENGINE_VERSION, state: STATE_NAMES }));
     default:
       throw new Error(`unknown op ${op}`);
   }

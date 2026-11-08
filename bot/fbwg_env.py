@@ -10,6 +10,7 @@ Then `python bot/check_env.py` runs the invariant tests.
 """
 from __future__ import annotations
 
+import json
 import math
 import struct
 import subprocess
@@ -22,9 +23,12 @@ ROWS, COLS = 29, 39
 LEVER_SLOTS = PUSHER_SLOTS = 12
 MOVER_SLOTS = 24
 MOVER_FIELDS = ("x", "y", "angle", "vx", "vy", "spin")
-STATE_FLOATS = 25 + LEVER_SLOTS + PUSHER_SLOTS + MOVER_SLOTS * len(MOVER_FIELDS)
+FAN_SLOTS = 6
+FAN_FIELDS = ("x0", "y0", "x1", "y1", "dx", "dy", "on")
+STATE_FLOATS = (25 + LEVER_SLOTS + PUSHER_SLOTS + MOVER_SLOTS * len(MOVER_FIELDS)
+                + FAN_SLOTS * len(FAN_FIELDS))
 STATE_BYTES = STATE_FLOATS * 4 + 4 + ROWS * COLS
-OP_RESET, OP_STEP, OP_INFO = 1, 2, 3
+OP_RESET, OP_STEP, OP_INFO, OP_HELLO = 1, 2, 3, 4
 DYN_MOVING, DYN_RED, DYN_BLUE, DYN_GREEN = 1, 2, 4, 8
 DYN_WIND_UP, DYN_WIND_RIGHT, DYN_WIND_DOWN, DYN_WIND_LEFT = 16, 32, 64, 128
 
@@ -44,6 +48,7 @@ STATE_FIELDS = (
     *(f"lever{i}" for i in range(LEVER_SLOTS)),
     *(f"pusher{i}" for i in range(PUSHER_SLOTS)),
     *(f"mover{i}_{f}" for i in range(MOVER_SLOTS) for f in MOVER_FIELDS),
+    *(f"fan{i}_{f}" for i in range(FAN_SLOTS) for f in FAN_FIELDS),
 )
 
 # Tile codes in LevelArray.
@@ -55,14 +60,23 @@ GOO = (7, 71, 72)
 FIRE_HAZARDS = WATER + GOO      # what kills Fireboy
 WATER_HAZARDS = LAVA + GOO      # what kills Watergirl
 
-# Bump whenever CHANNELS, the vector, or their meaning changes. Every trained
-# model records the version it was trained on.
-SCHEMA_VERSION = 5
+# Bump whenever CHANNELS, the vector, or their meaning changes, here and in
+# envstate.ts; the client refuses a server whose version or STATE names
+# differ. Every trained model records the version it was trained on.
+SCHEMA_VERSION = 6
 
 # timecount is divided by this in encode(). 150 s at the game's 26 frames a
 # second: the longest medal time (TimeTable) is 145 s, so an episode worth
 # finishing stays under 1.
 TIME_SCALE = 26 * 150
+
+# encode() divides by these, measured over random play on every level:
+# character speeds are under 16 in 99.9% of frames (a jump starts at 13.5),
+# body spin under 2.4 rad/s in 99%, and no level has more than 13 diamonds of
+# one colour.
+VEL_SCALE = 15
+SPIN_SCALE = 5
+COUNT_SCALE = 13
 
 # The medal times, copied from the Game constructor (game.ts): TimeTable[i] is
 # the A-grade time in seconds for map node i + 1, and TRANSLATION[i] names that
@@ -135,11 +149,19 @@ class EnvClient:
         self.n = n
         self.proc = subprocess.Popen([node, str(SERVER), str(n), str(cache)],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        hello = json.loads(self._call(bytes([OP_HELLO])))
+        same_names = tuple(hello["state"]) == STATE_FIELDS
+        if hello["schema"] != SCHEMA_VERSION or not same_names:
+            self.close()
+            raise RuntimeError(f"server speaks schema {hello['schema']}, this client {SCHEMA_VERSION}"
+                               + ("" if same_names else ", and their STATE field names differ")
+                               + "; rebuild the server or update fbwg_env.py")
+        self.engine_version: str = hello["engine"]
 
-    def _call(self, payload: bytes, want: int) -> bytes:
+    def _call(self, payload: bytes, want: int | None = None) -> bytes:
         """Send one framed request, return the reply payload, which must be
-        `want` bytes: a server built from other constants fails here, not as
-        misread floats."""
+        `want` bytes if given: a server built from other constants fails here,
+        not as misread floats."""
         self.proc.stdin.write(struct.pack("<I", len(payload)) + payload)
         self.proc.stdin.flush()
         head = self.proc.stdout.read(4)
@@ -147,7 +169,7 @@ class EnvClient:
             raise RuntimeError("env server exited; run it by hand to see its error")
         (length,) = struct.unpack("<I", head)
         reply = self.proc.stdout.read(length)
-        if length != want or len(reply) != want:
+        if len(reply) != length or want is not None and length != want:
             raise RuntimeError(f"reply is {length} bytes ({len(reply)} read), want {want}; "
                                "rebuild the server or update fbwg_env.py")
         return reply
@@ -226,8 +248,10 @@ def bfs_field(grid: np.ndarray, door: tuple[int, int], hazards: tuple[int, ...],
     return np.where(dist >= 0, dist / far, 1.0).astype(np.float32)
 
 
-_X, _Y, _ANGLE = ([i for i, n in enumerate(STATE_FIELDS) if n.endswith(end)]
-                  for end in ("_x", "_y", "_angle"))
+_X, _Y, _VEL, _SPIN, _COUNT, _ANGLE = (
+    [i for i, n in enumerate(STATE_FIELDS) if n.endswith(ends)]
+    for ends in (("_x", "_x0", "_x1"), ("_y", "_y0", "_y1"), ("_vx", "_vy"), ("_spin",), ("_count",),
+                 ("_angle",)))
 
 
 def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
@@ -239,10 +263,11 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
            info.obstacles; diamonds, moving and wind from state.dyn; doors
            are a single 1 at each door cell.
     bfs:   float32, (2, ROWS, COLS): fire then water.
-    vec:   float32, 1-D: state.vec with positions (characters' and movers')
-           divided by COLS/ROWS, mover angles wrapped and divided by pi, and
-           timecount by TIME_SCALE, so everything is roughly in [-1, 1], then
-           sin and cos of (timecount + 1) / 10.
+    vec:   float32, 1-D: state.vec with positions and fan bounds divided by
+           COLS/ROWS, velocities by VEL_SCALE, spin by SPIN_SCALE, diamond
+           counts by COUNT_SCALE, mover angles wrapped and divided by pi, and
+           timecount by TIME_SCALE, so nearly every value stays in [-1, 1],
+           then sin and cos of (timecount + 1) / 10.
     """
     g, d = info.grid, state.dyn
     fire_door = np.zeros(g.shape, bool)
@@ -264,6 +289,9 @@ def encode(info: LevelInfo, state: State, bfs_fire: np.ndarray,
     vec = state.vec.astype(np.float32)
     vec[_X] /= COLS
     vec[_Y] /= ROWS
+    vec[_VEL] /= VEL_SCALE
+    vec[_SPIN] /= SPIN_SCALE
+    vec[_COUNT] /= COUNT_SCALE
     vec[_ANGLE] = (vec[_ANGLE] + np.pi) % (2 * np.pi) / np.pi - 1
     t = float(state.vec[STATE_FIELDS.index("timecount")])
     vec[STATE_FIELDS.index("timecount")] /= TIME_SCALE

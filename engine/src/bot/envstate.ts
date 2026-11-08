@@ -1,14 +1,25 @@
 /**
- * One env's STATE floats, dyn grid and OP_INFO obstacle mask, read from a live
- * level, and the constants bot/fbwg_env.py must agree with.
+ * How the env builds and steps a level, and reads its STATE floats, dyn grid
+ * and OP_INFO obstacle mask; and the constants bot/fbwg_env.py must agree with.
  *
- * envserver.ts sends these over the wire and envfacts.ts checks them against
- * the engine, so the facts test the very numbers the bot sees, field by field.
- * A module of its own because envserver.ts starts reading stdin on import.
- * The field meanings are documented in envserver.ts's header.
+ * envserver.ts sends these over the wire, and envfacts.ts and envlive.ts check
+ * them against the engine and the whole game, so the checks run the very code
+ * the server runs. A module of its own because envserver.ts starts reading
+ * stdin on import. The field meanings are documented in envserver.ts's header.
  */
+import { level, tickClock, getClock, setClock } from "../game/game.js";
+import { hostLevel } from "../game/headless.js";
+import { advanceTree, enterFrameTree } from "../flash/flash.js";
+import { applyInput } from "../net/hash.js";
+import { Snapshot } from "../net/snapshot.js";
 import { b2AABB, b2Vec2 } from "../box2d/box2d.js";
 import type { Ported } from "../ported.js";
+
+/**
+ * Bump whenever a field, the dyn grid or a meaning changes; fbwg_env.py's must
+ * match, and the server's OP_HELLO sends it so a client checks before reset.
+ */
+export const SCHEMA_VERSION = 6;
 
 export const ROWS = 29;
 export const COLS = 39;
@@ -17,6 +28,9 @@ export const PUSHER_SLOTS = 12;
 /** Puzzle 4 has the most moving bodies, 22. */
 export const MOVER_SLOTS = 24;
 export const MOVER_FIELDS: readonly string[] = ["x", "y", "angle", "vx", "vy", "spin"];
+/** Adventure 17 and speed 4 have the most fans, 5. */
+export const FAN_SLOTS = 6;
+export const FAN_FIELDS: readonly string[] = ["x0", "y0", "x1", "y1", "dx", "dy", "on"];
 
 export const DYN_MOVING = 1;
 export const DYN_RED = 2;
@@ -56,6 +70,7 @@ export const STATE_NAMES: readonly string[] = [
   ...Array.from({ length: LEVER_SLOTS }, (_, i) => `lever${i}`),
   ...Array.from({ length: PUSHER_SLOTS }, (_, i) => `pusher${i}`),
   ...Array.from({ length: MOVER_SLOTS }, (_, i) => MOVER_FIELDS.map((f) => `mover${i}_${f}`)).flat(),
+  ...Array.from({ length: FAN_SLOTS }, (_, i) => FAN_FIELDS.map((f) => `fan${i}_${f}`)).flat(),
 ];
 export const STATE_FLOATS = STATE_NAMES.length;
 
@@ -67,6 +82,54 @@ const DOOR_OPEN = 22;
 /** The fire and water door clips. Restores keep the same objects. */
 export function doorClips(lv: Ported): Ported[] {
   return ["finish1", "finish2"].map((n) => lv.SlidersAndRots.getChildByName(n));
+}
+
+/**
+ * One simulation frame, as the website runs it (embed.ts step, GameHost.step).
+ * No explicit lv.Update(): enterFrameTree dispatches ENTER_FRAME to the level's
+ * own Update listener, and a second call would step the physics twice.
+ */
+export function frame(lv: Ported, bits: number): void {
+  tickClock();
+  applyInput(lv, bits);
+  advanceTree(lv);
+  enterFrameTree(lv);
+}
+
+/** A built level, its snapshot one frame in, and the clock that goes with it. */
+export interface Built {
+  lv: Ported;
+  host: Ported;
+  snap: Snapshot;
+  clock: number;
+  /** The fire and water door clips. */
+  doors: Ported[];
+}
+
+/**
+ * Build a level and capture it one frame in, the state every reset returns.
+ *
+ * That frame runs with no input. A just-built level is not a state play ever
+ * shows -- levers sit at +-90 degrees and every fan reads on until the first
+ * Update applies the levers (puzzle 7's three fans start off) -- so the bot
+ * never sees it, and on the website it must skip the level's first frame the
+ * same way (envlive.ts checks the env against the whole game on that rule).
+ * Clock from 0, not getClock(): the global still holds whichever env ran last.
+ */
+export function buildLevel(mode: string, num: number): Built {
+  const key = `${mode}-${num}`;
+  const lv: Ported = new (level as Ported)(mode, num);
+  const host = hostLevel(lv);
+  if (lv.LevelArray.length !== ROWS || lv.LevelArray[0].length !== COLS) {
+    throw new Error(`${key} is not ${ROWS}x${COLS}`);
+  }
+  const counts = [lv.myLevers.length, lv.myPushers.length, movers(lv).length, lv.myWinds.length];
+  if (counts.some((n, i) => n > [LEVER_SLOTS, PUSHER_SLOTS, MOVER_SLOTS, FAN_SLOTS][i])) {
+    throw new Error(`${key} has ${counts.join(" / ")} levers / buttons / movers / fans`);
+  }
+  setClock(0);
+  frame(lv, 0);
+  return { lv, host, snap: new Snapshot().capture([host]), clock: getClock(), doors: doorClips(lv) };
 }
 
 /**
@@ -244,6 +307,14 @@ export function readState(lv: Ported, host: Ported, doors: Ported[]): number[] {
     const p = b.GetPosition();
     const v = b.GetLinearVelocity();
     floats.push(p.x, p.y, b.GetAngle(), v.x, v.y, b.GetAngularVelocity());
+  }
+  const fans: Ported[] = lv.myWinds;
+  for (let i = 0; i < FAN_SLOTS; i++) {
+    // Off fans too: a lever can switch one on. The force a fan applies follows
+    // its bounds exactly (game.ts Update), and they never change.
+    const w = fans[i];
+    const [dx, dy] = w ? WIND_PUSH[DYN_WIND[w.vertical]] : [0, 0];
+    floats.push(...(w ? [w.lower.x, w.lower.y, w.upper.x, w.upper.y, dx, dy, w.on ? 1 : 0] : [0, 0, 0, 0, 0, 0, 0]));
   }
   return floats;
 }

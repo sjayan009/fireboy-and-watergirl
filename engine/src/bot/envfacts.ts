@@ -43,16 +43,15 @@
  *
  * Run by bot/check_env.py; on its own: node engine/dist/bot/envfacts.js
  */
-import { level, tickClock } from "../game/game.js";
+import { level } from "../game/game.js";
 import { hostLevel } from "../game/headless.js";
-import { SoundBus, advanceTree, enterFrameTree } from "../flash/flash.js";
-import { applyInput } from "../net/hash.js";
+import { SoundBus } from "../flash/flash.js";
 import { Snapshot } from "../net/snapshot.js";
 import { b2AABB, b2Vec2 } from "../box2d/box2d.js";
 import type { Ported } from "../ported.js";
 import {
-  COLS, DYN_MOVING, FIRE_HAZARDS, MOVER_FIELDS, MOVER_SLOTS, POOLS, STATE_NAMES, WATER_HAZARDS,
-  WIND_PUSH, doorClips, movers, obstacleBodies, obstacleMask, readDyn, readState,
+  COLS, DYN_MOVING, FAN_FIELDS, FAN_SLOTS, FIRE_HAZARDS, MOVER_FIELDS, MOVER_SLOTS, POOLS, STATE_NAMES, WATER_HAZARDS,
+  WIND_PUSH, doorClips, frame, movers, obstacleBodies, obstacleMask, readDyn, readState,
 } from "./envstate.js";
 
 SoundBus.replaying = true;
@@ -75,13 +74,8 @@ const DOOR_STEPS = 21;
 /** A character's shapes reach this far above and below its position (game.ts). */
 const HALF_HEIGHT = 0.8;
 
-/** One frame, as envserver.ts and the website run it: Update once, via ENTER_FRAME. */
-function step(lv: Ported, bits = 0): void {
-  tickClock();
-  applyInput(lv, bits);
-  advanceTree(lv);
-  enterFrameTree(lv);
-}
+/** One frame, exactly as the server runs it. */
+const step = (lv: Ported, bits = 0): void => frame(lv, bits);
 
 function fresh(mode: string, num: number): { lv: Ported; host: Ported } {
   const lv: Ported = new (level as Ported)(mode, num);
@@ -351,19 +345,33 @@ for (const [mode, num] of LEVELS) {
   }
 
   const fans = (fresh(mode, num).lv.myWinds as Ported[]).length;
+  {
+    const { lv, host } = fresh(mode, num);
+    const s = state(lv, host);
+    const empty = Array.from({ length: FAN_SLOTS - fans }, (_, k) => k + fans)
+      .every((k) => FAN_FIELDS.every((f) => s[`fan${k}_${f}`] === 0));
+    expect(empty, `${name}: a fan slot past the level's ${fans} fans is not 0`);
+  }
   for (let i = 0; i < fans; i++) {
-    const { lv } = fresh(mode, num);
+    const { lv, host } = fresh(mode, num);
     // Every fan, including lever-driven ones. drift() forces `on`, but the wind
     // loop runs before the lever loop in Update, so for those it only holds for
     // the first frame; one frame of push still clears the 0.01 bar.
     // Which way the wire says it blows: the wind bit readDyn paints at its
     // centre with only this fan on.
+    // The fan's slot gives its centre, and must say it alone is on and push
+    // the same way as that bit.
     const w = lv.myWinds[i];
-    const x = (w.lower.x + w.upper.x) / 2;
-    const y = (w.lower.y + w.upper.y) / 2;
     (lv.myWinds as Ported[]).forEach((f, k) => { f.on = k === i; });
+    const s = state(lv, host);
+    const x = (s[`fan${i}_x0`] + s[`fan${i}_x1`]) / 2;
+    const y = (s[`fan${i}_y0`] + s[`fan${i}_y1`]) / 2;
     const bit = readDyn(lv)[Math.round(y) * COLS + Math.round(x)] & 0xf0;
     const [dx, dy] = WIND_PUSH[bit] ?? [0, 0];
+    const onlyThis = Array.from({ length: fans }, (_, k) => s[`fan${k}_on`] === (k === i ? 1 : 0)).every(Boolean);
+    expect(onlyThis && s[`fan${i}_dx`] === dx && s[`fan${i}_dy`] === dy,
+           `${name}: fan ${i} slot reads on ${s[`fan${i}_on`]}, push ${s[`fan${i}_dx`]},${s[`fan${i}_dy`]}; ` +
+           `wind bit ${bit} pushes ${dx},${dy}`);
     // Drop Watergirl mid-fan and see which way she drifts, against the same
     // spot with the fan off, since gravity acts on both. Three frames, because
     // a weak fan over a short drop (puzzle 7) lands her on the floor either way

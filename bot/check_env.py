@@ -26,7 +26,7 @@ import fbwg_env  # noqa: E402
 from fbwg_env import (  # noqa: E402
     CHANNELS, COLS, DYN_BLUE, DYN_GREEN, DYN_MOVING, DYN_RED, DYN_WIND_LEFT,
     DYN_WIND_UP, FIRE_HAZARDS, LEVER_SLOTS, MEDAL_SECONDS, PUSHER_SLOTS,
-    ROWS, SCHEMA_VERSION, SERVER, STATE_FIELDS, STATE_FLOATS, TIME_SCALE, TIME_TABLE,
+    ROWS, SCHEMA_VERSION, SERVER, STATE_FIELDS, STATE_FLOATS, TIME_SCALE, TIME_TABLE, VEL_SCALE,
     TRANSLATION, WATER_HAZARDS, EnvClient, LevelInfo, State, bfs_field, cell, encode,
 )
 
@@ -146,7 +146,10 @@ def _():
     assert np.isclose(v[F["timecount"]], tc / TIME_SCALE), "timecount not scaled by TIME_SCALE"
     assert np.allclose(v[-2:], [np.sin((tc + 1) / 10), np.cos((tc + 1) / 10)]), \
         "fan phase is not sin, cos of (timecount + 1) / 10"
-    for name, scale in (("fire_x", COLS), ("water_y", ROWS), ("mover0_x", COLS), ("mover23_y", ROWS)):
+    for name, scale in (("fire_x", COLS), ("water_y", ROWS), ("mover0_x", COLS), ("mover23_y", ROWS),
+                        ("fan0_x0", COLS), ("fan5_y1", ROWS), ("fire_vy", VEL_SCALE),
+                        ("mover7_vx", VEL_SCALE), ("mover7_spin", fbwg_env.SPIN_SCALE),
+                        ("red_count", fbwg_env.COUNT_SCALE), ("fan2_dx", 1), ("fan2_on", 1)):
         assert np.isclose(v[F[name]], st.vec[F[name]] / scale), f"{name} not divided by {scale}"
     for i in (0, 23):
         a, want = v[F[f"mover{i}_angle"]], st.vec[F[f"mover{i}_angle"]]
@@ -197,6 +200,16 @@ def run(client: EnvClient, env_bits: list[list[int]], repeat: int = 1) -> list[l
     return [client.step([bits[k] for bits in env_bits], repeat) for k in range(len(env_bits[0]))]
 
 
+def first_difference(a: list[State], b: list[State]) -> int | None:
+    """The first step where two runs differ in hash, any STATE float or the
+    dyn grid, or None. Not the hash alone: hashLevel leaves out timecount, the
+    jump latches, levers, buttons, fans and the ending counters."""
+    assert len(a) == len(b), (len(a), len(b))
+    return next((i for i, (x, y) in enumerate(zip(a, b))
+                 if x.hash != y.hash or not np.array_equal(x.vec, y.vec)
+                 or not np.array_equal(x.dyn, y.dyn)), None)
+
+
 @server_check("STATE_FIELDS, the hazard sets and the constants are envstate.ts's")
 def _():
     url = (SERVER.parent / "envstate.js").as_uri()
@@ -218,6 +231,24 @@ def _():
     for kind, codes in ts["POOLS"].items():
         assert tuple(codes) == getattr(fbwg_env, kind.upper()), f"{kind}: envstate.ts {codes}"
     assert tuple(ts["MOVER_FIELDS"]) == fbwg_env.MOVER_FIELDS
+    assert tuple(ts["FAN_FIELDS"]) == fbwg_env.FAN_FIELDS
+
+
+@server_check("handshake: a client of another schema is refused before any reset")
+def _():
+    c = EnvClient(1)
+    assert len(c.engine_version) > 8, c.engine_version
+    c.close()
+    old = fbwg_env.SCHEMA_VERSION
+    fbwg_env.SCHEMA_VERSION = old - 1
+    try:
+        EnvClient(1).close()
+    except RuntimeError as e:
+        assert "schema" in str(e), e
+    else:
+        raise AssertionError("a client of schema %d was accepted" % (old - 1))
+    finally:
+        fbwg_env.SCHEMA_VERSION = old
 
 
 @check("grades: MEDAL_SECONDS is game.ts's TimeTable, by the node its level-select button sets")
@@ -277,6 +308,13 @@ def _():
 @server_check("engine: hazards, deaths, jumps, doors, won, diamonds, fans, levers, buttons, movers on every level")
 def _():
     out = subprocess.run(["node", str(SERVER.parent / "envfacts.js")],
+                         capture_output=True, text=True)
+    assert out.returncode == 0, (out.stdout + out.stderr).strip()[-600:]
+
+
+@server_check("live: the env is the whole game, before and after a restore, and grades as it does")
+def _():
+    out = subprocess.run(["node", str(SERVER.parent / "envlive.js")],
                          capture_output=True, text=True)
     assert out.returncode == 0, (out.stdout + out.stderr).strip()[-600:]
 
@@ -397,9 +435,10 @@ def _():
         runs = []
         for _ in range(2):
             c.reset(0, "adventure", 1)
-            runs.append([s[0].hash for s in run(c, [bits])])
-        assert len(set(runs[0])) > 10, "the hash barely changes; is it really hashLevel?"
-        assert runs[0] == runs[1], "two runs of the same inputs diverged"
+            runs.append([s[0] for s in run(c, [bits])])
+        assert len({s.hash for s in runs[0]}) > 10, "the hash barely changes; is it really hashLevel?"
+        k = first_difference(*runs)
+        assert k is None, f"two runs of the same inputs diverged at step {k}"
     finally:
         c.close()
 
@@ -411,9 +450,10 @@ def _():
     try:
         a.reset(0, "puzzle", 3)
         run(a, [rand_bits(3, 100)])          # play, then restore
-        ha = [a.reset(0, "puzzle", 3).hash] + [s[0].hash for s in run(a, [bits])]
-        hb = [b.reset(0, "puzzle", 3).hash] + [s[0].hash for s in run(b, [bits])]
-        assert ha == hb, f"diverged at step {next(i for i in range(len(ha)) if ha[i] != hb[i])}"
+        ha = [a.reset(0, "puzzle", 3)] + [s[0] for s in run(a, [bits])]
+        hb = [b.reset(0, "puzzle", 3)] + [s[0] for s in run(b, [bits])]
+        k = first_difference(ha, hb)
+        assert k is None, f"diverged at step {k}"
     finally:
         a.close()
         b.close()
@@ -428,9 +468,10 @@ def _():
         run(a, [rand_bits(10, 80)])
         a.reset(0, "puzzle", 3)              # a second level in the same env
         run(a, [rand_bits(11, 80)])
-        ha = [a.reset(0, "adventure", 1).hash] + [s[0].hash for s in run(a, [bits])]
-        hb = [b.reset(0, "adventure", 1).hash] + [s[0].hash for s in run(b, [bits])]
-        assert ha == hb, "restoring a level after playing another one diverged"
+        ha = [a.reset(0, "adventure", 1)] + [s[0] for s in run(a, [bits])]
+        hb = [b.reset(0, "adventure", 1)] + [s[0] for s in run(b, [bits])]
+        k = first_difference(ha, hb)
+        assert k is None, f"restoring a level after playing another one diverged at step {k}"
     finally:
         a.close()
         b.close()
@@ -525,9 +566,10 @@ def _():
     try:
         a.reset(0, "speed", 2)
         b.reset(0, "speed", 2)
-        ha = [s[0].hash for s in run(a, [bits], repeat=3)]
-        hb = [s[0].hash for s in run(b, [[x for x in bits for _ in range(3)]])][2::3]
-        assert ha == hb, "action repeat does not match repeated single steps"
+        ha = [s[0] for s in run(a, [bits], repeat=3)]
+        hb = [s[0] for s in run(b, [[x for x in bits for _ in range(3)]])][2::3]
+        k = first_difference(ha, hb)
+        assert k is None, f"action repeat does not match repeated single steps at step {k}"
     finally:
         a.close()
         b.close()
@@ -545,8 +587,8 @@ def _():
         for i, lv in enumerate(levels):
             solo[i].reset(0, *lv)
             alone = run(solo[i], [bits[i]])
-            assert [s[i].hash for s in both] == [s[0].hash for s in alone], \
-                f"env {i} diverged when run beside another env"
+            k = first_difference([s[i] for s in both], [s[0] for s in alone])
+            assert k is None, f"env {i} diverged at step {k} when run beside another env"
             # timecount stops when the level pauses, so the count is only
             # exact if nobody died.
             last = both[-1][i].vec

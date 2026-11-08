@@ -61,7 +61,15 @@ Facts from the code, not estimates.
   no `NetSession`: `GameView.tick` (`embed.ts:826-870`) uses the session only
   when `session && session.running`, and otherwise runs `step()` on an
   accumulator, up to five steps per animation frame when the browser stutters.
-  `step()` (`embed.ts:816`) ticks the clock and the display tree.
+  `step()` (`embed.ts:816`) ticks the clock and the display tree. The bot
+  decides once per `step()`, not once per animation frame.
+- **The level's first frame.** The env runs each level's first frame with no
+  input before the bot sees it, because a level fresh from its constructor is
+  not a state play shows (levers at ±90°, every fan on). So on the website the
+  bot sends nothing for the level's first frame and starts deciding from the
+  state after it; the human's keys in that one frame still count, a 1/26 s
+  difference. `engine/src/bot/envlive.ts` checks the env against the whole
+  game on exactly that rule.
 - **Actions.** Three bits per character: left = 1, right = 2, up = 4. Eight
   actions each, no down key. The level reads them as `l_pressed`,
   `r_pressed`, `u_pressed` (Fireboy, arrow keys) and the `2` variants
