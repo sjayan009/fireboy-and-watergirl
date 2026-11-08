@@ -127,7 +127,10 @@ export class PlayShell {
     this.root.append(
       el("header", { class: "play-toolbar" },
         identity, this.friendButton, this.boardButton, this.menuButton, options.primaryAction),
-      el("div", { class: "play-workspace" }, this.viewport, this.drawer, this.notices),
+      // The page's one main landmark and its one h1, unseen: the toolbar already
+      // says the game's name, in its own lettering.
+      el("main", { class: "play-workspace" }, el("h1", { class: "sr-only" }, "Fireboy & Watergirl"),
+        this.viewport, this.drawer, this.notices),
       // Sound and fullscreen change the screen, not the session, so they sit
       // under the screen they change, opposite "Saved": the footer is the
       // game's own status bar, the toolbar is for the social panels.
@@ -252,6 +255,7 @@ export class PlayShell {
     if (!this.active || !this.drawer.contains(document.activeElement)) this.trigger = document.activeElement as HTMLElement;
     this.active = panel;
     this.root.classList.add("drawer-open"); this.drawer.hidden = false;
+    this.root.dataset.panel = panel;
     this.title.textContent = { friends:"Play Together", leaderboard:"The Fastest Pairs", progress:"Progress", menu:"Game Menu", settings:"Settings" }[panel];
     for (const tab of this.tabs.querySelectorAll<HTMLElement>("button")) {
       const current = tab.dataset.panel === panel;
@@ -269,6 +273,7 @@ export class PlayShell {
   }
   close(focusGame = false): void {
     this.active = null; this.drawer.hidden = true; this.root.classList.remove("drawer-open");
+    delete this.root.dataset.panel;
     this.syncExpanded(); this.syncModal();
     if (!focusGame) { try { localStorage.setItem(this.preference, "closed"); } catch { /* optional */ } }
     const back = this.trigger;

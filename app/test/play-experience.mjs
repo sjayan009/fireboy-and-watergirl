@@ -36,8 +36,6 @@ for (const [name,engine] of Object.entries({ chromium,firefox,webkit })) {
       // each one is now "Invite <username>". Matching the prefix rather than
       // the whole string is what keeps this test from caring who is first.
       await page.getByRole("button",{ name:/^Invite \S/ }).first().click();
-      await page.getByLabel("Game mode",{ exact:true }).selectOption("puzzle");
-      await page.getByLabel("Level",{ exact:true }).selectOption("2");
       await page.getByLabel("Characters",{ exact:true }).selectOption("them");
       await fit();
       await page.screenshot({ path:`.cache/play-evidence/${name}-${width}.png` });

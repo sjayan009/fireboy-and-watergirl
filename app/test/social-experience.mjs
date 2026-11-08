@@ -66,9 +66,9 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})) {
   await first.getByRole('button',{name:'Keep friend',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.socialFixture.calls.filter(c=>c==='remove_friend').length),1,'canceling removal sends no mutation');
   await first.getByRole('button',{name:/^Invite /}).click();
-  await page.getByLabel('Game mode',{exact:true}).selectOption('puzzle');
+  await page.getByLabel('Characters',{exact:true}).selectOption('them');
   await refresh();
-  assert.equal(await page.getByLabel('Game mode',{exact:true}).inputValue(),'puzzle','refresh preserves setup selection');
+  assert.equal(await page.getByLabel('Characters',{exact:true}).inputValue(),'them','refresh preserves setup selection');
   await first.getByRole('button',{name:'Cancel',exact:true}).click();
   await first.getByLabel('Actions for A_very_long_friend_name',{exact:true}).click();
   await first.getByRole('button',{name:'Remove friend',exact:true}).click();

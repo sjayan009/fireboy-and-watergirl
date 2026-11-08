@@ -4132,6 +4132,12 @@ export class Game extends MovieClip {
          this.m_mainMenu.flies.addEventListener(Event.ENTER_FRAME,this.__bind(this.FliesMove));
          this.m_mainMenu.BackToIntro.addEventListener(MouseEvent.CLICK,this.__bind(this.BackToIntro));
          this.m_mainMenu.BackToIntro.addEventListener(MouseEvent.MOUSE_OVER,this.__bind(this.OverSounder));
+         /*
+          * Reads Back, always lit, like the title cards' own Back: drawn and
+          * hit-tested from tools/map_back.py's art rather than DefineButton
+          * 635's "Main Menu", which the pause tray's End Game keeps.
+          */
+         this.m_mainMenu.BackToIntro.spriteId = "635-back";
          _loc1_ = 0;
          while(_loc1_ < 32)
          {
@@ -4232,10 +4238,15 @@ export class Game extends MovieClip {
           * took the click, so a third of the menu answered every press with
           * nothing. `enabled = false` is what the level map already uses for a
           * node nobody has reached: the renderer stops hit-testing it, so it
-          * neither highlights nor clicks. The art stays where it always was.
+          * neither highlights nor clicks.
+          *
+          * Hidden as well, so the menu offers only what works, and Credits takes
+          * More Games' place, one line under Instructions.
           */
-         this.m_introMenu.Buttons.Submiter.enabled = false;
-         this.m_introMenu.Buttons.Morer.enabled = false;
+         const buttons = this.m_introMenu.Buttons;
+         buttons.Submiter.enabled = buttons.Morer.enabled = false;
+         buttons.Submiter.visible = buttons.Morer.visible = false;
+         buttons.Crediter.y = buttons.Morer.y;
          this.m_introMenu.ArmorLogo.enabled = false;
          this.m_introMenu.ArmorLogo.buttonMode = false;
          this.m_introMenu.ArmorLogo.useHandCursor = false;

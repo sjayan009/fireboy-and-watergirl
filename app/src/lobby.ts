@@ -603,6 +603,8 @@ export class Lobby {
    */
   async invite(friendId: string, o: {
     mode: string; num: number; iAmFireboy: boolean;
+    /** Start on the map with no level picked; mode and num are then a placeholder. */
+    between?: boolean;
     onProgress?: (what: string) => void;
     /** Abort and withdraw the invitation, at any point up to the first frame. */
     signal?: AbortSignal;
@@ -614,6 +616,7 @@ export class Lobby {
       mode: o.mode, num: o.num,
       fireboy: o.iAmFireboy ? this.me.userId : friendId,
       from: this.me.userId,
+      ...(o.between ? { between: true } : {}),
     }, false, o);
   }
 
@@ -739,6 +742,11 @@ export class Lobby {
         slot: (fireboy === this.me.userId ? 0 : 1) as Slot,
         mode: invite.mode, num: invite.num, host: true, friend, invite,
       };
+    } catch (e) {
+      // However it ended -- a no, a timeout, a lost link -- another tab of theirs
+      // may have said yes and be connecting. Withdrawing is what stops it.
+      if (!o.signal?.aborted) channel.cancel({ session, attempt: invite.attempt, from: this.me.userId });
+      throw e;
     } finally {
       attempt.abort();
       o.signal?.removeEventListener("abort", abortLink);

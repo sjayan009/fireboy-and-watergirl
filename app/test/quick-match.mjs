@@ -114,7 +114,7 @@ try {
   check("and says so to a screen reader", await a.locator(".qm-seg button:has-text('Fireboy')").getAttribute("aria-checked"), "true");
   await a.click(".qm-go");
   await a.waitForSelector(".qm-ring.searching");
-  check("alice is searching", await a.locator(".qm-headline h4").innerText(), "Finding a partner");
+  check("alice is searching", await a.locator(".qm-headline h3").innerText(), "Finding a partner");
   await a.waitForTimeout(2500);
   check("the bar is counting", Number((await a.locator(".qm-pct").innerText()).replace("%", "")) > 0, true);
   await b.click(".qm-go");
@@ -181,7 +181,7 @@ try {
     for (const [tag, p] of [["A", a], ["B", b]]) {
       console.log(`  [${tag}] ` + JSON.stringify(await p.evaluate(() => ({
         session: !!window.__fbwg.view.session,
-        card: document.querySelector(".qm-headline h4")?.textContent,
+        card: document.querySelector(".qm-headline h3")?.textContent,
         banner: document.querySelector(".banner")?.innerText,
         friends: window.__fbwg.lobby.list.map(f => [f.username, f.status, f.stranger ?? false, f.activity, f.connection]),
       }))));

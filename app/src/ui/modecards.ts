@@ -13,8 +13,8 @@
  *     at y=170, and Back's cap height at y=457.4, so the ring clears each by
  *     the same 31.7px; inside a card the art, title and line below are
  *     centred too, 15.2px from the top and the bottom;
- *   - Back takes the map button's colours, #89681D lifting to #FFCC00, and its
- *     black outline. The title screen's Watergirl stands where the map draws
+ *   - Back is the map button's lit colour, #FFCC00, with its black outline --
+ *     always lit, so it reads as there before it is pointed at. The title screen's Watergirl stands where the map draws
  *     that button, so Back sits in the corner under her, at 18px -- a size the
  *     SWF's own text uses -- 9px in from both edges, as the title's own corner
  *     text is;
@@ -61,6 +61,8 @@ const OUTLINE_STRENGTH = 10;
 const reduce = matchMedia("(prefers-reduced-motion: reduce)");
 
 type Screen = "root" | "local" | "online";
+/** What is under way: a Quick Match, or an invitation to a friend. */
+export type Busy = "quick" | "friends" | null;
 
 export interface ModeCardsOptions {
   /** Signed out: the online cards say an account is needed, and lead to one. */
@@ -68,6 +70,8 @@ export interface ModeCardsOptions {
   onTwoPlayers(): void;
   onQuickMatch(): void;
   onFriends(): void;
+  /** The status pill at the bottom: back to whatever is in progress. */
+  onStatus(): void;
   /** Escape or Back from the first screen: the title screen's own menu again. */
   onClose(): void;
 }
@@ -131,7 +135,8 @@ const ART = {
   friends: screenOf(94, FIRE_SIDE, door(fireDoor, 136, true) + fireAt(176)) + heart + screenOf(94, WATER_SIDE, door(waterDoor, 338, true) + waterAt(318)),
 };
 
-interface Card { title: string; sub: string; art: string; kind: string; act?: () => void; }
+/** `dim`: greyed out like a locked card, but still opens, so a screen of locked cards can be looked at. */
+interface Card { title: string; sub: string; art: string; kind: string; act?: () => void; dim?: boolean; }
 
 export class ModeCards {
   readonly root = el("div", { class: "mode-cards" });
@@ -141,6 +146,13 @@ export class ModeCards {
   private readonly back = el("button", { type: "button", class: "mc-back" }, "Back");
   private readonly blur: SVGFEGaussianBlurElement;
   private screen: Screen = "root";
+  private busy: Busy = null;
+  /**
+   * What is under way, at the bottom of the stage, for when its panel is shut:
+   * the way matchmaking stays on screen in a console menu while you browse.
+   */
+  private readonly status = el("button", { type: "button", class: "mc-status", hidden: true },
+    el("span", { class: "mc-dot", "aria-hidden": "true" }), el("span", { class: "mc-what" }), el("span", { class: "mc-detail" }), el("span", { class: "mc-clock" }));
 
   constructor(private readonly o: ModeCardsOptions) {
     // The glow, as Flash computes it: blur the alpha, multiply it by the
@@ -164,8 +176,9 @@ export class ModeCards {
     const [glowBlur, outlineBlur] = svg.querySelectorAll("feGaussianBlur");
     this.blur = glowBlur;
     this.screenEl.append(this.crumb, this.row, this.back);
-    this.root.append(svg, this.screenEl);
+    this.root.append(svg, this.screenEl, this.status);
     this.back.addEventListener("click", () => this.goBack());
+    this.status.addEventListener("click", () => this.o.onStatus());
     this.root.addEventListener("keydown", (e) => this.key(e));
     // The filter works in CSS pixels, so its sigma follows the stage's scale.
     new ResizeObserver(() => {
@@ -191,20 +204,44 @@ export class ModeCards {
     this.screenEl.hidden = true;
   }
 
+  /**
+   * While something is under way, every card but the way back to it is greyed
+   * out, the way a console menu locks the other modes during matchmaking.
+   */
+  setBusy(busy: Busy, line: [string, string, string?] | null): void {
+    this.status.hidden = !line;
+    if (line) {
+      const [what, detail, clock = ""] = line;
+      const [, w, d, c] = this.status.children as unknown as HTMLElement[];
+      this.status.dataset.busy = busy ?? "";
+      w.textContent = what; d.textContent = detail; c.textContent = clock; c.hidden = !clock;
+      this.status.setAttribute("aria-label", `${what}, ${detail}${clock ? " " + clock : ""}. Open`);
+    }
+    if (busy === this.busy) return;
+    this.busy = busy;
+    if (!this.open) return;
+    const at = [...this.row.children].findIndex(b => b.hasAttribute("data-selected"));
+    this.draw(this.screen, 0, at < 0 ? undefined : at, this.root.contains(document.activeElement));
+  }
+
   private cards(screen: Screen): Card[] {
     const needAccount = "Needs a free account";
+    // A card that leads to another screen still opens (`browse`), so everything
+    // can be looked at; only the ones that would start something are shut.
+    const lock = (card: Card, keep: Busy | "both" = null, browse = false): Card => !this.busy || keep === "both" || keep === this.busy ? card
+      : { ...card, sub: this.busy === "quick" ? "Not while searching" : "Not while inviting", act: browse ? card.act : undefined, dim: true };
     switch (screen) {
       case "root": return [
-        { title: "Local Play", sub: "Same computer", art: ART.local, kind: "screens", act: () => this.draw("local", 1) },
-        { title: "Online Play", sub: "Different computers", art: ART.online, kind: "screens", act: () => this.draw("online", 1) },
+        lock({ title: "Local Play", sub: "Same computer", art: ART.local, kind: "screens", act: () => this.draw("local", 1) }, null, true),
+        lock({ title: "Online Play", sub: "Different computers", art: ART.online, kind: "screens", act: () => this.draw("online", 1) }, "both"),
       ];
       case "local": return [
         { title: "Solo + AI", sub: "With a robot buddy · soon", art: ART.solo, kind: "screens" },
-        { title: "Two Players", sub: "Share one keyboard", art: ART.two, kind: "keys", act: () => this.o.onTwoPlayers() },
+        lock({ title: "Two Players", sub: "Share one keyboard", art: ART.two, kind: "keys", act: () => this.o.onTwoPlayers() }),
       ];
       case "online": return [
-        { title: "Quick Match", sub: this.o.guest ? needAccount : "Play someone new", art: ART.quick, kind: "screens", act: () => this.o.onQuickMatch() },
-        { title: "Friends", sub: this.o.guest ? needAccount : "Play with your friends", art: ART.friends, kind: "screens", act: () => this.o.onFriends() },
+        lock({ title: "Quick Match", sub: this.o.guest ? needAccount : this.busy === "quick" ? "Searching now" : "Play someone new", art: ART.quick, kind: "screens", act: () => this.o.onQuickMatch() }, "quick"),
+        lock({ title: "Friends", sub: this.o.guest ? needAccount : "Play with your friends", art: ART.friends, kind: "screens", act: () => this.o.onFriends() }, "friends"),
       ];
     }
   }
@@ -218,7 +255,7 @@ export class ModeCards {
     this.crumb.textContent = screen === "local" ? "Play / Local Play" : screen === "online" ? "Play / Online Play" : "Play";
     this.row.setAttribute("aria-label", screen === "root" ? "How to play" : screen === "local" ? "Local Play" : "Online Play");
     const buttons = this.cards(screen).map(card => {
-      const b = el("button", { type: "button", class: "mc-card", "aria-disabled": card.act ? null : "true" },
+      const b = el("button", { type: "button", class: "mc-card", "aria-disabled": card.act ? null : "true", "data-dim": card.dim ? "" : null },
         el("span", { class: "mc-ring", "aria-hidden": "true" }),
         el("span", { class: `mc-art mc-${card.kind}`, "aria-hidden": "true", html: card.art }),
         el("span", { class: "mc-title" }, card.title),
@@ -232,7 +269,8 @@ export class ModeCards {
     });
     this.row.replaceChildren(...buttons);
     // Arriving, the ring starts on the first card that can be chosen.
-    const at = focus ?? Math.max(0, buttons.findIndex(b => !b.hasAttribute("aria-disabled")));
+    const at = focus ?? Math.max(0, buttons.findIndex(b => !b.hasAttribute("aria-disabled") && !b.hasAttribute("data-dim")),
+      buttons.findIndex(b => !b.hasAttribute("aria-disabled")));
     if (takeFocus) buttons[at]?.focus({ preventScroll: true });
     this.select(buttons[at]);
     if (from && !reduce.matches) {
