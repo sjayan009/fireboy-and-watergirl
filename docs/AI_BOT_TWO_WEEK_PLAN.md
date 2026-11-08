@@ -2,8 +2,8 @@
 
 A first pass through the whole [roadmap](AI_BOT_ROADMAP.md) in 14 days. You
 learn each topic on the day you build with it. Week 1 ends with a learned
-bot people can play with in the browser. Week 2 makes it a good partner and
-production-ready.
+bot people can play with in the browser, under Local Play → Solo + AI. Week 2
+makes it a good partner and production-ready. The bot never plays online.
 
 Two weeks will not reach the "perfect" bar in roadmap section 1. That bar is
 what the improvement loop works toward after these two weeks. What two weeks
@@ -24,7 +24,7 @@ about 10 minutes. Read the method section in full only for papers your build
 copies (PPO's 37 details, MAPPO, Overcooked).
 
 **One rule if you fall behind:** cut from the optional items, never from the
-evaluation, the leaderboard flag or the playable bot.
+evaluation or the playable bot.
 
 ---
 
@@ -39,23 +39,24 @@ evaluation, the leaderboard flag or the playable bot.
 - **Build:**
   - Node env server: many env copies, `Snapshot.restore` as reset, binary batched protocol modelled on `protocol.ts`.
   - NumPy observation encoder: one-hot `C × 29 × 39` tiles, two BFS distance-to-door fields, the state vector. Use [From Python to NumPy](https://www.labri.fr/perso/nrougier/from-python-to-numpy/) for vectorization.
-  - Python [Gymnasium](https://gymnasium.farama.org/) wrapper with the four-frame action delay and action repeat.
-  - Invariant tests: same seed and actions give the same digest; restore equals rebuild; observation survives a snapshot round-trip.
+  - Python [Gymnasium](https://gymnasium.farama.org/) wrapper with action repeat and an input delay taken per reset, drawn from 0–2 frames per episode (roadmap section 2).
+  - Invariant tests: same seed and actions give the same digest; restore equals rebuild; observation survives a snapshot round-trip; the reset's delay is applied exactly.
   - Measure the socket cost: steps per second end to end versus the engine's raw speed.
 - **Night:** [Keshav, How to Read a Paper](http://ccr.sigcomm.org/online/files/p83-keshavA.pdf); [Stat 110](https://projects.iq.harvard.edu/stat110) on expectation, variance and Markov chains.
 - **Done when:** a random agent runs 1,000 episodes and the invariant tests pass. (Stage 0–1 milestone.)
 
-### Day 2 · Scripted bot, playable, and the leaderboard flag
+### Day 2 · Scripted bot, playable in Solo + AI
 
 - **Learn:**
-  - [TypeScript for JS programmers](https://www.typescriptlang.org/docs/handbook/typescript-in-5-minutes.html), then read `engine/src/net/transport.ts`, `session.ts` and `snapshot.ts` end to end.
+  - [TypeScript for JS programmers](https://www.typescriptlang.org/docs/handbook/typescript-in-5-minutes.html), then read `GameView.tick` and `step` in `engine/src/embed.ts`, `Game.keyPressed` and `keyReleased` in `engine/src/game/game.ts`, and `engine/src/net/snapshot.ts` end to end.
   - [Ruder's gradient descent overview](https://www.ruder.io/optimizing-gradient-descent/); [Boyd](https://web.stanford.edu/~boyd/cvxbook/) §5.1.
 - **Build:**
   - Scripted bot: BFS to its own door, jump when blocked, avoid the deadly pool. Run it in the env and record its per-level results; this is the baseline.
-  - `BotTransport` in a Web Worker with its own engine copy, sending bits through the session's input path only. Keep it outside `engine/src/{game,flash,box2d}`.
-  - **Leaderboard flag before any bot run is recorded:** bot flag on the replay and the database row, excluded in `verified_leaderboard()`, with an RLS test proving no bot run ranks. Run it against the local Supabase stack.
+  - The Solo + AI card (`app/src/ui/modecards.ts:239`) starts a local game with the scripted bot. Each frame it reads the live level and writes its character's `*_pressed` flags the way the keyboard does. Keep it outside `engine/src/{game,flash,box2d}`.
+  - Ignore the human's keys for the bot's character, or they overwrite the bot (roadmap section 3, open items).
+  - The scripted bot needs the BFS fields in the browser: start the TypeScript copy of the Python encoder here.
 - **Night:** StatQuest probability videos; start your notes file.
-- **Done when:** you play level 1 in the browser with the scripted bot, and the leaderboard test passes.
+- **Done when:** you play level 1 in the browser under Local Play → Solo + AI with the scripted bot.
 
 ### Day 3 · Deep learning and behaviour cloning
 
@@ -78,7 +79,7 @@ evaluation, the leaderboard flag or the playable bot.
   - [Mutual Information](https://www.youtube.com/@Mutual_Information) RL series.
 - **Build:**
   - Your own single-file PPO. CartPole first, matching CleanRL's published curve (your first reproduction, Stage 9).
-  - Then level 1: one learned character with the scripted partner, shaped reward from roadmap section 4, four-frame delay on.
+  - Then level 1: one learned character with the scripted partner, shaped reward from roadmap section 4, input delay drawn from 0–2 frames.
   - Read and run CleanRL's DQN, A2C and SAC files.
   - TensorBoard or W&B logging; AMP and `torch.compile` from the [PyTorch tutorials](https://pytorch.org/tutorials/).
 - **Night:** [Sutton & Barto](http://incompleteideas.net/book/the-book-2nd.html) chapters 3, 6 and 13; [David Silver](https://www.davidsilver.uk/teaching/) lecture 7. Then derive the policy gradient theorem on paper (Stage 0 milestone).
@@ -120,12 +121,14 @@ evaluation, the leaderboard flag or the playable bot.
   - Umar Jamil on quantization.
 - **Build:**
   - Distill to a small model, export to ONNX, quantize to int8, re-run the eval to confirm the scores hold.
-  - WebGPU in the worker with WASM fallback; lazy load; pin by content hash.
-  - Model manifest: observation schema version, action repeat, supported engine versions. The client refuses a mismatch.
+  - The TypeScript observation encoder, finished, with a parity test against `bot/fbwg_env.py` gated by `SCHEMA_VERSION`.
+  - WebGPU on the main thread or in a worker, with WASM fallback; lazy load when Solo + AI starts; pin by content hash.
+  - Model manifest: observation schema version, action repeat, trained input delays, supported engine versions. The client refuses a mismatch.
   - Scripted fallback whenever a decision is late. Measure p95 on the slowest laptop you can find.
   - Feature flag and kill switch.
+  - Decide how bot-helped medals, times and unlocks go into the player's save before the flag opens to anyone else (roadmap section 3, open items).
 - **Night:** write the week-1 README section and your first blog post from the notes.
-- **Done when:** you play several levels in the browser with the learned bot behind a flag, inside the latency budget.
+- **Done when:** you play several levels in Solo + AI with the learned bot behind a flag, inside the latency budget.
 
 ---
 

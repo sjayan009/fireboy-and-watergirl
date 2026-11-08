@@ -1,9 +1,12 @@
 # AI partner bot: the complete roadmap
 
 Everything needed to build, refine and run in production a bot that plays the
-second character in Fireboy & Watergirl, so one person can play alone. It
-builds on [AI_BOT_FEASIBILITY.md](AI_BOT_FEASIBILITY.md). The day-by-day
-schedule is in [AI_BOT_TWO_WEEK_PLAN.md](AI_BOT_TWO_WEEK_PLAN.md).
+second character in Fireboy & Watergirl, so one person can play alone. The
+bot lives in one place: **Local Play → Solo + AI** on the hosted site, the
+card that already shows greyed as "With a robot buddy · soon" next to Two
+Players (`app/src/ui/modecards.ts:239`). It never plays online. It builds
+on [AI_BOT_FEASIBILITY.md](AI_BOT_FEASIBILITY.md). The day-by-day schedule
+is in [AI_BOT_TWO_WEEK_PLAN.md](AI_BOT_TWO_WEEK_PLAN.md).
 
 Contents:
 
@@ -40,9 +43,12 @@ criteria. A release that misses one is not done.
 | Human outcome | People finish more levels with the bot than when controlling both characters themselves, and choose to replay with it |
 | Latency | Inference p95 under 5 ms on a low-end reference laptop; scripted fallback used on under 0.1% of decisions |
 | Size | Model under 1 MB, loaded lazily, pinned by content hash |
-| Correctness | Zero desyncs; replays of bot games verify; the CI determinism digests unchanged |
-| Integrity | Zero bot runs in leaderboard rankings, proved by a test |
+| Correctness | No bot code in `engine/src/{game,flash,box2d}`; the CI determinism digests unchanged |
 | Regressions | No level gets measurably worse release to release (confidence intervals, not single runs) |
+
+If the bot ever played online, two more bars would apply: zero desyncs with
+replays of bot games verifying, and zero bot runs in leaderboard rankings,
+proved by a test. Neither is planned (section 3, "Online play").
 
 ---
 
@@ -51,33 +57,50 @@ criteria. A release that misses one is not done.
 Facts from the code, not estimates.
 
 - **Timing.** The simulation steps at a fixed 26 Hz (`TIME_STEP = 1/26` in
-  `engine/src/embed.ts`), about 38.5 ms per frame.
+  `engine/src/embed.ts:42`), about 38.5 ms per frame. In Local Play there is
+  no `NetSession`: `GameView.tick` (`embed.ts:826-870`) uses the session only
+  when `session && session.running`, and otherwise runs `step()` on an
+  accumulator, up to five steps per animation frame when the browser stutters.
+  `step()` (`embed.ts:816`) ticks the clock and the display tree.
 - **Actions.** Three bits per character: left = 1, right = 2, up = 4. Eight
-  actions each, no down key. `packInput` in `engine/src/net/hash.ts` packs both
-  characters into six bits per frame.
-- **Input lead.** `session.setLocalInput` keeps three bits, and each frame's
-  input is decided once, several frames ahead, and never revised.
-  IMPLEMENTATION_RESULTS_17.md puts that lead at four frames, about 154 ms. The
-  bot chooses frame t+4's input while looking at frame t. **Train with that
-  four-frame action delay built in**, or the policy that worked in training
-  fails live.
+  actions each, no down key. The level reads them as `l_pressed`,
+  `r_pressed`, `u_pressed` (Fireboy, arrow keys) and the `2` variants
+  (Watergirl, W/A/D), written by `Game.keyPressed` and `keyReleased`
+  (`engine/src/game/game.ts:4737`, `:4894`). `packInput` in
+  `engine/src/net/hash.ts` packs both characters into six bits per frame.
+- **Input delay.** Local Play has no input lead and no input delay. The bot's
+  only lag is its own decision time: about 0 frames on the main thread, about
+  1 in a Web Worker, plus stutter, when several steps run in one animation
+  frame on the same bits. So the env takes the input delay per reset, and
+  training draws it from 0–2 frames per episode, replacing the fixed
+  four-frame delay the env started with (the online input lead). This is
+  being implemented now.
+- **Time in the observation.** The global clock (`getClock()`,
+  `game.ts:166`) counts frames since the `GameView` was built
+  (`resetClock()` at `embed.ts:230`), so on the live site it includes time on
+  the title and the map. The observation uses the level's own `timecount`
+  instead: frames since the level started (reset at `game.ts:546`, counted at
+  `:1982`), and what drives the fan strength cycle
+  `detSin(this.timecount / 10)` (`game.ts:2041`).
 - **World.** Each level is a 29 × 39 tile grid plus 316 entity placements in
   `extracted/entities/*.json`: levers, pushers, platforms, wind, pulleys,
   boxes and doors. Water kills Fireboy, lava kills Watergirl, green goo kills
   both. The tile codes are in `extracted/LEVEL_FORMAT.md`.
 - **Determinism.** The simulation is a pure function of (mode, level, input
-  log), checked across V8, SpiderMonkey and JavaScriptCore. Only the bits
-  enter the log, so the policy itself does not need to be deterministic.
-  WebGPU floating-point drift between devices cannot desync a game or break
-  replay verification.
+  log), checked across V8, SpiderMonkey and JavaScriptCore. That is what makes
+  snapshot resets and seeded evaluation reproducible. In Local Play there is
+  no peer and no input log, so the policy itself does not need to be
+  deterministic: WebGPU floating-point drift between devices changes only the
+  bot's own choices.
 - **Speed.** A step costs 0.0135 ms (about 2,800× real time per core).
   Rebuilding a level costs 20 ms; restoring a snapshot costs 4 ms. Reset by
   restoring a snapshot, then replay forward.
 - **Grades.** The game's own `TimeTable` defines the medal thresholds, so
   "played well" has an objective answer the original authors defined.
-- **Replays.** The session already produces
-  `{version, engine, mode, num, frames, inputs, commands}` for every game
-  (`engine/src/net/session.ts`). That is a ready-made dataset format.
+- **Replays.** The session produces
+  `{version, engine, mode, num, frames, inputs, commands}` for every online
+  game (`engine/src/net/session.ts`). That is a ready-made dataset format for
+  human play. Local Play has no session and records no replay.
 
 ---
 
@@ -94,32 +117,68 @@ Facts from the code, not estimates.
 - Do not port the physics to Python or JAX. The Box2D port is certified for
   determinism across three engines; you cannot cheaply recreate that.
 
-### Runtime side
+### Runtime side (Local Play → Solo + AI)
 
 ```
-┌──────────── browser ─────────────┐
-│  GameView ── NetSession(slot 0)  │
-│                   │              │
-│              Transport           │
-│                   │              │
-│            BotTransport ─────────┼──▶ Web Worker
-│                                  │      ├─ its own engine copy
-└──────────────────────────────────┘      ├─ observation encoder
-                                          ├─ ONNX Runtime Web (WebGPU, WASM fallback)
-                                          └─ policy → 3 bits
+┌──────────────────── browser ────────────────────┐
+│  GameView.tick ── step() on its accumulator     │
+│       │            (no NetSession)              │
+│       ▼                                         │
+│  live level ── observation ──▶ policy ──────────┼──▶ Web Worker (optional)
+│       ▲                          │              │      ├─ observation encoder
+│       │                          ▼              │      ├─ ONNX Runtime Web
+│  human keys ─▶ Game.keyPressed   3 bits for the │      │   (WebGPU, WASM fallback)
+│  (own character)   │             bot character  │      └─ policy → 3 bits
+│                    ▼             │              │
+│        lv.l/r/u_pressed[2] ◀─────┘              │
+└─────────────────────────────────────────────────┘
 ```
 
-- `BotTransport` implements the five-method `Transport` interface in
-  `engine/src/net/transport.ts`. To the game the bot is just a peer, so
-  rollback, pause, retry, results, watch mode and replays all keep working.
+- Each frame the bot reads the live level (or its worker is sent the
+  observation), decides three bits for its character, and writes them to the
+  level's `*_pressed` flags the same way `Game.keyPressed` does.
+- On the main thread the decision applies to the frame it was made for. In a
+  worker it lands about one frame later. Either way, train with the 0–2 frame
+  delay from section 2.
 
-### Two rules about where code lives
+### The rule about where code lives
 
 - **Never put bot code in `engine/src/{game,flash,box2d}`.** `ENGINE_VERSION`
-  hashes those folders, and peers on different builds refuse to pair.
-- **Bot input only ever enters through the session's input path**, never by
-  setting `lv.l_pressed2` directly. Going around the session corrupts the
-  input log, the desync check and the replay verifier the leaderboard trusts.
+  hashes those folders plus `net/gamehost.ts`, `net/hash.ts`,
+  `net/protocol.ts` and `verified.ts` (`engine/scripts/version.mjs:7-8`), so
+  leave those four files alone too; changing any of them moves the CI
+  determinism digests and splits online players across builds.
+  The env server already sits outside them, in `engine/src/bot/`.
+
+### Open items
+
+Not decided or not built yet:
+
+- **Bot-helped progress in the player's save.** `Recuent()` (`game.ts:4779`)
+  writes medals and best times into `The_cookie` stats and times and unlocks
+  the adjacent nodes, and solo progress syncs to the account through
+  `sync_solo_progress` (`app/src/solosave.ts:98`). Decide whether to mark or
+  separate bot-assisted progress.
+- **The bot character's keys.** The human's keys write the same flags as the
+  bot (`Game.keyPressed` and `keyReleased`), so in Solo + AI the bot
+  character's keys (W/A/D or the arrows) must be ignored, or the human
+  overwrites the bot.
+- **A TypeScript observation encoder.** The encoder and the BFS fields exist
+  only in Python (`bot/fbwg_env.py`). The browser needs a TypeScript copy and
+  a parity test that both produce identical observations for the same state,
+  gated by `SCHEMA_VERSION`.
+- **Which character the bot plays.** The player may pick Fireboy or
+  Watergirl, so the bot's side must be part of the observation once the
+  Gymnasium wrapper exists.
+
+### Online play (not planned)
+
+The earlier plan put the bot in online games as a `BotTransport` behind the
+five-method `Transport` interface (`engine/src/net/transport.ts`), sending its
+bits through the session's input path with a four-frame input lead. None of
+that is planned. If it ever is, bot input must go through the session and
+never set `lv.l_pressed2` directly, and the two online bars in section 1
+apply.
 
 ---
 
@@ -133,11 +192,14 @@ Facts from the code, not estimates.
   - Two BFS distance-to-door fields, one per character, normalized. These turn
     a sparse-reward problem into a shaped one.
   - A vector: both characters' position and velocity, grounded and alive
-    flags, lever and pusher states, door states, elapsed time.
+    flags, lever and pusher states, door states, elapsed time from the
+    level's `timecount` (section 2), and which character the bot plays
+    (section 3, open items).
   - Give the observation a **schema version** number and ship it with every
     model.
 - **Actions.** Repeat each action for 2–4 frames and sweep that as a
-  hyperparameter. Apply the four-frame input delay on top.
+  hyperparameter. Apply the input delay given at reset on top, drawn from
+  0–2 frames per episode.
 - **Reward.**
 
   ```
@@ -158,7 +220,7 @@ Facts from the code, not estimates.
   - Same seed and actions give the same digest.
   - A restore gives the same state as a rebuild.
   - The observation is unchanged by a snapshot round-trip.
-  - The four-frame delay is applied exactly.
+  - The delay given at reset is applied exactly.
 
 ---
 
@@ -285,8 +347,8 @@ The part that makes every other claim credible.
 - **Regression gate in CI.** A new model ships only if it beats the deployed
   one on the suite and no level gets meaningfully worse. The repo already
   gates deploys on `dist/version.txt`; do the same for the policy.
-- **Online, with consent.** Completion with the bot versus the same people
-  controlling both characters, quit rate, replay rate. For research use, get
+- **Live, with consent.** Completion in Solo + AI versus the same people
+  controlling both characters in Two Players, quit rate, replay rate. For research use, get
   Georgia Tech IRB approval first.
 
 ---
@@ -295,8 +357,8 @@ The part that makes every other claim credible.
 
 Your unfair advantage: a live deployment with real players.
 
-- The app already records replays (section 2). That is a dataset of human
-  play.
+- The app already records a replay of every online game (section 2). That
+  is a dataset of human play. Local games, Solo + AI included, record none.
 - **Consent first.** Update the privacy policy, add an opt-in for training
   use, and enforce opt-outs at the database layer with RLS, the same way the
   leaderboard opt-out works.
@@ -313,14 +375,18 @@ Your unfair advantage: a live deployment with real players.
 - **Export.** ONNX, then int8 quantization. Check that the quantized policy
   scores the same on the eval suite.
 - **Runtime.** WebGPU first, WASM fallback for devices without it. Load lazily
-  when solo-with-bot starts, cache it, pin it by content hash.
-- **Latency.** The four-frame lead gives about 154 ms to decide. Aim for
+  when Solo + AI starts, cache it, pin it by content hash.
+- **Encoder.** The TypeScript observation encoder must pass the parity test
+  against `bot/fbwg_env.py` for the model's `SCHEMA_VERSION` (section 3, open
+  items).
+- **Latency.** There is no input lead to hide a decision behind: a frame is
+  38.5 ms, and a decision made on the main thread runs inside it. Aim for
   under 5 ms p95 so slow devices stay safe. Measure on a low-end laptop, not
   an RTX 4060. If a decision is late, use the scripted bot for that frame;
   never stall.
 - **Versioning.** Every model declares its observation schema version, its
-  action-repeat setting and the engine versions it supports. The client
-  refuses an incompatible model.
+  action-repeat setting, the input delays it was trained on and the engine
+  versions it supports. The client refuses an incompatible model.
 - **Rollout.** Feature flag, staged rollout, kill switch, one-click rollback
   to the previous model.
 
@@ -328,14 +394,16 @@ Your unfair advantage: a live deployment with real players.
 
 ## 10. Integrity
 
-- Add a bot flag to the replay format and the database rows, and exclude
-  flagged runs in `verified_leaderboard()` at the data layer. **Decide this
-  before the first bot run is recorded**; retrofitting means guessing which
-  historical rows were assisted.
-- The replay verifier proves a run is *valid*, not that a *human* played it.
-  Anyone can already script inputs on the client, and a public bot makes that
-  easier. The flag keeps honest use honest. Proving a human played would need
-  server-side anti-cheat, so do not claim it.
+- Local games never reach the leaderboard. `public.leaderboard()`
+  (`supabase/migrations/0011_leaderboard.sql`), the function the board calls
+  (`app/src/ui/leaderboard.ts:133`), reads only `pair_progress`, which holds
+  two-player online results. So no leaderboard flag is needed for Solo + AI.
+- Bot-helped games still write medals, best times and unlocks into the
+  player's own save, and that syncs to their account. Whether to mark or
+  separate that progress is an open item (section 3).
+- If the bot ever played online, a bot flag on the replay and the database
+  rows would have to exist before the first bot run is recorded, since
+  retrofitting means guessing which rows were assisted.
 
 ---
 
@@ -368,10 +436,15 @@ Your unfair advantage: a live deployment with real players.
 
 ## 13. Pitfalls specific to this repo
 
-- Training without the four-frame action delay.
+- Training with one fixed input delay instead of 0–2 frames drawn per
+  episode.
+- Using the global clock in the observation instead of the level's
+  `timecount`.
 - Editing `engine/src/{game,flash,box2d}`, which changes `ENGINE_VERSION`.
-- Injecting input outside the session.
-- Shipping before the leaderboard flag exists.
+- Letting the human's keys for the bot's character through, so they
+  overwrite the bot's bits.
+- A TypeScript encoder that drifts from the Python one without the parity
+  test catching it.
 - Splitting human data by episode instead of by player.
 - Benchmarking latency on your own GPU.
 - Recording replays without consent.
@@ -385,13 +458,13 @@ Your unfair advantage: a live deployment with real players.
 
 Ship something at every step.
 
-1. **Scripted bot behind `BotTransport`.** People can already play solo.
+1. **Scripted bot in Local Play → Solo + AI.** People can already play solo.
 2. **Environment, eval suite and invariant tests.** Every later claim
    depends on these.
 3. **Cloned-from-humans bot and single-character PPO.** The bot visibly
    improves.
-4. **Bot flag, data opt-in, ONNX/WebGPU runtime with fallback.** First real
-   public release.
+4. **The save decision, data opt-in, the TypeScript encoder with its parity
+   test, ONNX/WebGPU runtime with fallback.** First real public release.
 5. **MAPPO, partner diversity, recurrent policy.** It becomes a good partner.
 6. **Runtime search and the LLM planner for lever levels.** It handles the
    hardest levels.
@@ -427,7 +500,7 @@ and write what you learned in your own words each night.
 |---|---|
 | Python | Fluent Python 3.11+, type hints, profiling with `cProfile` |
 | NumPy | [Rougier, From Python to NumPy](https://www.labri.fr/perso/nrougier/from-python-to-numpy/), especially vectorization |
-| TypeScript and Node | [TypeScript for JS programmers](https://www.typescriptlang.org/docs/handbook/typescript-in-5-minutes.html), then read `engine/src/net/session.ts`, `snapshot.ts`, `transport.ts` |
+| TypeScript and Node | [TypeScript for JS programmers](https://www.typescriptlang.org/docs/handbook/typescript-in-5-minutes.html), then read `engine/src/embed.ts` (`tick`, `step`), `engine/src/net/snapshot.ts` and `engine/src/bot/envserver.ts` |
 
 Docs and code-along beat videos here.
 
