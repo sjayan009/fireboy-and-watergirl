@@ -5,8 +5,16 @@ second character in Fireboy & Watergirl, so one person can play alone. The
 bot lives in one place: **Local Play → Solo + AI** on the hosted site, the
 card that already shows greyed as "With a robot buddy · soon" next to Two
 Players (`app/src/ui/modecards.ts:239`). It never plays online. It builds
-on [AI_BOT_FEASIBILITY.md](AI_BOT_FEASIBILITY.md). The day-by-day schedule
-is in [AI_BOT_TWO_WEEK_PLAN.md](AI_BOT_TWO_WEEK_PLAN.md).
+on [AI_BOT_FEASIBILITY.md](AI_BOT_FEASIBILITY.md). The learning path is
+the SYNC Research Academy curriculum, 24 weeks in six modules (section 15).
+The two-week sprint through its first three modules is in
+[AI_BOT_TWO_WEEK_PLAN.md](AI_BOT_TWO_WEEK_PLAN.md).
+
+**Restart, 2026-11-14.** The first environment (`bot/` and
+`engine/src/bot/`) was deleted in commit `4d71ca5` so it can be rebuilt as
+SYNC Module 03. The deleted code is still at `0a37180` for comparison, and
+what it learned is kept here as requirements: section 2 for engine facts,
+section 4 for the lessons, section 13 for the traps.
 
 Contents:
 
@@ -24,7 +32,7 @@ Contents:
 12. [Refining](#12-refining)
 13. [Pitfalls specific to this repo](#13-pitfalls-specific-to-this-repo)
 14. [Build order](#14-build-order)
-15. [The learning curriculum, Stages 0–9](#15-the-learning-curriculum-stages-09)
+15. [The learning curriculum: SYNC, Modules 01–06](#15-the-learning-curriculum-sync-modules-0106)
 
 ---
 
@@ -44,6 +52,7 @@ criteria. A release that misses one is not done.
 | Latency | Inference p95 under 5 ms on a low-end reference laptop; scripted fallback used on under 0.1% of decisions |
 | Size | Model under 1 MB, loaded lazily, pinned by content hash |
 | Correctness | No bot code in `engine/src/{game,flash,box2d}`; the CI determinism digests unchanged |
+| Adaptation | When a held-out partner switches strategy mid-level, the bot's recovery time in frames is measured and reported per partner type, and does not get worse release to release |
 | Regressions | No level gets measurably worse release to release (confidence intervals, not single runs) |
 
 If the bot ever played online, two more bars would apply: zero desyncs with
@@ -68,9 +77,9 @@ Facts from the code, not estimates.
   on). On the website the bot sends nothing for the level's first frame and
   starts deciding from the state after it, but the human's keys in that frame
   count, so `reset` takes them as `first` and runs that frame with them.
-  Training should draw `first` from the partner, not leave it 0.
-  `engine/src/bot/envlive.ts` checks the env against the whole game on
-  exactly that rule.
+  Training should draw `first` from the partner, not leave it 0. The first
+  env's whole-game check (section 4) tested exactly that rule; the rebuild
+  needs the same check.
 - **The key fields' timing.** The observation's six key fields are the bits
   the last frame ran with. `readState` takes them as an argument and never
   reads the level's `*_pressed` flags, because the browser's key handlers
@@ -82,6 +91,22 @@ Facts from the code, not estimates.
   (Watergirl, W/A/D), written by `Game.keyPressed` and `keyReleased`
   (`engine/src/game/game.ts:4737`, `:4894`). `packInput` in
   `engine/src/net/hash.ts` packs both characters into six bits per frame.
+  Left and right together move the same as right alone (the force code is
+  `if (r_pressed) … else if (l_pressed)`), so six actions per character
+  lose nothing: idle, left, right, up, left+up, right+up. That is the action
+  set SYNC Week 11 asks for.
+- **One physics step per frame.** The website steps a frame as
+  `tickClock(); advanceTree(game); enterFrameTree(game)` with the keys
+  already written by the key handlers (`embed.ts:816-821`); `GameHost` does
+  the same with `applyInput(lv, bits)` first (`net/gamehost.ts:56-60`). The
+  env's frame is `tickClock(); applyInput(lv, bits); advanceTree(lv);
+  enterFrameTree(lv)`. The level registers
+  `Update` as its ENTER_FRAME listener, so `enterFrameTree` already runs it.
+  `LevelHost.step` (`net/levelhost.ts:34-45`) and `snapbench.ts` then call
+  `lv.Update()` again: two physics steps and two `timecount` ticks per frame.
+  The curriculum's Week 9–10 starting point is `LevelHost`, so trace it, but
+  step the env the way `embed.ts` does. Changing `LevelHost` itself moves the
+  netcode tests, so it stays as it is.
 - **Input delay.** Local Play has no input lead and no input delay. The bot's
   only lag is its own decision time: about 0 frames on the main thread, about
   1 in a Web Worker, plus stutter, when several steps run in one animation
@@ -96,7 +121,11 @@ Facts from the code, not estimates.
   the title and the map. The observation uses the level's own `timecount`
   instead: frames since the level started (reset at `game.ts:546`, counted at
   `:1982`), and what drives the fan strength cycle
-  `detSin(this.timecount / 10)` (`game.ts:2041`).
+  `detSin(this.timecount / 10)` (`game.ts:2041`). The global clock is one
+  module variable shared by every level in the process, and a snapshot does
+  not reach it: `LevelHost.save` stores it beside the snapshot
+  (`levelhost.ts:60-63`). An env process that holds several levels must
+  `setClock` before stepping each one and read it back after.
 - **World.** Each level is a 29 × 39 tile grid plus 316 entity placements in
   `extracted/entities/*.json`: levers, pushers, platforms, wind, pulleys,
   boxes and doors. Water kills Fireboy, lava kills Watergirl, green goo kills
@@ -110,6 +139,12 @@ Facts from the code, not estimates.
 - **Speed.** A step costs 0.0135 ms (about 2,800× real time per core).
   Rebuilding a level costs 20 ms; restoring a snapshot costs 4 ms. Reset by
   restoring a snapshot, then replay forward.
+- **Snapshots restore in place.** `Snapshot.restore` writes old values back
+  into the same objects (`net/snapshot.ts`, "Restoring in place"); it never
+  builds a second world. A copy of a snapshot is not an independent game, so
+  counterfactual branches (SYNC Week 19) save, probe and restore one world,
+  or run in separate processes. Set `SoundBus.replaying = true` while a
+  branch runs so it stays silent, as rollback does (`levelhost.ts:37-38`).
 - **Grades.** The game's own `TimeTable` defines the medal thresholds, so
   "played well" has an objective answer the original authors defined.
 - **Replays.** The session produces
@@ -163,7 +198,7 @@ Facts from the code, not estimates.
   `net/protocol.ts` and `verified.ts` (`engine/scripts/version.mjs:7-8`), so
   leave those four files alone too; changing any of them moves the CI
   determinism digests and splits online players across builds.
-  The env server already sits outside them, in `engine/src/bot/`.
+  The rebuilt env server goes outside them, in `engine/src/bot/` as before.
 
 ### Open items
 
@@ -178,13 +213,21 @@ Not decided or not built yet:
   bot (`Game.keyPressed` and `keyReleased`), so in Solo + AI the bot
   character's keys (W/A/D or the arrows) must be ignored, or the human
   overwrites the bot.
-- **A TypeScript observation encoder.** The encoder and the BFS fields exist
-  only in Python (`bot/fbwg_env.py`). The browser needs a TypeScript copy and
-  a parity test that both produce identical observations for the same state,
-  gated by `SCHEMA_VERSION`.
-- **Which character the bot plays.** Done in the env: `reset` takes `side`
-  and `encode` ends the vector with it. The runtime must pass the side the
-  player picked.
+- **A TypeScript observation encoder.** The rebuilt env's encoder and BFS
+  fields will be Python. The browser needs a TypeScript copy and a parity test
+  that both produce identical observations for the same state, gated by
+  `SCHEMA_VERSION`.
+- **Which character the bot plays.** The rebuilt env's `reset` takes `side`
+  and `encode` ends the vector with it, as the first env did. The runtime
+  must pass the side the player picked.
+- **Pause, retry and blur.** Any key while `level.pause` is true clears all
+  six flags (`game.ts:4768`), and death and win set `pause` too, so the bot
+  stops deciding while paused, not only when `ended` is. Every new level,
+  including R on the game-over board, clears the bot's delay queue and any
+  recurrent memory. The window `blur` handler releases all six keys
+  (`embed.ts:360`), so the bot re-sends its bits on the next frame. The level
+  constructor resets the flags (`game.ts:555`), so nothing held carries
+  across a level start.
 
 ### Online play (not planned)
 
@@ -238,6 +281,43 @@ apply.
   - A restore gives the same state as a rebuild.
   - The observation is unchanged by a snapshot round-trip.
   - The delay given at reset is applied exactly.
+  - For 800 random frames on every level, the env equals the whole `Game`
+    (through `GameHost`) in hash, state and grid, before and after a restore.
+    In the first env this one test caught most of the others.
+
+### Lessons the first env paid for
+
+Each of these cost a debugging session in the first env. The commit named
+after each one has the code and the full reasoning. Build the check before
+you need it.
+
+1. **End episodes on the win, not on `complete`.** The win animation (the
+   game's "ender" clip) starts 34 frames before the game reports complete
+   (`c8da76b`).
+2. **Use the game's own judgements.** Deaths, game over, medals and buttons
+   come from the game's own `GameOver`, `Recuent`, `TimeTable` and button
+   rules, never a reimplementation (`d831c11`, `0a37180`).
+3. **Seesaw bases are invisible to the grid.** The seesaw stands on a static
+   triangle outside the tile grid, so a tile BFS walks through it
+   (adventure 10, speed 5). Mark cells inside any static solid shape that
+   isn't the ground, a door or a diamond as walls (`09ce376`).
+4. **"Grounded" is a frame late.** `allowjump` is set at the top of `Update`,
+   so after a step it describes the previous frame. Read grounded from the
+   contact lists the next jump check reads (`9fc6fcb`).
+5. **Snapshot before the first frame.** Every reset restores it and runs that
+   frame with the partner's `first` keys only (`0a37180`).
+6. **Record the keys the frame ran with,** captured right after `step()`,
+   never read back from the `*_pressed` flags (`0a37180`).
+7. **Delay only the bot.** Only its three bits wait out the delay
+   (`740b3da`).
+8. **Clip time.** Local Play has no time limit, so the time feature is clipped
+   at 150 s and a time limit is truncation (`740b3da`).
+9. **Handshake first.** The first message carries the schema version,
+   `ENGINE_VERSION` and the field names; the client refuses any mismatch, even
+   at the same record size (`58a8f07`).
+10. **Cap the level cache.** A level plus its snapshot is about 7.5 MB; 32
+    levels in each of 18 envs filled Node's heap. Keep a small LRU per env
+    (the first env used 4) (`09ce376`).
 
 ---
 
@@ -266,6 +346,28 @@ Each step is the baseline the next must beat.
    26 Hz loop, for the lever levels. It reads the entity JSON and the tile
    grid and emits subgoals that the RL controller carries out. The LLM never
    plays the game, and the README should say so.
+
+SYNC Modules 04–05 add the research layer on top. Each is an ingredient the
+Module 06 ablations remove one at a time, so each must be switchable:
+
+9. **A partner-style estimator.** A Bayesian or count-based belief over which
+   style the human is playing (cautious, impatient, button-first, door-first),
+   updated from their recent moves. It is the explicit, inspectable cousin of
+   the recurrent policy in step 6.
+10. **Skills.** Navigate, hold a button, wait, cross a gap, retreat, reach the
+    door, each with a start condition, a timeout and a failure check. A slow
+    chooser picks skills; the fast policy runs them.
+11. **A typed level graph.** Entities (player, button, lever, door, platform,
+    hazard, region, goal) and edges (opens, requires, threatens,
+    reachable_after), built from `extracted/entities/*.json` and the tile
+    codes in `extracted/LEVEL_FORMAT.md`. An edge such as "this lever moves
+    that platform" can be confirmed exactly: restore, toggle, step, compare.
+12. **Counterfactual lookahead.** Restore once, try a few candidate bot
+    actions against likely partner responses sampled from the estimator, and
+    compare progress and risk (section 2, "Snapshots restore in place").
+13. **Signaling and asking.** Move early toward the button the bot intends to
+    take, and, when the estimator is unsure, ask through the UI at an explicit
+    interruption cost.
 
 Other-Play assumes the two players are interchangeable. Fireboy and Watergirl
 are not, because their hazards differ, so rely on partner diversity instead
@@ -320,7 +422,7 @@ Two experiments, both after single-character PPO exists (build order step 3):
    architecture. Compare the steps each needs to beat the scripted baseline,
    over several seeds with confidence intervals (section 7). Expect the clone
    to win. A physics platformer with two characters is still a new test of
-   the method, and a write-up fits Stage 9.
+   the method, and a write-up fits Module 06.
 
 The post put up to 171,664 weights into the prompt as text. Above that, it
 gave the LLM a Python sandbox over the weight tensors, as it did for its
@@ -342,6 +444,15 @@ This is the hard part and the real research problem.
   Prefer consistent routes over clever ones. Consider showing the bot's
   intent in the UI, for example a faint arrow toward its next subgoal.
 - **Adaptivity.** Wait when the human hesitates; go when they commit.
+  Measure it: switch a scripted partner's strategy midway through a level and
+  count the frames until the bot is useful again, plus its wrong-role actions
+  in between (SYNC Week 16).
+- **Legibility is not predictability.** Predictable means the bot behaves
+  consistently; legible means its moves make its intent obvious early. Test
+  them as separate conditions.
+- **Asking.** Asking the human costs their attention. Ask only when the
+  partner estimate is uncertain, and count interruptions as a cost in the
+  evaluation.
 - **Staying out of the way.** Penalize body-blocking, and never stand on a
   button the human needs released.
 - **Difficulty.** Sampling temperature, deliberate reaction delay, or separate
@@ -364,6 +475,15 @@ The part that makes every other claim credible.
 - **Statistics.** IQM with bootstrap confidence intervals
   ([rliable](https://github.com/google-research/rliable)), several training
   seeds, no cherry-picking.
+- **Held-out partner types.** Split scripted partner styles into training and
+  test sets as strictly as human players, and show that no test style tuned
+  the final model. Report results per partner type, never only the mean.
+- **Preregister.** Write hypotheses H1–H3 and what would falsify each before
+  collecting data, and freeze the env protocol, tasks and metrics before the
+  final runs.
+- **Ablations.** Remove the partner estimator, the level graph, the lookahead
+  and the signaling one at a time (section 5, steps 9–13). An ingredient that
+  changes nothing when removed is not part of the result.
 - **Regression gate in CI.** A new model ships only if it beats the deployed
   one on the suite and no level gets meaningfully worse. The repo already
   gates deploys on `dist/version.txt`; do the same for the policy.
@@ -397,8 +517,8 @@ Your unfair advantage: a live deployment with real players.
 - **Runtime.** WebGPU first, WASM fallback for devices without it. Load lazily
   when Solo + AI starts, cache it, pin it by content hash.
 - **Encoder.** The TypeScript observation encoder must pass the parity test
-  against `bot/fbwg_env.py` for the model's `SCHEMA_VERSION` (section 3, open
-  items).
+  against the Python encoder for the model's `SCHEMA_VERSION` (section 3,
+  open items).
 - **Latency.** There is no input lead to hide a decision behind: a frame is
   38.5 ms, and a decision made on the main thread runs inside it. Aim for
   under 5 ms p95 so slow devices stay safe. Measure on a low-end laptop, not
@@ -456,6 +576,11 @@ Your unfair advantage: a live deployment with real players.
 
 ## 13. Pitfalls specific to this repo
 
+- Building the env on `LevelHost.step`, which runs two physics steps per
+  frame (section 2).
+- Running several levels in one process without saving and restoring the
+  module-global clock.
+- Treating a copied snapshot as a second world.
 - Training with one fixed input delay instead of 0–2 frames drawn per
   episode.
 - Using the global clock in the observation instead of the level's
@@ -471,120 +596,249 @@ Your unfair advantage: a live deployment with real players.
 - Putting an LLM in the per-frame action path.
 - Building a server or Kubernetes cluster to *serve* the bot. It runs in the
   browser; a serving cluster adds cost and latency to a static app.
+- Following SYNC Week 18 into Databricks Genie Ontology. It is an enterprise
+  data product, not an RL method; the level graph comes from the game's own
+  entity JSON.
+- Claiming a result from one video, from self-play alone, or from Level 1
+  alone.
 
 ---
 
 ## 14. Build order
 
-Ship something at every step.
+Ship something at every step. The steps follow the six SYNC milestones
+(section 15).
 
-1. **Scripted bot in Local Play → Solo + AI.** People can already play solo.
-2. **Environment, eval suite and invariant tests.** Every later claim
-   depends on these.
-3. **Cloned-from-humans bot and single-character PPO.** The bot visibly
-   improves.
+1. **Milestones 1–2: RL you understand.** A gridworld and CartPole, with
+   Q-learning, DQN and PPO compared over seeds. Outside the game, on
+   `ai-rl-research`.
+2. **Milestone 3: the rebuilt env and the scripted bot in Local Play →
+   Solo + AI.** The env with its invariant tests and whole-game check, then
+   the scripted bot people can already play with. Every later claim depends
+   on these.
+3. **Single-character PPO and a cloned-from-humans bot.** The bot visibly
+   improves on the scripted baseline.
 4. **The save decision, data opt-in, the TypeScript encoder with its parity
    test, ONNX/WebGPU runtime with fallback.** First real public release.
-5. **MAPPO, partner diversity, recurrent policy.** It becomes a good partner.
-6. **Runtime search and the LLM planner for lever levels.** It handles the
-   hardest levels.
-7. **The operations loop:** telemetry, CI gate, retraining. From here it keeps
-   improving on a schedule.
+5. **Milestone 4: a partner you haven't met.** MAPPO, the partner
+   population with held-out types, the recurrent policy, and the adaptation
+   benchmark.
+6. **Milestone 5: partner-aware planning.** Skills, the level graph,
+   counterfactual lookahead, signaling (section 5, steps 9–13). Runtime search
+   and the LLM planner for lever levels sit here too.
+7. **Milestone 6: research and operations.** The harness with scripted
+   fallback, the human study, the ablations and the paper; then telemetry,
+   the CI gate and retraining, so the bot keeps improving on a schedule.
 
 ---
 
-## 15. The learning curriculum, Stages 0–9
+## 15. The learning curriculum: SYNC, Modules 01–06
 
-T-shaped: broad enough to build the whole system, very deep in one area. For
-this project the deep area is **multi-agent RL and human–AI coordination**.
-Each stage ends with a milestone in this repo that proves it. Full time,
-about 18–30 months for real depth; the two-week plan is the first pass.
+The curriculum is the SYNC Research Academy: 24 weeks in six modules of
+four, about 168 core hours. At 7 hours a week that is about 24 weeks; at 12,
+about 14. Every week runs the same four moves: **understand** the mechanism
+well enough to explain it without notes, **implement** small code you can
+inspect, **experiment** against controlled baselines, and **prove** it with a
+program, an output and a written explanation.
 
-Two habits for every stage: watch videos at 1.5–2× and pause to code along,
+It is still T-shaped. The deep area is **multi-agent RL and human–AI
+coordination** (Modules 04–05). Each module ends with a milestone in this
+repo that proves it, and each module lists what to watch for here, because
+the curriculum was written without seeing the code. The depth stages that
+SYNC leaves out (LLMs, GPU programming, distributed training) follow the six
+modules.
+
+Two habits for every module: watch videos at 1.5–2× and pause to code along,
 and write what you learned in your own words each night.
 
-### Stage 0 · Math (4–6 weeks)
+### Module 01 · Foundations (weeks 1–4)
 
-| Topic | Read | Watch |
+From zero RL vocabulary to a working tabular agent.
+
+| Week | Build | Read and watch |
 |---|---|---|
-| Linear algebra | [Strang, MIT 18.06](https://ocw.mit.edu/courses/18-06-linear-algebra-spring-2010/) | [3Blue1Brown, Essence of Linear Algebra](https://www.3blue1brown.com/topics/linear-algebra); Strang's 18.06 lectures, especially eigenvalues and SVD |
-| Calculus | Multivariable: gradients, chain rule as Jacobians | [3Blue1Brown, Essence of Calculus](https://www.3blue1brown.com/topics/calculus); Khan Academy multivariable calculus on gradients and the Jacobian |
-| Probability | [Blitzstein, Stat 110](https://projects.iq.harvard.edu/stat110): expectation, variance, Markov chains | Stat 110 lectures on YouTube; [StatQuest](https://www.youtube.com/@statquest) |
-| Optimization | [Boyd, Convex Optimization](https://web.stanford.edu/~boyd/cvxbook/), §5.1 and selected chapters; [Ruder's gradient descent overview](https://www.ruder.io/optimizing-gradient-descent/) | Boyd's EE364A lectures 1–2 |
+| 1 · The agent–environment loop | A 5×5 gridworld with `reset(seed)` and `step(action)` returning observation, reward, terminated, truncated, info; a random and a shortest-path policy over 100 episodes each | [Spinning Up, RL intro](https://spinningup.openai.com/en/latest/spinningup/rl_intro.html); [Gymnasium, custom env](https://gymnasium.farama.org/main/introduction/create_custom_env/); [Hugging Face Deep RL course](https://huggingface.co/learn/deep-rl-course/en/unit0/introduction) |
+| 2 · Math you actually need | `math_sanity.py`: a stable softmax, a numeric gradient checked against your hand derivative, an expected return by hand; finish `ML-Research/ml_from_scratch.py` | [3Blue1Brown, Essence of Linear Algebra](https://www.3blue1brown.com/topics/linear-algebra) and [Calculus](https://www.3blue1brown.com/topics/calculus); [Khan Academy probability](https://www.khanacademy.org/math/statistics-probability). For depth: [Strang, MIT 18.06](https://ocw.mit.edu/courses/18-06-linear-algebra-spring-2010/), [Stat 110](https://projects.iq.harvard.edu/stat110), [StatQuest](https://www.youtube.com/@statquest) |
+| 3 · Value functions and Bellman thinking | Tabular Q-learning with ε-greedy on the gridworld; γ = 0 against γ = 0.99 | [Hugging Face, Q-learning unit](https://huggingface.co/learn/deep-rl-course/en/unit2/introduction); [Sutton & Barto](http://incompleteideas.net/book/the-book-2nd.html) chapters 3 and 6; [David Silver's lectures](https://www.davidsilver.uk/teaching/) 1–3 |
+| 4 · A clean RL experiment | Separate training and evaluation seeds; random, rule-based and Q-learning over 5 seeds; median, mean and spread; one command reproduces the table | [Spinning Up, becoming an RL researcher](https://spinningup.openai.com/en/latest/spinningup/spinningup.html) |
 
-**Proves it:** derive the policy gradient theorem on paper without looking it up.
+In this repo:
 
-### Stage 1 · Programming foundations (2–3 weeks, overlaps Stage 0)
+- Keep this code on `ai-rl-research` beside your ML notes, never in
+  `engine/`, so it cannot touch `ENGINE_VERSION` or CI.
+- At 26 frames a second a 60-second level is about 1,560 steps, and
+  0.99^1,560 is below 1e-6. That is why the Fireboy env repeats each action
+  for several frames.
+- Start the results log you'll keep all 24 weeks: commit, seed, command,
+  number.
 
-| Topic | Resource |
+**Proves it (Milestone 1):** a Q-learning gridworld with a reproducible
+training graph, and an evaluation table a stranger can rerun.
+
+### Module 02 · Deep reinforcement learning (weeks 5–8)
+
+From PyTorch tensors to a PPO controller you understand from the inside.
+
+| Week | Build | Read and watch |
+|---|---|---|
+| 5 · Neural networks with PyTorch | A two-layer MLP with training and validation loss; gradient checks with no NaNs; an observation → logits → action sampler | [PyTorch, learn the basics](https://docs.pytorch.org/tutorials/beginner/basics/intro.html); [Karpathy, Neural Networks: Zero to Hero](https://karpathy.ai/zero-to-hero.html), micrograd first. For depth: [Understanding Deep Learning](https://udlbook.github.io/udlbook/), [CS231n ConvNets notes](https://cs231n.github.io/convolutional-networks/) |
+| 6 · Deep Q-Networks | Replay buffer, online and target networks, DQN on CartPole; a run without the target network to watch it go unstable | [PyTorch DQN tutorial](https://docs.pytorch.org/tutorials/intermediate/reinforcement_q_learning.html); [CleanRL](https://docs.cleanrl.dev/) |
+| 7 · Policy gradients and actor–critic | REINFORCE on CartPole, then with a value baseline; variance across seeds | [Spinning Up](https://spinningup.openai.com/) part 3; [Berkeley CS285](https://rail.eecs.berkeley.edu/deeprlcourse/) policy-gradient lecture; David Silver lecture 7; [Mutual Information](https://www.youtube.com/@Mutual_Information) RL series |
+| 8 · PPO from both sides | Stable-Baselines3 PPO as a reference; CleanRL `ppo.py` annotated; DQN against PPO over 5 seeds; an exported policy that runs without the training libraries | [Spinning Up, PPO](https://spinningup.openai.com/en/latest/algorithms/ppo.html); [Stable-Baselines3 PPO](https://stable-baselines3.readthedocs.io/en/master/modules/ppo.html); [The 37 Implementation Details of PPO](https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/) and Costa Huang's walkthrough; [Hugging Face PPO unit](https://huggingface.co/learn/deep-rl-course/en/unit8/introduction) |
+
+In this repo:
+
+- Make the sampler a 6-way categorical, one per character (section 2,
+  "Actions"), so it carries over unchanged.
+- Week 8's export is the browser path in miniature: the shipped bot runs in
+  the page and cannot need PyTorch. Note the file size against the 1 MB bar
+  in section 1.
+- Week 6's target-network ablation is the pattern for Module 06: change one
+  thing, keep the seeds, report the spread.
+
+**Proves it (Milestone 2):** DQN and PPO compared on CartPole over several
+seeds, and a saved policy. Derive the policy gradient theorem on paper
+without looking it up.
+
+### Module 03 · Game → learning environment (weeks 9–12)
+
+Turn the deterministic TypeScript game into a testbed you can trust. This is
+where the deleted env gets rebuilt.
+
+| Week | Build | Read and watch |
+|---|---|---|
+| 9 · Read your own engine | Trace `LevelHost.start`, `step` and `hash`, and `applyInput`; run the determinism and replay tests; a 100-step trace of level 1; `engine_map.md` | `engine/src/net/levelhost.ts`, `hash.ts`, `snapshot.ts`, `engine/src/embed.ts` (`tick`, `step`); [TypeScript for JS programmers](https://www.typescriptlang.org/docs/handbook/typescript-in-5-minutes.html) |
+| 10 · A trusted environment API | A Node facade with `reset(mode, level, seed)` and `step(joint_bits)`; a JSON-lines bridge to Python; tests for resets, termination, truncation, invalid actions and 100 identical traces | [Gymnasium, custom env](https://gymnasium.farama.org/main/introduction/create_custom_env/); [From Python to NumPy](https://www.labri.fr/perso/nrougier/from-python-to-numpy/) |
+| 11 · Reward design and safe actions | `reward_spec.md`: completion, failure, step cost, then measured shaping; the 6 actions; tests for deaths and wins; a reward-hacking checklist with 3 adversarial traces | Ng, Harada & Russell 1999, "Policy invariance under reward transformations" (potential-based shaping); [Go-Explore](https://arxiv.org/abs/1901.10995) for sparse reward |
+| 12 · A scripted co-op partner | A finite-state bot (navigate, wait, press, go to the door) on one chosen puzzle; 20 logged episodes and the three most common failures; the same bot in Local Play → Solo + AI | Section 3 of this roadmap; `app/src/ui/modecards.ts:239` |
+
+In this repo:
+
+- **Step the way `embed.ts` does, not the way `LevelHost` does.**
+  `LevelHost.step` runs two physics steps per frame (section 2).
+- Save and restore the module-global clock with each snapshot (section 2,
+  "Time in the observation").
+- Rebuild the invariant tests and the whole-game check first, and work
+  through the ten lessons in section 4 as you go. The first env's code is at
+  `0a37180` if you want to compare after writing your own.
+- Local Play has no NetSession: the bot writes its `*_pressed` flags in
+  `embed.ts` with a 0–2 frame delay, and the human's keys for its character
+  must not get through (section 3).
+
+**Proves it (Milestone 3):** the rebuilt headless env with its invariant
+tests, and a scripted bot that completes one cooperation puzzle consistently,
+playable in Solo + AI. Not "all 32 levels" because level 1 works.
+
+### Module 04 · Multi-agent intelligence (weeks 13–16, the depth area)
+
+Train teamwork, and measure whether it works with partners it has never met.
+
+| Week | Build | Read and watch |
+|---|---|---|
+| 13 · Two agents change everything | A toy two-character button-and-door grid with shared reward and simultaneous actions; independent learners against fixed scripted teammates; one coordination failure written up | [PettingZoo Parallel API](https://pettingzoo.farama.org/main/api/parallel/); [Hugging Face MARL intro](https://huggingface.co/learn/deep-rl-course/en/unit7/introduction); [Albrecht, Christianos & Schäfer, Multi-Agent RL](https://www.marl-book.com/) Part I |
+| 14 · Centralized training, decentralized control | Independent PPO, then a centralized critic, on the toy game and then one Fireboy level with the scripted partner; an IPPO-vs-MAPPO table | [MAPPO](https://arxiv.org/abs/2103.01955). **Read this one**; [TorchRL multi-agent PPO](https://docs.pytorch.org/rl/stable/tutorials/multiagent_ppo.html) |
+| 15 · Population training and ad-hoc teamwork | Cautious, impatient, random, button-first and door-first scripted partners, plus an idle one and a key-masher; a training/held-out split; population against self-play-only; a behaviour-cloned partner from your own play | [Overcooked-AI](https://arxiv.org/abs/1910.05789) and [its benchmark](https://github.com/HumanCompatibleAI/overcooked_ai). **Read this one**; [Fictitious Co-Play](https://arxiv.org/abs/2110.08176); [Other-Play](https://arxiv.org/abs/2003.02979); [PBT](https://arxiv.org/abs/1711.09846); [OvercookedV2](https://arxiv.org/abs/2503.17821); behaviour cloning and [DAgger](https://arxiv.org/abs/1011.0686) in CS285 |
+| 16 · Partner identity and adaptation | Partners that switch convention mid-episode; recovery frames, wrong-role actions, failures; a Bayesian or count-based style estimator; fixed, diverse and estimator-augmented agents compared | [Stanford CS229](https://cs229.stanford.edu/) notes on generalization; StatQuest on k-means for clustering recorded play into styles; Jakob Foerster's talks on zero-shot coordination |
+
+In this repo:
+
+- Use the Parallel API: both characters' bits apply in the same frame.
+- Fireboy and Watergirl are not interchangeable (water kills Fireboy, lava
+  kills Watergirl, green goo kills both), so Other-Play's symmetry does not
+  fit; rely on partner diversity.
+- The deployed bot sees only what the page can compute each frame: the
+  level, both characters and the six bits the last frame ran with. Anything
+  more in the critic stays training-only.
+- Count recovery in frames and convert at 26 per second. Determinism lets you
+  replay the same partner switch against every agent.
+
+**Proves it (Milestone 4):** an unfamiliar-partner benchmark with held-out
+partner types and recovery metrics, reported per type.
+
+### Module 05 · Human-centered frontier (weeks 17–20)
+
+Add goals, causal structure, partner uncertainty and intentional signaling
+(section 5, steps 9–13).
+
+| Week | Build | Read and watch |
+|---|---|---|
+| 17 · Hierarchical decisions and skills | Skills (navigate, hold button, wait, cross gap, retreat, reach door) with start conditions, timeouts and failure checks; flat actions against skill selection on a long puzzle | Sutton, Precup & Singh 1999 on the options framework; CS285 on hierarchical RL; [SayCan](https://arxiv.org/abs/2204.01691) and [Voyager](https://arxiv.org/abs/2305.16291) for slow planners over fast skills |
+| 18 · Level graphs and causal dependencies | `ontology.schema.json` and two hand-annotated levels with validation rules; a graph-guided planner against a coordinate-only one | `extracted/entities/*.json` and `extracted/LEVEL_FORMAT.md` |
+| 19 · Counterfactuals with exact physics | Isolated branches from one snapshot; 3 candidate bot actions against sampled partner responses; a test that the live episode's hash never changes after a probe | `engine/src/net/snapshot.ts`; MCTS, [AlphaZero](https://arxiv.org/abs/1712.01815), [MuZero](https://arxiv.org/abs/1911.08265), [Surag Nair's AlphaZero tutorial](https://suragnair.github.io/posts/alphazero.html) |
+| 20 · Theory of mind, legibility and asking | Logged beliefs over partner roles; early role signaling; an ask-when-unsure option with an interruption cost; hypotheses H1–H3 with what would falsify them | Dragan, Lee & Srinivasa 2013 on legibility and predictability; [Overcooked-AI](https://github.com/HumanCompatibleAI/overcooked_ai) |
+
+In this repo:
+
+- A frame is 38.5 ms. Anything slower than a few milliseconds runs off the
+  frame loop and hands its answer to the fast policy later; the policy never
+  waits.
+- Skip Databricks Genie Ontology (section 13). Confirm graph edges by
+  intervention: restore, toggle, step, compare.
+- One live world per process: probe and restore the same objects, restore
+  the clock, and set `SoundBus.replaying` during probes (section 2).
+- Restores dominate the lookahead budget (4 ms against 0.0135 ms a step), so
+  restore once and run many short input prefixes.
+
+**Proves it (Milestone 5):** a partner-aware prototype where you can switch
+each ingredient off, a trace where the partner model changes a bot decision
+for a defensible reason, and a preregistration draft.
+
+### Module 06 · Research and publication (weeks 21–24)
+
+Engineer a robust system, design experiments and make claims you can defend.
+
+| Week | Build | Read and watch |
+|---|---|---|
+| 21 · A harness that stays out of the way | Per-frame inference apart from the slow planner; timeouts, confidence thresholds and scripted fallback; structured logs of observations, actions, beliefs, plans and hashes; three forced failures with safe recovery | `engine/src/embed.ts`; the repo's own `docs/DEEP_DIVE` as examples of decision records |
+| 22 · Human study design and consent | 2–3 primary outcomes and hypotheses written first; matched tasks and randomized order; a consent notice; pilot sessions; an analysis plan | CITI human-subjects training and the Georgia Tech IRB site; Chip Huyen, *Designing Machine Learning Systems*, on data and evaluation |
+| 23 · Ablations and honest science | Frozen protocol; rule-based, PPO/MAPPO, diverse-partner and proposed-method baselines; the four ablations; negative results, compute and every exclusion written down | [Statistical Precipice](https://arxiv.org/abs/2108.13264), [rliable](https://github.com/google-research/rliable) and Rishabh Agarwal's NeurIPS 2021 talk |
+| 24 · A research artifact people can inspect | The paper; a reproducibility README with pinned versions; an honest A/B demo with action and belief traces; model cards and evaluation scripts | [Keshav, How to Read a Paper](http://ccr.sigcomm.org/online/files/p83-keshavA.pdf), read as a writer this time |
+
+In this repo:
+
+- Run inference in a Web Worker with the scripted bot as the per-frame
+  fallback; never stall the game. Re-send the bot's bits after a window blur.
+- Get Georgia Tech IRB approval before recording anyone's play for research.
+  Store replays under a study ID, and split human data by player.
+- Record `ENGINE_VERSION` with every result: a replay only replays on the
+  engine that recorded it.
+- Ship code, models and numbers. The original SWF and decompiled ActionScript
+  stay local-only and belong to Oslo Albet, and the MIT license does not
+  cover the game's art.
+
+**Proves it (Milestone 6):** the SYNC research package (a runnable
+prototype, the benchmark suite, figures and a paper draft) that another
+researcher reproduces from a clean checkout.
+
+### Research skills (ongoing, start now)
+
+| Habit | Resource |
 |---|---|
-| Python | Fluent Python 3.11+, type hints, profiling with `cProfile` |
-| NumPy | [Rougier, From Python to NumPy](https://www.labri.fr/perso/nrougier/from-python-to-numpy/), especially vectorization |
-| TypeScript and Node | [TypeScript for JS programmers](https://www.typescriptlang.org/docs/handbook/typescript-in-5-minutes.html), then read `engine/src/embed.ts` (`tick`, `step`), `engine/src/net/snapshot.ts` and `engine/src/bot/envserver.ts` |
+| Read papers | [Keshav, How to Read a Paper](http://ccr.sigcomm.org/online/files/p83-keshavA.pdf); one paper a week. When you'd rather watch: the explainer video, then the paper's method section and figures |
+| Reproduce a paper | End to end, to learn how much is never written down. First one: your PPO matching CleanRL's published CartPole curve (Module 02) |
+| Write in public | One blog post per milestone, built from your nightly notes |
 
-Docs and code-along beat videos here.
+**Proves it:** submit the Module 06 result to a workshop, for example at
+NeurIPS, ICML or AAMAS, after qualified review.
 
-**Proves it:** the env server, the observation encoder and the BFS distance fields.
+### After SYNC: optional depth
 
-### Stage 2 · Classical ML (3 weeks)
+SYNC builds and studies the bot. These three areas make it faster, bigger
+and smarter at planning, and the roadmap's optional steps (the LLM planner,
+the replay coach, distributed training) need them. Take them after
+Milestone 6, or one at a time between modules when a build step needs one.
 
-| Topic | Read | Watch |
-|---|---|---|
-| Theory | [Stanford CS229](https://cs229.stanford.edu/) notes: bias/variance, regularization, generalization | Andrew Ng's CS229 (Autumn 2018) on YouTube |
-| Practice | [Géron, Hands-On Machine Learning](https://github.com/ageron/handson-ml3), Part I (chapters 2–3 notebooks in Colab) | StatQuest on k-means |
-
-**Proves it:** cluster recorded human input traces into partner styles, and train a behaviour-cloning baseline.
-
-### Stage 3 · Deep learning (6–8 weeks)
-
-| Topic | Read | Watch |
-|---|---|---|
-| From scratch | — | [Karpathy, Neural Networks: Zero to Hero](https://karpathy.ai/zero-to-hero.html), micrograd to GPT. The best single resource here |
-| Textbook | [Prince, Understanding Deep Learning](https://udlbook.github.io/udlbook/) or [d2l.ai](https://d2l.ai/) | 3Blue1Brown's Neural Networks series, including the transformer chapters |
-| Convolutional nets | [CS231n ConvNets notes](https://cs231n.github.io/convolutional-networks/) | [CS231n](https://cs231n.stanford.edu/) lectures on YouTube |
-| PyTorch internals | [PyTorch tutorials](https://pytorch.org/tutorials/): autograd, `torch.compile`, AMP, profiler | The PyTorch YouTube channel |
-
-**Proves it:** a conv-net policy trunk over the `C × 29 × 39` tile tensor, profiled.
-
-### Stage 4 · Reinforcement learning (8–12 weeks, the core)
-
-| Topic | Read | Watch |
-|---|---|---|
-| Foundations | [Sutton & Barto](http://incompleteideas.net/book/the-book-2nd.html), cover to cover (chapters 3, 6, 13 first) | [David Silver's lectures](https://www.davidsilver.uk/teaching/) (lecture 7 on policy gradients); [Mutual Information](https://www.youtube.com/@Mutual_Information) RL series; [Steve Brunton](https://www.youtube.com/@Eigensteve) RL series; DeepMind x UCL RL lectures (Hado van Hasselt, 2021) |
-| Deep RL | [Spinning Up](https://spinningup.openai.com/) parts 1–3 and the PPO page; [Hugging Face Deep RL course](https://huggingface.co/learn/deep-rl-course), Units 1 and 8 | [Berkeley CS285](https://rail.eecs.berkeley.edu/deeprlcourse/) with homework: imitation learning, policy gradients, actor-critic, planning; Pieter Abbeel's *Foundations of Deep RL* (6 lectures) |
-| Implement it | [CleanRL](https://github.com/vwxyzjn/cleanrl) `ppo.py`; [The 37 Implementation Details of PPO](https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/). Write DQN, A2C, PPO and SAC | Costa Huang's walkthrough video, linked from the 37-details post |
-| Honest evaluation | [Statistical Precipice](https://arxiv.org/abs/2108.13264) and [rliable](https://github.com/google-research/rliable) | Rishabh Agarwal's NeurIPS 2021 talk |
-| Search and planning | MCTS; [AlphaZero](https://arxiv.org/abs/1712.01815); [MuZero](https://arxiv.org/abs/1911.08265); [Surag Nair's AlphaZero tutorial](https://suragnair.github.io/posts/alphazero.html) | [Yannic Kilcher](https://www.youtube.com/@YannicKilcher) on MuZero; David Silver on the Lex Fridman Podcast #86 |
-| Sparse reward | [Go-Explore](https://arxiv.org/abs/1901.10995) | Yannic Kilcher on Go-Explore |
-| Imitation | Behaviour cloning, [DAgger](https://arxiv.org/abs/1011.0686), [GAIL](https://arxiv.org/abs/1606.03476) | CS285 imitation-learning lecture |
-
-**Proves it:** a single-agent PPO bot that beats the scripted baseline on all 32 levels, with confidence intervals.
-
-### Stage 5 · Multi-agent RL and coordination (3–6 months, the depth area)
-
-| Topic | Read | Watch |
-|---|---|---|
-| Textbook | [Albrecht, Christianos & Schäfer, Multi-Agent RL](https://www.marl-book.com/) (2024): Part I, then centralized training | The book's site has slides |
-| MAPPO | [The Surprising Effectiveness of PPO in Cooperative MARL](https://arxiv.org/abs/2103.01955). **Read this one** | — |
-| Overcooked-AI | [Carroll et al. 2019](https://arxiv.org/abs/1910.05789): why self-trained bots fail with humans. **Read this one** | — |
-| Zero-shot coordination | [Other-Play](https://arxiv.org/abs/2003.02979); [Fictitious Co-Play](https://arxiv.org/abs/2110.08176); [OvercookedV2](https://arxiv.org/abs/2503.17821); [curriculum design for ZSC](https://arxiv.org/abs/2503.07275) | Search YouTube for Jakob Foerster's talks on zero-shot coordination |
-| Population-based training | [PBT](https://arxiv.org/abs/1711.09846) | DeepMind's PBT blog post |
-| Human studies | Running user studies; CITI human-subjects training and Georgia Tech IRB approval before recording players for research | — |
-
-**Proves it:** a measured result on how well the bot completes levels with held-out human partners. Publishable.
-
-### Stage 6 · LLMs (2–3 months)
+#### Depth A · LLMs (2–3 months)
 
 | Topic | Read | Watch |
 |---|---|---|
 | Build one | [nanoGPT](https://github.com/karpathy/nanoGPT); [Stanford CS336](https://stanford-cs336.github.io/) | Karpathy: *Let's build GPT*, *Let's reproduce GPT-2*, *Let's build the GPT Tokenizer*, *Deep Dive into LLMs*; CS336 2025 lectures on YouTube |
 | Core papers | [Attention](https://arxiv.org/abs/1706.03762), [scaling laws](https://arxiv.org/abs/2001.08361), [LoRA](https://arxiv.org/abs/2106.09685), [QLoRA](https://arxiv.org/abs/2305.14314) | [Umar Jamil](https://www.youtube.com/@umarjamilai) on Transformers, LoRA and quantization |
 | Post-training | RLHF, [DPO](https://arxiv.org/abs/2305.18290), GRPO from [DeepSeekMath](https://arxiv.org/abs/2402.03300); [TRL](https://huggingface.co/docs/trl) `SFTTrainer`, `DPOTrainer`, `GRPOTrainer` | Umar Jamil on RLHF and DPO; CS336 alignment lectures |
-| LLMs as planners | [SayCan](https://arxiv.org/abs/2204.01691), [Voyager](https://arxiv.org/abs/2305.16291) | Demo videos at say-can.github.io and voyager.minedojo.org |
 
 **Proves it:** the once-a-second subgoal planner on lever levels, plus a small model fine-tuned on (level, plan) pairs.
 
-### Stage 7 · Inference and GPU programming (2–4 months)
+#### Depth B · Inference and GPU programming (2–4 months)
 
 | Topic | Read | Watch |
 |---|---|---|
@@ -597,7 +851,7 @@ Docs and code-along beat videos here.
 
 **Proves it:** a Triton observation-encoder kernel, the vLLM replay coach with measured throughput, and the bot inside the latency budget.
 
-### Stage 8 · Distributed systems and MLOps (2–3 months)
+#### Depth C · Distributed systems and MLOps (2–3 months)
 
 | Topic | Read | Watch |
 |---|---|---|
@@ -608,16 +862,6 @@ Docs and code-along beat videos here.
 | ML systems | Chip Huyen, *Designing Machine Learning Systems*; [MLflow](https://mlflow.org/docs/latest/getting-started/); model registry; drift monitoring | [DataTalksClub MLOps Zoomcamp](https://github.com/DataTalksClub/mlops-zoomcamp) |
 
 **Proves it:** one GPU learner fed by spot rollout workers, resuming from checkpoints, and a CI gate that ships a policy only if it beats the deployed one.
-
-### Stage 9 · Research skills (ongoing, start now)
-
-| Habit | Resource |
-|---|---|
-| Read papers | [Keshav, How to Read a Paper](http://ccr.sigcomm.org/online/files/p83-keshavA.pdf); one paper a week. When you'd rather watch: the explainer video, then the paper's method section and figures |
-| Reproduce a paper | End to end, to learn how much is never written down. First one: your PPO matching CleanRL's published CartPole curve |
-| Write in public | One blog post per milestone, built from your nightly notes |
-
-**Proves it:** submit the Stage 5 result to a workshop, for example at NeurIPS, ICML or AAMAS.
 
 ---
 
